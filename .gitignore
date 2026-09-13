@@ -1,0 +1,79 @@
+# MyProt V2 — Visual Studio 2015 / C++11
+
+# Build output
+build/
+*.suo
+*.user
+*.sdf
+*.sdfstats
+*.opensdf
+
+# Intermediate
+*.obj
+*.o
+*.pch
+*.pdb
+*.ilk
+*.exe
+*.lib
+*.dll
+*.exp
+*.log
+*.tlog
+*.lastbuildstate
+
+# VS user files
+.vs/
+ipch/
+Debug/
+Release/
+x64/
+Win32/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# third_party binaries (source only, download via scripts/setup.bat)
+third_party/asio/include/
+third_party/nlohmann_json/include/
+third_party/spdlog/include/
+third_party/cpp-httplib/httplib.h
+third_party/gtest/lib/
+third_party/gtest/include/
+third_party/openssl/include/
+third_party/openssl/lib/
+
+# ── 前端 (Vite) ──
+node_modules/
+webui/node_modules/
+webui/dist/
+webui/.vite/
+
+# ── 运行期产物 ──
+# 配置的备份轮转由程序在运行时生成, 不入库
+configs/**/*.bak.*
+configs/**/*.mojibake-bak-*
+# 测试运行时生成的临时配置目录
+configs_demo/
+configs_fault_test/
+configs_readback_test/
+configs_reload_test/
+configs_varwrite_test/
+configs_webapi_test/
+configs_write_test/
+
+# ── IDE / 工具 / 临时文件 ──
+*.VC.db
+*.VC.VC.opendb
+UpgradeLog.htm
+.merkle-snapshot.json
+mb_probe.ps1
+.arts/
+.codeartsdoer/
+.trae/
+.trae-html-share-packages/
+out_app.log
+err_app.log
+build.log
+

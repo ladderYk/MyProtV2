@@ -1,0 +1,580 @@
+{
+  "schemaVersion": 2,
+  "protocolName": "s7-1200",
+  "transport": {
+    "type": "Tcp"
+  },
+  "framing": {
+    "type": "LengthField",
+    "lengthFieldOffset": 2,
+    "lengthFieldLength": 2,
+    "lengthIncludesHeader": true,
+    "byteOrder": "BigEndian",
+    "headerLength": 4,
+    "lengthAdjustment": 0,
+    "maxFrameSize": 4096
+  },
+  "dataByteOrder": "BigEndian",
+  "inputs": {
+    "StartByteAddress": {
+      "source": "static",
+      "value": 0,
+      "label": "起始字节地址",
+      "unit": "字节"
+    },
+    "ByteCount": {
+      "source": "static",
+      "value": 2,
+      "label": "数据字节跨度",
+      "unit": "字节"
+    },
+    "BitOffset": {
+      "source": "static",
+      "value": 0,
+      "label": "字节内位偏移",
+      "unit": "位"
+    },
+    "DBNumber": {
+      "source": "static",
+      "value": 1,
+      "label": "DB 块号"
+    },
+    "Area": {
+      "source": "static",
+      "value": 132,
+      "label": "区域码",
+      "enum": [
+        {
+          "value": 129,
+          "label": "I  输入 (PE)"
+        },
+        {
+          "value": 130,
+          "label": "Q  输出 (PA)"
+        },
+        {
+          "value": 131,
+          "label": "M  标志位"
+        },
+        {
+          "value": 132,
+          "label": "DB 数据块"
+        }
+      ]
+    },
+    "TransactionID": {
+      "source": "auto",
+      "strategy": "autoIncrement",
+      "params": {
+        "seed": 1
+      },
+      "label": "事务ID"
+    }
+  },
+  "outputs": {
+    "AddrLo": {
+      "source": "auto",
+      "strategy": "derivedLength",
+      "expr": "(StartByteAddress * 8) % 256",
+      "label": "S7 地址低字节",
+      "unit": "S7 地址 = 字节地址<<3"
+    },
+    "AddrMid": {
+      "source": "auto",
+      "strategy": "derivedLength",
+      "expr": "((StartByteAddress * 8) / 256) % 256",
+      "label": "S7 地址中字节"
+    },
+    "AddrHi": {
+      "source": "auto",
+      "strategy": "derivedLength",
+      "expr": "(StartByteAddress * 8) / 65536",
+      "label": "S7 地址高字节"
+    }
+  },
+  "handshake": [
+    {
+      "name": "COTP_CR",
+      "requestTemplate": [
+        "03 00 00 16",
+        "11 E0 00 00 00 01 00",
+        "C1 02 01 00",
+        "C2 02 01 02",
+        "C0 01 0A"
+      ],
+      "validCondition": "resp[5] == 0xD0",
+      "timeoutMs": 3000
+    },
+    {
+      "name": "S7_Setup",
+      "requestTemplate": [
+        "03 00 00 19",
+        "02 F0 80",
+        "32 01 00 00 00 01 00 08 00 00",
+        "F0 00 00 08 00 01 03 C0"
+      ],
+      "validCondition": "resp[8] == 0x03",
+      "timeoutMs": 3000
+    }
+  ],
+  "operations": {
+    "ReadVarBit": {
+      "kind": "read",
+      "requestTemplate": [
+        "03 00 00 1F",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "00 00",
+        "04 01",
+        "12 0A 10",
+        "03",
+        "{Length:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}"
+      ],
+      "outputs": {
+        "Length": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount",
+          "label": "BYTE 字节数量",
+          "unit": "字节"
+        }
+      },
+      "responseParser": {
+        "validCondition": "resp[21] == 0xFF",
+        "dataStartIndex": 25,
+        "dataLengthExpr": ""
+      }
+    },
+    "ReadVarWord": {
+      "kind": "read",
+      "requestTemplate": [
+        "03 00 00 1F",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "00 00",
+        "04 01",
+        "12 0A 10",
+        "04",
+        "{Length:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}"
+      ],
+      "outputs": {
+        "Length": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount / 2",
+          "label": "WORD 元素数量",
+          "unit": "个"
+        }
+      },
+      "responseParser": {
+        "validCondition": "resp[21] == 0xFF",
+        "dataStartIndex": 25,
+        "dataLengthExpr": ""
+      }
+    },
+    "ReadVarDWord": {
+      "kind": "read",
+      "requestTemplate": [
+        "03 00 00 1F",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "00 00",
+        "04 01",
+        "12 0A 10",
+        "06",
+        "{Length:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}"
+      ],
+      "outputs": {
+        "Length": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount / 4",
+          "label": "DWORD 元素数量",
+          "unit": "个"
+        }
+      },
+      "responseParser": {
+        "validCondition": "resp[21] == 0xFF",
+        "dataStartIndex": 25,
+        "dataLengthExpr": ""
+      }
+    },
+    "ReadVarReal": {
+      "kind": "read",
+      "requestTemplate": [
+        "03 00 00 1F",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "00 00",
+        "04 01",
+        "12 0A 10",
+        "08",
+        "{Length:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}"
+      ],
+      "outputs": {
+        "Length": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount / 4",
+          "label": "REAL 元素数量",
+          "unit": "个"
+        }
+      },
+      "responseParser": {
+        "validCondition": "resp[21] == 0xFF",
+        "dataStartIndex": 25,
+        "dataLengthExpr": ""
+      }
+    },
+    "WriteVarBit": {
+      "kind": "write",
+      "requestTemplate": [
+        "03 00",
+        "{PDULength:X4}",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "{DataLen:X4}",
+        "05 01",
+        "12 0A 10",
+        "01",
+        "00 01",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}",
+        "00",
+        "03",
+        "00 01",
+        "{WriteValue:raw}"
+      ],
+      "inputs": {
+        "WriteValue": {
+          "source": "static",
+          "label": "写入载荷 (1 字节 0/1)"
+        }
+      },
+      "outputs": {
+        "AddrLo": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "(StartByteAddress * 8 + BitOffset) % 256",
+          "label": "S7 地址低字节",
+          "unit": "位寻址 = 字节地址<<3 + 位偏移"
+        },
+        "AddrMid": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "((StartByteAddress * 8 + BitOffset) / 256) % 256",
+          "label": "S7 地址中字节"
+        },
+        "AddrHi": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "(StartByteAddress * 8 + BitOffset) / 65536",
+          "label": "S7 地址高字节"
+        },
+        "PDULength": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{Frame:fixed} + {WriteValue:len}",
+          "label": "PDU 长度（TPKT 总帧长）"
+        },
+        "DataLen": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{WriteValue:len} + 4",
+          "label": "数据区总长",
+          "unit": "字节"
+        }
+      },
+      "responseParser": {
+        "validCondition": "resp[21] == 0xFF",
+        "dataStartIndex": 25,
+        "dataLengthExpr": ""
+      }
+    },
+    "WriteVarWord": {
+      "kind": "write",
+      "requestTemplate": [
+        "03 00",
+        "{PDULength:X4}",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "{DataLen:X4}",
+        "05 01",
+        "12 0A 10",
+        "04",
+        "{ItemLength:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}",
+        "00",
+        "04",
+        "{DataBits:X4}",
+        "{WriteValue:raw}"
+      ],
+      "inputs": {
+        "WriteValue": {
+          "source": "static",
+          "label": "写入载荷"
+        }
+      },
+      "outputs": {
+        "AddrLo": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "(StartByteAddress * 8) % 256",
+          "label": "S7 地址低字节",
+          "unit": "S7 地址 = 字节地址<<3"
+        },
+        "AddrMid": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "((StartByteAddress * 8) / 256) % 256",
+          "label": "S7 地址中字节"
+        },
+        "AddrHi": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "(StartByteAddress * 8) / 65536",
+          "label": "S7 地址高字节"
+        },
+        "ItemLength": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount / 2",
+          "label": "元素数 (WORD)",
+          "unit": "个"
+        },
+        "PDULength": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{Frame:fixed} + {WriteValue:len}",
+          "label": "PDU 长度（TPKT 总帧长）"
+        },
+        "DataLen": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{WriteValue:len} + 4",
+          "label": "数据区总长",
+          "unit": "字节"
+        },
+        "DataBits": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{WriteValue:len} * 8",
+          "label": "位长度",
+          "unit": "bit"
+        }
+      },
+      "responseParser": {
+        "validCondition": "resp[21] == 0xFF",
+        "dataStartIndex": 25,
+        "dataLengthExpr": ""
+      }
+    },
+    "WriteVarDWord": {
+      "kind": "write",
+      "requestTemplate": [
+        "03 00",
+        "{PDULength:X4}",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "{DataLen:X4}",
+        "05 01",
+        "12 0A 10",
+        "06",
+        "{ItemLength:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}",
+        "00",
+        "04",
+        "{DataBits:X4}",
+        "{WriteValue:raw}"
+      ],
+      "inputs": {
+        "WriteValue": {
+          "source": "static",
+          "label": "写入载荷"
+        }
+      },
+      "outputs": {
+        "AddrLo": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "(StartByteAddress * 8) % 256",
+          "label": "S7 地址低字节",
+          "unit": "S7 地址 = 字节地址<<3"
+        },
+        "AddrMid": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "((StartByteAddress * 8) / 256) % 256",
+          "label": "S7 地址中字节"
+        },
+        "AddrHi": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "(StartByteAddress * 8) / 65536",
+          "label": "S7 地址高字节"
+        },
+        "ItemLength": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount / 4",
+          "label": "元素数 (DWORD)",
+          "unit": "个"
+        },
+        "PDULength": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{Frame:fixed} + {WriteValue:len}",
+          "label": "PDU 长度（TPKT 总帧长）"
+        },
+        "DataLen": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{WriteValue:len} + 4",
+          "label": "数据区总长",
+          "unit": "字节"
+        },
+        "DataBits": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{WriteValue:len} * 8",
+          "label": "位长度",
+          "unit": "bit"
+        }
+      },
+      "responseParser": {
+        "validCondition": "resp[21] == 0xFF",
+        "dataStartIndex": 25,
+        "dataLengthExpr": ""
+      }
+    },
+    "WriteVarReal": {
+      "kind": "write",
+      "requestTemplate": [
+        "03 00",
+        "{PDULength:X4}",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "{DataLen:X4}",
+        "05 01",
+        "12 0A 10",
+        "08",
+        "{ItemLength:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}",
+        "00",
+        "07",
+        "{DataBits:X4}",
+        "{WriteValue:raw}"
+      ],
+      "inputs": {
+        "WriteValue": {
+          "source": "static",
+          "label": "写入载荷"
+        }
+      },
+      "outputs": {
+        "AddrLo": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "(StartByteAddress * 8) % 256",
+          "label": "S7 地址低字节",
+          "unit": "S7 地址 = 字节地址<<3"
+        },
+        "AddrMid": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "((StartByteAddress * 8) / 256) % 256",
+          "label": "S7 地址中字节"
+        },
+        "AddrHi": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "(StartByteAddress * 8) / 65536",
+          "label": "S7 地址高字节"
+        },
+        "ItemLength": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount / 4",
+          "label": "元素数 (REAL)",
+          "unit": "个"
+        },
+        "PDULength": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{Frame:fixed} + {WriteValue:len}",
+          "label": "PDU 长度（TPKT 总帧长）"
+        },
+        "DataLen": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{WriteValue:len} + 4",
+          "label": "数据区总长",
+          "unit": "字节"
+        },
+        "DataBits": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{WriteValue:len} * 8",
+          "label": "位长度",
+          "unit": "bit"
+        }
+      },
+      "responseParser": {
+        "validCondition": "resp[21] == 0xFF",
+        "dataStartIndex": 25,
+        "dataLengthExpr": ""
+      }
+    }
+  }
+}

@@ -1,0 +1,191 @@
+{
+  "protocolName": "S7",
+  "transport": {
+    "type": "Tcp",
+    "defaultPort": 102
+  },
+  "framing": {
+    "type": "LengthField",
+    "lengthFieldOffset": 2,
+    "lengthFieldLength": 2,
+    "lengthIncludesHeader": true,
+    "byteOrder": "BigEndian"
+  },
+  "connection": {
+    "responseTimeoutMs": 3000,
+    "interFrameDelayMs": 0,
+    "reconnectIntervalMs": 5000,
+    "maxReconnectAttempts": -1
+  },
+  "handshake": [
+    {
+      "name": "COTP_Connection",
+      "requestTemplate": [
+        "03 00",
+        "{Length:calc:X4}",
+        "11",
+        "E0 00 00",
+        "00 01",
+        "00 01",
+        "01 00",
+        "C0 01",
+        "0A",
+        "C1 02",
+        "01 00",
+        "C2 02",
+        "01 {CallingTSAP:X2}"
+      ],
+      "framing": {
+        "type": "Fixed",
+        "fixedLength": 22
+      },
+      "validCondition": "resp[0] == 0x03"
+    },
+    {
+      "name": "S7_Setup",
+      "requestTemplate": [
+        "03 00 00 19",
+        "02 F0 80",
+        "32 01 00 00",
+        "00 00",
+        "00 08",
+        "00 00",
+        "F0 00",
+        "00 08",
+        "00 01",
+        "03 C0"
+      ],
+      "validCondition": "resp[5] == 0x03"
+    }
+  ],
+  "operations": {
+    "ReadDB": {
+      "requestTemplate": [
+        "03 00 00 1F",
+        "02 F0 80",
+        "32 00 00 00",
+        "{TransactionID:auto:X4}",
+        "00 00",
+        "00 0E",
+        "00 00",
+        "04 01",
+        "12 0A 10",
+        "02",
+        "00 01",
+        "{DBNumber:X2}",
+        "84",
+        "{AddrHi:X2}",
+        "{AddrLo:X2}"
+      ],
+      "responseParser": {
+        "validCondition": "resp[8] == 0xFF",
+        "dataStartIndex": 21,
+        "dataLengthExpr": "*",
+        "valueType": "ByteArray"
+      }
+    },
+    "ReadM": {
+      "requestTemplate": [
+        "03 00 00 1F",
+        "02 F0 80",
+        "32 00 00 00",
+        "{TransactionID:auto:X4}",
+        "00 00",
+        "00 0E",
+        "00 00",
+        "04 01",
+        "12 0A 10",
+        "02",
+        "00 01",
+        "00",
+        "83",
+        "{AddrHi:X2}",
+        "{AddrLo:X2}"
+      ],
+      "responseParser": {
+        "validCondition": "resp[8] == 0xFF",
+        "dataStartIndex": 21,
+        "dataLengthExpr": "*",
+        "valueType": "ByteArray"
+      }
+    },
+    "ReadI": {
+      "requestTemplate": [
+        "03 00 00 1F",
+        "02 F0 80",
+        "32 00 00 00",
+        "{TransactionID:auto:X4}",
+        "00 00",
+        "00 0E",
+        "00 00",
+        "04 01",
+        "12 0A 10",
+        "02",
+        "00 01",
+        "00",
+        "81",
+        "{AddrHi:X2}",
+        "{AddrLo:X2}"
+      ],
+      "responseParser": {
+        "validCondition": "resp[8] == 0xFF",
+        "dataStartIndex": 21,
+        "dataLengthExpr": "*",
+        "valueType": "ByteArray"
+      }
+    },
+    "ReadQ": {
+      "requestTemplate": [
+        "03 00 00 1F",
+        "02 F0 80",
+        "32 00 00 00",
+        "{TransactionID:auto:X4}",
+        "00 00",
+        "00 0E",
+        "00 00",
+        "04 01",
+        "12 0A 10",
+        "02",
+        "00 01",
+        "00",
+        "82",
+        "{AddrHi:X2}",
+        "{AddrLo:X2}"
+      ],
+      "responseParser": {
+        "validCondition": "resp[8] == 0xFF",
+        "dataStartIndex": 21,
+        "dataLengthExpr": "*",
+        "valueType": "ByteArray"
+      }
+    },
+    "WriteDB": {
+      "requestTemplate": [
+        "03 00 00 00",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:auto:X4}",
+        "00 00",
+        "00 0E",
+        "00 00",
+        "05 01",
+        "12 0A 10",
+        "02",
+        "00 01",
+        "{DBNumber:X2}",
+        "84",
+        "{AddrHi:X2}",
+        "{AddrLo:X2}",
+        "00 04",
+        "{ByteCount:X4}",
+        "{Values:X2}"
+      ],
+      "responseParser": {
+        "validCondition": "resp[5] == 0x03",
+        "dataStartIndex": 0,
+        "dataLengthExpr": "0",
+        "valueType": "Empty"
+      }
+    }
+  }
+}

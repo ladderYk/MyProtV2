@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MyProt WebUI — 布局效果图</title>
+<style>
+  :root {
+    --nav-bg: #1e293b;
+    --nav-fg: #cbd5e1;
+    --brand: #2563eb;
+    --brand-fg: #fff;
+    --border: #e2e8f0;
+    --border-soft: #f1f5f9;
+    --bg-panel: #f8fafc;
+    --text: #334155;
+    --text-dim: #64748b;
+    --text-muted: #94a3b8;
+    --mono: Consolas, "SF Mono", Menlo, monospace;
+    --accent: #1d4ed8;
+    --warn: #b45309;
+    --warn-bg: #fef3c7;
+    --ok: #15803d;
+    --ok-bg: #dcfce7;
+    --danger: #b91c1c;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: var(--text);
+    background: #eef2f7;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ===== 顶部全局导航栏 ===== */
+  .topbar {
+    flex-shrink: 0;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 16px;
+    background: var(--nav-bg);
+    color: var(--nav-fg);
+    box-shadow: 0 1px 3px rgba(0,0,0,.18);
+    z-index: 10;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; color: #fff; flex-shrink: 0; }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 6px; background: var(--brand);
+    color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .nav { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+  .nav-item {
+    text-align: center; white-space: nowrap; background: transparent; border: none;
+    color: inherit; padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer;
+  }
+  .nav-item:hover { background: rgba(255,255,255,.06); }
+  .nav-item.active { background: var(--brand); color: #fff; }
+  .topbar-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .ghost {
+    font-size: 13px; padding: 7px 12px; border-radius: 6px; background: transparent;
+    border: none; color: var(--nav-fg); cursor: pointer;
+  }
+  .ghost:hover { background: rgba(255,255,255,.08); color: #fff; }
+
+  /* ===== 内容区 ===== */
+  .content {
+    flex: 1; min-height: 0; padding: 20px; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .view { flex: 1; min-height: 0; display: none; }
+  .view.active { display: flex; flex-direction: column; }
+
+  /* 通用卡片 */
+  .card {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px;
+    overflow: hidden;
+  }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; background: var(--bg-panel); border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 13px;
+  }
+  .card-body { padding: 16px; }
+
+  /* 表单 */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; }
+  .field { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .field label { flex-shrink: 0; width: 96px; font-size: 13px; color: var(--text-dim); }
+  .field .ctl {
+    flex: 1; min-width: 0; padding: 7px 11px; border: 1px solid #cbd5e1; border-radius: 6px;
+    font-size: 13px; background: #fff; color: var(--text);
+  }
+  .field .ctl:focus { outline: none; border-color: var(--brand); }
+  .field .ctl.mono { font-family: var(--mono); }
+  .hint { font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-top: 3px; }
+  .hint code { background: var(--border-soft); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); color: var(--text-dim); }
+  .unit { font-size: 12px; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; }
+  select.ctl { cursor: pointer; }
+
+  /* 按钮 */
+  .btn {
+    padding: 7px 14px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff;
+    font-size: 13px; cursor: pointer; color: var(--text);
+  }
+  .btn:hover { border-color: #94a3b8; }
+  .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .btn.primary:hover { background: #1d4ed8; }
+  .btn.danger { background: #fff; border-color: #fecaca; color: var(--danger); }
+  .btn.danger:hover { background: #fef2f2; }
+  .btn.small { padding: 4px 10px; font-size: 12px; }
+  .btn.tiny { padding: 2px 8px; font-size: 12px; }
+  .btn.plain { border-color: #bfdbfe; color: var(--accent); }
+  .btn.plain:hover { background: #eff6ff; }
+
+  /* ===== 协议页 tabs 布局 ===== */
+  .proto-tabs {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .proto-tab {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 8px 16px; border: 1px solid var(--border); border-radius: 8px 8px 0 0;
+    background: #fff; cursor: pointer; font-family: var(--mono); font-size: 13px;
+    color: var(--text-dim); border-bottom: none; margin-bottom: -1px;
+  }
+  .proto-tab.active { color: var(--accent); font-weight: 600; border-color: #bfdbfe; background: #fff; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; display: none; }
+  .proto-tab.dirty .dot { display: inline-block; }
+  .proto-new { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    background: #fff; border: 1px solid var(--border); border-radius: 8px 8px 0 0; margin-bottom: 0;
+  }
+  .toolbar .file { font-family: var(--mono); font-size: 13px; color: var(--accent); font-weight: 600; }
+  .toolbar .spacer { flex: 1; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button {
+    border: none; background: #fff; padding: 6px 14px; font-size: 13px; cursor: pointer; color: var(--text-dim);
+  }
+  .seg button.active { background: var(--brand); color: #fff; }
+
+  /* 主体 tabs */
+  .main-tabs { display: flex; gap: 2px; border-bottom: 2px solid var(--border); margin: 0 0 14px; flex-shrink: 0; }
+  .main-tab {
+    padding: 10px 20px; cursor: pointer; font-size: 14px; color: var(--text-dim);
+    border-bottom: 2px solid transparent; margin-bottom: -2px;
+  }
+  .main-tab:hover { color: var(--accent); }
+  .main-tab.active { color: var(--accent); font-weight: 600; border-bottom-color: var(--brand); }
+
+  .pane { display: none; }
+  .pane.active { display: block; }
+
+  /* v2 增: 操作详情内嵌两层 tabs — 第一层 可视化/原始文本, 第二层 表达式/表单 */
+  .op-detail-tabs {
+    display: flex; gap: 2px; border-bottom: 2px solid var(--border); margin: 0 0 12px;
+  }
+  .op-detail-tab {
+    padding: 8px 16px; cursor: pointer; font-size: 13px; color: var(--text-dim);
+    border-bottom: 2px solid transparent; margin-bottom: -2px;
+  }
+  .op-detail-tab:hover { color: var(--accent); }
+  .op-detail-tab.active { color: var(--accent); font-weight: 600; border-bottom-color: var(--brand); }
+  .op-detail-pane { display: none; }
+  .op-detail-pane.active { display: block; }
+
+  /* 全局变量折叠式行 */
+  .var-row {
+    border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; background: #fff;
+  }
+  .var-row-head {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer;
+  }
+  .var-row-head:hover { background: var(--bg-panel); }
+  .var-name { font-family: var(--mono); font-weight: 600; color: var(--accent); min-width: 140px; }
+  .var-src { font-size: 11px; padding: 0 7px; border-radius: 999px; }
+  .var-src.static { background: #eff6ff; color: var(--accent); }
+  .var-src.auto { background: #fef3c7; color: var(--warn); }
+  .var-value { flex: 1; font-family: var(--mono); font-size: 13px; color: var(--text); }
+  .var-label { font-size: 12px; color: var(--text-muted); }
+  .var-caret { color: var(--text-muted); font-size: 11px; }
+  .var-row-body { padding: 10px 12px; border-top: 1px solid var(--border-soft); display: none; }
+  .var-row.open .var-row-body { display: block; }
+  .var-meta-grid { display: flex; flex-wrap: wrap; gap: 10px 20px; }
+  .var-meta-grid .field label { width: auto; font-size: 12px; }
+  .var-meta-grid .field .ctl { width: 120px; }
+
+  /* 操作 / 标签 主从布局 */
+  .ops-wrap { display: flex; gap: 12px; align-items: stretch; }
+  .ops-list {
+    width: 180px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px;
+    background: #fff; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .ops-search { padding: 8px; border-bottom: 1px solid var(--border-soft); }
+  .ops-search input { width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
+  .ops-items { list-style: none; margin: 0; padding: 6px; flex: 1; overflow-y: auto; }
+  .ops-items li {
+    padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 13px;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  }
+  .ops-items li:hover { background: var(--border-soft); }
+  .ops-items li.active { background: #eff6ff; color: var(--accent); font-weight: 600; }
+  .ops-items .op-name { font-family: var(--mono); font-size: 12.5px; }
+  .kind { font-size: 11px; padding: 0 5px; border-radius: 3px; }
+  .kind.r { background: #eff6ff; color: var(--accent); }
+  .kind.w { background: var(--warn-bg); color: var(--warn); }
+  .ops-detail { flex: 1; min-width: 0; }
+
+  /* 请求模板 token 条 */
+  .tpl-bar { display: flex; flex-wrap: wrap; gap: 4px 10px; font-family: var(--mono); font-size: 13px; color: var(--text-dim); }
+  .tpl-token { padding: 2px 8px; border-radius: 4px; }
+  .tpl-token.auto { background: #eff6ff; color: var(--accent); }
+  .tpl-token.over { background: #fef3c7; color: var(--warn); }
+  .tpl-token.lit { background: #f1f5f9; }
+  .legend { display: inline-flex; align-items: center; gap: 5px; font-weight: 400; font-size: 11px; color: var(--text-muted); margin-left: auto; }
+  .legend-dot { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+  .legend-dot.auto { background: #eff6ff; border: 1px solid #93c5fd; }
+  .legend-dot.over { background: #fef3c7; border: 1px solid #fcd34d; }
+  .legend-dot.lit { background: #f1f5f9; border: 1px solid #cbd5e1; }
+  table.data.mini th, table.data.mini td { padding: 5px 8px; font-size: 12px; }
+  table.data.mini th { position: static; }
+  table.data.mini .ctl { padding: 4px 8px; }
+
+  /* 变量 kv 表 */
+  .kv { display: flex; flex-wrap: wrap; gap: 6px; }
+  .kv .kv-item { background: var(--border-soft); border-radius: 5px; padding: 3px 8px; font-size: 12px; }
+  .kv .kv-item b { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+
+  /* ===== 实时监控 ===== */
+  .live-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 12px; }
+  .live-head h2 { font-size: 16px; margin: 0; }
+  .live-meta { font-size: 13px; color: var(--text-dim); }
+  .controls { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; }
+  .controls .search { flex: 1; max-width: 320px; padding: 7px 12px; border: 1px solid #cbd5e1; border-radius: 6px; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
+  table.data th, table.data td { text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--border-soft); }
+  table.data th { position: sticky; top: 0; background: var(--bg-panel); color: var(--text-dim); font-weight: 600; z-index: 1; }
+  .badge { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .badge.good { background: var(--ok-bg); color: var(--ok); }
+  .badge.bad { background: #fee2e2; color: var(--danger); }
+  .badge.uncertain { background: var(--warn-bg); color: var(--warn); }
+  .table-wrap { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .group-head { display: flex; align-items: center; gap: 8px; padding: 9px 16px; background: var(--bg-panel); border-bottom: 1px solid var(--border); cursor: pointer; }
+  .group-name { font-family: var(--mono); font-weight: 600; color: var(--accent); font-size: 13px; }
+  .mono { font-family: var(--mono); }
+
+  /* v2 增: sparkline 迷你趋势图 */
+  .sparkline { display: inline-block; width: 60px; height: 24px; vertical-align: middle; }
+  .sparkline svg { width: 100%; height: 100%; }
+  .sparkline path { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+  .sparkline.bad path { stroke: var(--danger); }
+  .sparkline.uncertain path { stroke: var(--warn); }
+
+  /* v2 增: 标签类型角标 */
+  .type-badge {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600;
+    background: var(--border-soft); color: var(--text-dim); margin-left: 4px;
+  }
+  .type-badge.bool { background: #dcfce7; color: var(--ok); }
+  .type-badge.uint16 { background: #eff6ff; color: var(--accent); }
+  .type-badge.float { background: #fef3c7; color: var(--warn); }
+  .type-badge.int32 { background: #f0fdf4; color: #166534; }
+  .type-badge.bytearray { background: #f1f5f9; color: var(--text-dim); }
+
+  /* v2 增: 脏标记红点 */
+  .dirty-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--danger); margin-left: 6px; vertical-align: middle;
+  }
+
+  /* v2 增: 窄屏自适应 — 主从分栏堆叠, 左列表变横排快捷键条 */
+  @media (max-width: 900px) {
+    .ops-wrap { flex-direction: column; }
+    .ops-list { width: 100% !important; max-height: 200px; }
+    .ops-items { display: flex; flex-wrap: wrap; gap: 4px; }
+    .ops-items li { flex: 1; min-width: 120px; }
+    .proto-tabs { flex-wrap: wrap; }
+    .proto-new { width: 100%; margin-left: 0 !important; margin-top: 8px; }
+    .form-grid { grid-template-columns: 1fr !important; }
+    .field label { width: 100%; }
+    .field .ctl { width: 100%; }
+  }
+  @media (max-width: 600px) {
+    .topbar { padding: 0 8px; }
+    .nav-item { padding: 6px 10px; font-size: 13px; }
+    .content { padding: 12px; }
+    .card-body { padding: 10px; }
+    .toolbar { flex-wrap: wrap; gap: 6px; }
+    .main-tabs { overflow-x: auto; }
+  }
+
+  /* ===== 仿真控制 ===== */
+  .sim-cards { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .sim-card {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 12px 18px; cursor: pointer; min-width: 180px;
+  }
+  .sim-card.active { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(37,99,235,.15); }
+  .sim-card .t { font-family: var(--mono); font-weight: 600; font-size: 14px; }
+  .sim-card.active .t { color: var(--accent); }
+  .sim-card .m { font-size: 12px; color: var(--text-dim); }
+
+  .mock-note {
+    position: fixed; right: 14px; bottom: 14px; background: #1e293b; color: #fff;
+    font-size: 12px; padding: 6px 12px; border-radius: 6px; opacity: .9; z-index: 50;
+  }
+</style>
+</head>
+<body>
+
+<!-- 顶部全局导航栏 -->
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">MP</span><span>MyProt 管理控制台</span></div>
+  <nav class="nav">
+    <button class="nav-item" data-view="live">实时监控</button>
+    <button class="nav-item active" data-view="proto">协议配置</button>
+    <button class="nav-item" data-view="tags">设备与标签</button>
+    <button class="nav-item" data-view="sim">仿真控制</button>
+  </nav>
+  <div class="topbar-actions">
+    <button class="ghost">热重载</button>
+    <button class="ghost">使用文档</button>
+    <button class="ghost">退出登录</button>
+  </div>
+</header>
+
+<main class="content">
+
+  <!-- ================= 协议配置 ================= -->
+  <div class="view active" id="view-proto">
+    <!-- 顶部协议 tabs + 新建 -->
+    <div class="proto-tabs">
+      <div class="proto-tab active" data-proto="modbus-tcp"><span class="dot"></span>modbus-tcp</div>
+      <div class="proto-tab" data-proto="s7-1200"><span class="dot"></span>s7-1200</div>
+      <div class="proto-new">
+        <select class="ctl" style="width:170px"><option>Modbus TCP 模板</option><option>S7 模板</option><option>空白协议</option></select>
+        <input class="ctl" style="width:150px" placeholder="协议名" />
+        <button class="btn primary small">新建</button>
+      </div>
+    </div>
+
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <span class="file">modbus-tcp.json</span><span class="dirty-dot" style="display:none"></span>
+      <span class="hint" style="margin:0">未保存</span>
+      <div class="spacer"></div>
+      <div class="seg">
+        <button class="active">表单</button><button>JSON</button>
+      </div>
+      <button class="btn danger small">删除</button>
+      <button class="btn primary small">保存</button>
+    </div>
+
+    <!-- 主体 tabs -->
+    <div class="main-tabs">
+      <div class="main-tab active" data-pane="pane-general">常规</div>
+      <div class="main-tab" data-pane="pane-adv">高级</div>
+      <div class="main-tab" data-pane="pane-vars">全局变量</div>
+      <div class="main-tab" data-pane="pane-ops">操作定义</div>
+    </div>
+
+    <!-- 常规 -->
+    <div class="pane active" id="pane-general">
+      <div class="card">
+        <div class="card-head">基础信息</div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="field"><label>协议名</label><input class="ctl mono" value="modbus-tcp" /></div>
+            <div class="field"><label>schemaVersion</label><input class="ctl" style="width:100px" value="1" /></div>
+            <div class="field"><label>数据字节序</label><select class="ctl" style="width:180px"><option>WordBigByteLittle</option></select></div>
+            <div class="field"><label>默认写操作</label><input class="ctl mono" value="WriteSingleRegister" /></div>
+            <div class="field"><label>字节写操作</label><input class="ctl mono" value="WriteMultipleRegisters" /></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">传输与成帧</div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="field"><label>传输类型</label><select class="ctl" style="width:140px"><option>Tcp</option><option>Tls</option><option>Serial</option></select></div>
+            <div class="field"><label>默认端口</label><span class="hint" style="margin:0">协议级 defaultPort 已弃用; 设备级 connection.port 显式声明 (PLC-001:502, PLC_1200:102)</span></div>
+            <div class="field"><label>成帧方式</label><select class="ctl" style="width:180px"><option>LengthField (长度域)</option><option>Fixed (定长)</option></select></div>
+            <div class="field"><label>长度域偏移</label><input class="ctl" style="width:80px" value="4" /><span class="unit">字节</span></div>
+            <div class="field"><label>长度域宽度</label><select class="ctl" style="width:100px"><option>2 字节</option></select></div>
+            <div class="field"><label>长度含帧头</label><span style="color:var(--text)">否</span></div>
+            <div class="field"><label>长度域字节序</label><select class="ctl" style="width:120px"><option>BigEndian</option></select></div>
+            <div class="field"><label>帧头长度</label><input class="ctl" style="width:80px" value="6" /><span class="unit">字节</span></div>
+            <div class="field"><label>长度修正量</label><input class="ctl" style="width:80px" value="0" /><span class="unit">字节</span></div>
+            <div class="field"><label>最大帧长</label><input class="ctl" style="width:80px" value="260" /><span class="unit">字节</span></div>
+            <div class="field"><label>快速预设</label><button class="btn small plain">套用 Modbus MBAP</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 高级 -->
+    <div class="pane" id="pane-adv">
+      <div class="card">
+        <div class="card-head">握手 (handshake)</div>
+        <div class="card-body">
+          <textarea class="ctl mono" style="width:100%;min-height:120px">[]</textarea>
+          <div class="hint">JSON 数组, 每步含 name / requestTemplate / framingOverride; 连接建立后按序执行</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">数据字节序说明</div>
+        <div class="card-body">
+          <div class="hint">WordBigByteLittle：字（2 字节）之间大端排列，字内字节小端排列；多字整型/浮点按此规则拼接。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 全局变量 -->
+    <div class="pane" id="pane-vars">
+      <div class="card">
+        <div class="card-head">inputs · 全局共享 <button class="btn small plain" style="margin-left:auto">新增变量</button></div>
+        <div class="card-body">
+          <div class="var-row open">
+            <div class="var-row-head"><span class="var-caret">▾</span><span class="var-name">UnitID</span><span class="var-src static">static</span><span class="var-value">1</span><span class="var-label">从站地址</span></div>
+            <div class="var-row-body"><div class="var-meta-grid">
+              <div class="field"><label>值</label><input class="ctl" value="1" /></div>
+              <div class="field"><label>label</label><input class="ctl" value="从站地址" /></div>
+              <div class="field"><label>enum</label><input class="ctl mono" value="1,2,3,…10" /></div>
+            </div></div>
+          </div>
+          <div class="var-row">
+            <div class="var-row-head"><span class="var-caret">▸</span><span class="var-name">ProtocolID</span><span class="var-src static">static</span><span class="var-value">0</span><span class="var-label">协议标识</span></div>
+          </div>
+          <div class="var-row">
+            <div class="var-row-head"><span class="var-caret">▸</span><span class="var-name">StartByteAddress</span><span class="var-src static">static</span><span class="var-value">0</span><span class="var-label">起始字节地址</span></div>
+          </div>
+          <div class="var-row">
+            <div class="var-row-head"><span class="var-caret">▸</span><span class="var-name">ByteCount</span><span class="var-src static">static</span><span class="var-value">2</span><span class="var-label">数据字节跨度</span></div>
+          </div>
+          <div class="var-row">
+            <div class="var-row-head"><span class="var-caret">▸</span><span class="var-name">BitOffset</span><span class="var-src static">static</span><span class="var-value">0</span><span class="var-label">字节内位偏移</span></div>
+          </div>
+          <div class="var-row">
+            <div class="var-row-head"><span class="var-caret">▸</span><span class="var-name">TransactionID</span><span class="var-src auto">auto</span><span class="var-value">autoIncrement</span><span class="var-label">事务ID</span></div>
+          </div>
+          <div class="hint"><code>static</code>=默认值/提示, <code>auto</code>=运行时生成；展开行可编辑 label / unit / enum 等元数据</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">outputs · 全局派生</div>
+        <div class="card-body"><div class="hint">modbus-tcp 无协议级 outputs；协议级派生同样受支持 — s7-1200 即在此声明 AddrHi / AddrMid / AddrLo（由 StartByteAddress 派生 S7 三字节地址），供所有操作共享</div></div>
+      </div>
+    </div>
+
+    <!-- 操作定义 -->
+    <div class="pane" id="pane-ops">
+      <div class="card">
+        <div class="card-head">
+          操作定义 (Operations)
+          <span style="margin-left:auto;display:flex;gap:6px">
+            <select class="ctl" style="width:190px"><option>ReadHoldingRegisters 模板</option><option>WriteMultipleRegisters 模板</option><option>空白操作</option></select>
+            <button class="btn primary small">新增操作</button>
+          </span>
+        </div>
+        <div class="card-body">
+          <div class="ops-wrap">
+            <div class="ops-list">
+              <div class="ops-search"><input placeholder="搜索操作名" value="" /></div>
+              <ul class="ops-items">
+                <li><span class="op-name">ReadCoils</span><span class="kind r">读</span></li>
+                <li><span class="op-name">ReadDiscreteInputs</span><span class="kind r">读</span></li>
+                <li class="active"><span class="op-name">ReadHoldingRegisters</span><span class="kind r">读</span></li>
+                <li><span class="op-name">ReadInputRegisters</span><span class="kind r">读</span></li>
+                <li><span class="op-name">WriteSingleCoil</span><span class="kind w">写</span></li>
+                <li><span class="op-name">WriteMultipleCoils</span><span class="kind w">写</span></li>
+                <li><span class="op-name">WriteMultipleRegisters</span><span class="kind w">写</span></li>
+                <li><span class="op-name">WriteSingleRegister</span><span class="kind w">写</span></li>
+              </ul>
+            </div>
+            <div class="ops-detail">
+              <div class="card" style="margin:0">
+                <div class="card-head">
+                  <input class="ctl mono" style="width:230px" value="ReadHoldingRegisters" />
+                  <button class="btn danger small">删除</button>
+                </div>
+                <div class="card-body">
+                  <!-- v2: 操作详情内嵌两层 tabs — 第一层 可视化/原始文本, 第二层 表达式/表单 -->
+                  <div class="op-detail-tabs">
+                    <div class="op-detail-tab active" data-op-pane="pane-op-visual">可视化</div>
+                    <div class="op-detail-tab" data-op-pane="pane-op-raw">原始文本</div>
+                  </div>
+                  <div class="op-detail-pane active" id="pane-op-visual">
+                  <div class="form-grid" style="grid-template-columns:1fr 1fr">
+                    <div class="field"><label>操作类型</label><select class="ctl" style="width:140px"><option>read (读)</option><option>write (写)</option></select></div>
+                    <div class="field"><label>请求模板</label><span class="hint" style="margin:0">可视化构建 / 原始文本</span></div>
+                  </div>
+                  <div class="card" style="margin:12px 0">
+                    <div class="card-head" style="padding:6px 12px;font-size:12px">
+                      请求模板 — 可视化构建
+                      <span class="legend">
+                        <i class="legend-dot auto"></i>全局 inputs
+                        <i class="legend-dot over"></i>局部 outputs（派生）
+                        <i class="legend-dot lit"></i>字面量
+                      </span>
+                    </div>
+                    <div class="card-body" style="padding:10px 12px">
+                      <div class="tpl-bar">
+                        <span class="tpl-token auto">{TransactionID:X4}</span>
+                        <span class="tpl-token auto">{ProtocolID:X4}</span>
+                        <span class="tpl-token lit">00 06</span>
+                        <span class="tpl-token auto">{UnitID:X2}</span>
+                        <span class="tpl-token lit">03</span>
+                        <span class="tpl-token over">{StartAddress:X4}</span>
+                        <span class="tpl-token over">{RegisterCount:X4}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="card" style="margin:12px 0">
+                    <div class="card-head" style="padding:6px 12px;font-size:12px">
+                      局部派生 outputs（仅本操作可见，发送前由引擎计算并回填模板）
+                      <button class="btn small plain" style="margin-left:auto">新增派生变量</button>
+                    </div>
+                    <div class="card-body" style="padding:8px 12px">
+                      <table class="data mini">
+                        <thead><tr><th>变量</th><th>策略</th><th>表达式 expr</th><th>label</th><th>unit</th><th></th></tr></thead>
+                        <tbody>
+                          <tr>
+                            <td class="mono" style="color:var(--warn)">StartAddress</td>
+                            <td><select class="ctl" style="width:130px"><option>derivedLength</option></select></td>
+                            <td><input class="ctl mono" value="StartByteAddress / 2" /></td>
+                            <td><input class="ctl" value="起始地址" /></td>
+                            <td><input class="ctl" value="寄存器号" /></td>
+                            <td><button class="btn danger small">删除</button></td>
+                          </tr>
+                          <tr>
+                            <td class="mono" style="color:var(--warn)">RegisterCount</td>
+                            <td><select class="ctl" style="width:130px"><option>derivedLength</option></select></td>
+                            <td><input class="ctl mono" value="ByteCount / 2" /></td>
+                            <td><input class="ctl" value="读取数量" /></td>
+                            <td><input class="ctl" value="个" /></td>
+                            <td><button class="btn danger small">删除</button></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  </div> <!-- /pane-op-visual -->
+                  <div class="op-detail-pane" id="pane-op-raw" style="display:none">
+                    <div class="card" style="margin:12px 0">
+                      <div class="card-head" style="padding:6px 12px;font-size:12px">请求模板 — 原始文本</div>
+                      <div class="card-body" style="padding:10px 12px">
+                        <textarea class="ctl mono" style="width:100%;min-height:120px">{TransactionID:X4} {ProtocolID:X4} 00 06 {UnitID:X2} 03 {StartAddress:X4} {RegisterCount:X4}</textarea>
+                      </div>
+                    </div>
+                    <div class="hint">原始文本模式: 每行一个模板片段, 支持 hex 字面量与 {Name:Xn} 占位符; 非法片段保存前即报错</div>
+                  </div>
+
+                  <div class="hint">引用的全局 inputs：<code>TransactionID</code> <code>ProtocolID</code> <code>UnitID</code>；<code>StartByteAddress</code> / <code>ByteCount</code> 由标签级 variables 覆盖后参与派生。写操作另可引用 <code>{WriteValue:len}</code>（载荷字节数）与 <code>{Frame:fixed}</code>（帧头定长）</div>
+                  <div class="form-grid" style="margin-top:12px">
+                    <div class="field"><label>有效条件</label><input class="ctl mono" value="resp[7] == 0x03" /></div>
+                    <div class="field"><label>数据起始下标</label><input class="ctl" style="width:80px" value="9" /><span class="unit">字节</span></div>
+                    <div class="field"><label>数据长度表达式</label><input class="ctl mono" value="resp[8]" /></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 设备与标签 ================= -->
+  <div class="view" id="view-tags">
+    <div class="main-tabs">
+      <div class="main-tab active" data-pane="pane-tags-dev">设备</div>
+      <div class="main-tab" data-pane="pane-tags-tag">标签</div>
+      <div class="main-tab" data-pane="pane-tags-global">全局参数</div>
+    </div>
+
+    <!-- 设备 -->
+    <div class="pane active" id="pane-tags-dev">
+      <div class="card">
+        <div class="card-head">设备 (Devices) <button class="btn primary small">新增设备</button></div>
+        <div class="card-body">
+          <div class="ops-wrap">
+            <div class="ops-list" style="width:180px">
+              <div class="ops-search"><input placeholder="搜索设备 ID" /></div>
+              <ul class="ops-items">
+                <li class="active"><span class="op-name">PLC-001</span></li>
+                <li><span class="op-name">PLC_1200</span></li>
+              </ul>
+            </div>
+            <div class="ops-detail">
+              <div class="card" style="margin:0">
+                <div class="card-head"><span class="mono" style="color:var(--accent)">PLC-001</span><button class="btn danger small">删除</button></div>
+                <div class="card-body">
+                  <div class="form-grid">
+                    <div class="field"><label>设备 ID</label><input class="ctl mono" style="width:200px" value="PLC-001" /></div>
+                    <div class="field"><label>协议</label><select class="ctl" style="width:200px"><option>modbus-tcp</option><option>s7-1200</option></select></div>
+                    <div class="field"><label>主机</label><input class="ctl mono" style="width:200px" value="127.0.0.1" /></div>
+                    <div class="field"><label>端口</label><input class="ctl" style="width:100px" value="502" /></div>
+                    <div class="field"><label>连接超时</label><input class="ctl" style="width:100px" value="3000" /><span class="unit">ms</span></div>
+                    <div class="field"><label>请求超时</label><input class="ctl" style="width:100px" value="3000" /><span class="unit">ms</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 标签 -->
+    <div class="pane" id="pane-tags-tag">
+      <div class="card">
+        <div class="card-head">标签 (Tags) <button class="btn primary small">新增标签</button></div>
+        <div class="card-body">
+          <div class="ops-wrap">
+            <div class="ops-list" style="width:210px">
+              <div class="ops-search"><input placeholder="搜索标签名 / 设备" /></div>
+              <ul class="ops-items">
+                <li><span class="op-name">PLC-001.Coil0</span><span class="type-badge bool">Bool</span></li>
+                <li><span class="op-name">PLC-001.Coil0_3</span><span class="type-badge bool">Bool</span></li>
+                <li><span class="op-name">PLC-001.Di0</span><span class="type-badge bool">Bool</span></li>
+                <li class="active"><span class="op-name">PLC-001.HR0</span><span class="type-badge uint16">UInt16</span></li>
+                <li><span class="op-name">PLC-001.HR1</span><span class="type-badge uint16">UInt16</span></li>
+                <li><span class="op-name">PLC-001.HR2</span><span class="type-badge uint16">UInt16</span></li>
+                <li><span class="op-name">PLC-001.HR20</span><span class="type-badge uint16">UInt16</span></li>
+                <li><span class="op-name">PLC-001.HR30</span><span class="type-badge bytearray">ByteArray</span></li>
+                <li><span class="op-name">PLC-001.HR100</span><span class="type-badge uint16">UInt16</span></li>
+                <li><span class="op-name">PLC-001.Float10</span><span class="type-badge float">Float</span></li>
+                <li><span class="op-name">PLC-001.Int32_40</span><span class="type-badge int32">Int32</span></li>
+                <li><span class="op-name">PLC-001.IR0</span><span class="type-badge uint16">UInt16</span></li>
+                <li><span class="op-name">PLC_1200.DBW0</span><span class="type-badge uint16">UInt16</span></li>
+                <li><span class="op-name">PLC_1200.DBD4</span><span class="type-badge float">Float</span></li>
+                <li><span class="op-name">PLC_1200.DBX0_1</span><span class="type-badge bool">Bool</span></li>
+              </ul>
+            </div>
+            <div class="ops-detail">
+              <div class="card" style="margin:0">
+                <div class="card-head"><span class="mono" style="color:var(--accent)">PLC-001.HR0</span><button class="btn danger small">删除</button></div>
+                <div class="card-body">
+                  <div class="form-grid">
+                    <div class="field"><label>标签名</label><input class="ctl mono" style="width:220px" value="PLC-001.HR0" /></div>
+                    <div class="field"><label>设备</label><select class="ctl" style="width:160px"><option>PLC-001</option><option>PLC_1200</option></select></div>
+                    <div class="field"><label>操作</label><select class="ctl" style="width:200px"><option>ReadHoldingRegisters</option></select></div>
+                    <div class="field"><label>写操作</label><select class="ctl" style="width:200px"><option>（无）</option><option>WriteMultipleRegisters</option></select></div>
+                    <div class="field"><label>最终类型</label><select class="ctl" style="width:140px"><option>UInt16</option><option>Int32</option><option>Float</option><option>Bool</option></select></div>
+                    <div class="field"><label>扫描周期</label><input class="ctl" style="width:90px" value="2000" /><span class="unit">ms</span></div>
+                    <div class="field"><label>上报模式</label><select class="ctl" style="width:140px"><option>OnChange</option><option>Always</option></select></div>
+                    <div class="field"><label>合并扫描</label><span style="color:var(--text)">是</span></div>
+                  </div>
+                  <div class="hint" style="margin-top:12px">请求变量 (variables)</div>
+                  <div class="kv">
+                    <span class="kv-item"><b>StartByteAddress</b> = 0</span>
+                    <span class="kv-item"><b>ByteCount</b> = 2</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 全局参数 -->
+    <div class="pane" id="pane-tags-global">
+      <div class="card">
+        <div class="card-head">弹性重连 (resilience)</div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="field"><label>最大尝试</label><input class="ctl" style="width:80px" value="3" /></div>
+            <div class="field"><label>退避基数</label><input class="ctl" style="width:100px" value="100" /><span class="unit">ms</span></div>
+            <div class="field"><label>退避上限</label><input class="ctl" style="width:100px" value="1000" /><span class="unit">ms</span></div>
+            <div class="field"><label>失败阈值</label><input class="ctl" style="width:80px" value="5" /></div>
+            <div class="field"><label>冷却时间</label><input class="ctl" style="width:100px" value="10000" /><span class="unit">ms</span></div>
+            <div class="field"><label>半开探测数</label><input class="ctl" style="width:80px" value="1" /></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">Web API</div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="field"><label>监听地址</label><input class="ctl mono" style="width:180px" value="127.0.0.1" /></div>
+            <div class="field"><label>需要鉴权</label><span style="color:var(--text)">否</span></div>
+            <div class="field"><label>限流速率</label><input class="ctl" style="width:80px" value="5" /><span class="unit">req/s</span></div>
+            <div class="field"><label>突发额度</label><input class="ctl" style="width:80px" value="10" /></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 实时监控 ================= -->
+  <div class="view" id="view-live">
+    <div class="live-head"><h2>实时监控</h2><span class="live-meta">15 标签 · 13 Good · 更新于 14:32:05</span></div>
+    <div class="controls">
+      <input class="search" placeholder="按标签名 / 设备过滤…" />
+      <select class="ctl" style="width:140px"><option>全部设备</option><option>PLC-001</option><option>PLC_1200</option></select>
+      <button class="btn small">实时推送</button>
+      <button class="btn primary small">立即刷新</button>
+    </div>
+    <div class="table-wrap">
+      <div class="group-head"><span>▾</span><span class="group-name">PLC-001</span><span class="live-meta">12 标签 · 10 Good</span></div>
+      <table class="data">
+        <thead><tr><th>标签</th><th>值</th><th>质量</th><th>趋势</th><th>时间</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">Coil0</td><td class="mono">true</td><td><span class="badge good">Good</span></td><td><span class="sparkline"><svg><polyline points="0,12 8,10 16,14 24,8 32,11 40,9 48,13 56,10" /></svg></span></td><td class="mono">14:32:05</td><td><button class="btn tiny small">写入</button></td></tr>
+          <tr><td class="mono">HR0</td><td class="mono">1234</td><td><span class="badge good">Good</span></td><td><span class="sparkline"><svg><polyline points="0,8 8,10 16,12 24,9 32,11 40,13 48,10 56,12" /></svg></span></td><td class="mono">14:32:05</td><td><button class="btn tiny small">写入</button></td></tr>
+          <tr><td class="mono">HR1</td><td class="mono">5678</td><td><span class="badge good">Good</span></td><td><span class="sparkline"><svg><polyline points="0,14 8,12 16,10 24,13 32,11 40,9 48,12 56,10" /></svg></span></td><td class="mono">14:32:05</td><td><button class="btn tiny small">写入</button></td></tr>
+          <tr><td class="mono">Float10</td><td class="mono">3.14</td><td><span class="badge good">Good</span></td><td><span class="sparkline"><svg><polyline points="0,10 8,12 16,14 24,11 32,13 40,15 48,12 56,14" /></svg></span></td><td class="mono">14:32:05</td><td><button class="btn tiny small">写入</button></td></tr>
+          <tr><td class="mono">IR0</td><td class="mono">42</td><td><span class="badge uncertain">Uncertain</span></td><td><span class="sparkline uncertain"><svg><polyline points="0,12 8,10 16,14 24,8 32,11 40,9 48,13 56,10" /></svg></span></td><td class="mono">14:32:02</td><td><button class="btn tiny small">写入</button></td></tr>
+        </tbody>
+      </table>
+      <div class="group-head"><span>▾</span><span class="group-name">PLC_1200</span><span class="live-meta">3 标签 · 3 Good</span></div>
+      <table class="data">
+        <thead><tr><th>标签</th><th>值</th><th>质量</th><th>趋势</th><th>时间</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">DBW0</td><td class="mono">100</td><td><span class="badge good">Good</span></td><td>—</td><td class="mono">14:32:05</td><td><button class="btn tiny small">写入</button></td></tr>
+          <tr><td class="mono">DBD4</td><td class="mono">1.5</td><td><span class="badge good">Good</span></td><td>—</td><td class="mono">14:32:05</td><td><button class="btn tiny small">写入</button></td></tr>
+          <tr><td class="mono">DBX0_1</td><td class="mono">false</td><td><span class="badge good">Good</span></td><td>—</td><td class="mono">14:32:05</td><td><button class="btn tiny small">写入</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ================= 仿真控制 ================= -->
+  <div class="view" id="view-sim">
+    <div class="live-head"><h2>仿真控制台</h2><span class="live-meta">2 个仿真器在运行</span></div>
+    <div class="sim-cards">
+      <div class="sim-card active"><div class="t">modbus-tcp</div><div class="m">端口 502 · <span class="sim-reg">65536</span> 寄存器 (server.json simulation.registerCount)</div></div>
+      <div class="sim-card"><div class="t">s7-1200</div><div class="m">端口 102 · <span class="sim-reg">65536</span> 寄存器 (server.json simulation.registerCount)</div></div>
+    </div>
+    <div class="controls">
+      <span>起始地址</span><input class="ctl" style="width:90px" value="0" />
+      <span>数量</span><input class="ctl" style="width:90px" value="16" />
+      <button class="btn primary small">读取</button>
+      <button class="btn small">3s 自动刷新</button>
+      <span class="hint" style="margin:0">改动后按 Enter 或点「写入」提交；写值立即对设备侧生效</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>地址</th><th>十六进制</th><th>当前值</th><th>新值</th><th></th></tr></thead>
+        <tbody>
+          <tr><td class="mono">0</td><td class="mono">0x0000</td><td class="mono">0</td><td><input class="ctl mono" style="width:110px" placeholder="0" /></td><td><button class="btn primary small">写入</button></td></tr>
+          <tr><td class="mono">1</td><td class="mono">0x0001</td><td class="mono">1</td><td><input class="ctl mono" style="width:110px" /></td><td><button class="btn primary small">写入</button></td></tr>
+          <tr><td class="mono">2</td><td class="mono">0x0002</td><td class="mono">2</td><td><input class="ctl mono" style="width:110px" /></td><td><button class="btn primary small">写入</button></td></tr>
+          <tr><td class="mono">3</td><td class="mono">0x0003</td><td class="mono">3</td><td><input class="ctl mono" style="width:110px" /></td><td><button class="btn primary small">写入</button></td></tr>
+          <tr><td class="mono">4</td><td class="mono">0x0004</td><td class="mono">4</td><td><input class="ctl mono" style="width:110px" /></td><td><button class="btn primary small">写入</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<div class="mock-note">效果图 · 静态原型（数据为演示样例）</div>
+
+<script>
+  // 顶部全局导航切换
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.getElementById('view-' + btn.dataset.view).classList.add('active');
+    });
+  });
+
+  // 主体 tabs 切换（协议页 / 设备与标签页共用）
+  document.querySelectorAll('.main-tab').forEach(t => {
+    t.addEventListener('click', () => {
+      const group = t.parentElement;
+      group.querySelectorAll('.main-tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      const target = t.dataset.pane;
+      if (!target) return;
+      const view = t.closest('.view');
+      view.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+      const pane = document.getElementById(target);
+      if (pane) pane.classList.add('active');
+    });
+  });
+
+  // v2 增: 操作详情内嵌两层 tabs 切换
+  document.querySelectorAll('.op-detail-tab').forEach(t => {
+    t.addEventListener('click', () => {
+      t.parentElement.querySelectorAll('.op-detail-tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      const target = t.dataset.opPane;
+      if (!target) return;
+      const detail = t.closest('.ops-detail');
+      if (!detail) return;
+      detail.querySelectorAll('.op-detail-pane').forEach(p => p.style.display = 'none');
+      const pane = detail.getElementById(target);
+      if (pane) pane.style.display = 'block';
+    });
+  });
+
+  // 全局变量折叠行
+  document.querySelectorAll('.var-row-head').forEach(h => {
+    h.addEventListener('click', () => {
+      h.parentElement.classList.toggle('open');
+      const caret = h.querySelector('.var-caret');
+      if (caret) caret.textContent = h.parentElement.classList.contains('open') ? '▾' : '▸';
+    });
+  });
+
+  // 协议页协议 tabs（仅示意选中态）
+  document.querySelectorAll('.proto-tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.proto-tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+    });
+  });
+
+  // v2 增: 脏标记 — 表单输入时显示红点, 保存后隐藏
+  document.querySelectorAll('.ctl').forEach(input => {
+    input.addEventListener('input', () => {
+      const dot = document.querySelector('.toolbar .dirty-dot');
+      if (dot) dot.style.display = 'inline-block';
+      const tab = document.querySelector('.proto-tab.active');
+      if (tab && !tab.classList.contains('dirty')) {
+        tab.classList.add('dirty');
+      }
+    });
+  });
+  // 保存按钮点击后清除脏标记
+  document.querySelector('.toolbar .btn.primary').addEventListener('click', () => {
+    const dot = document.querySelector('.toolbar .dirty-dot');
+    if (dot) dot.style.display = 'none';
+    document.querySelectorAll('.proto-tab.dirty').forEach(t => t.classList.remove('dirty'));
+  });
+</script>
+</body>
+</html>

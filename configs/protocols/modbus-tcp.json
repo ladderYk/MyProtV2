@@ -1,0 +1,354 @@
+{
+    "schemaVersion":  2,
+    "protocolName":  "modbus-tcp",
+    "transport":  {
+                      "type":  "Tcp"
+                  },
+    "framing":  {
+                    "type":  "LengthField",
+                    "lengthFieldOffset":  4,
+                    "lengthFieldLength":  2,
+                    "lengthIncludesHeader":  false,
+                    "byteOrder":  "BigEndian",
+                    "headerLength":  6,
+                    "lengthAdjustment":  0,
+                    "maxFrameSize":  260
+                },
+    "dataByteOrder":  "WordBigByteLittle",
+    "inputs":  {
+                   "UnitID":  {
+                                  "source":  "static",
+                                  "value":  1,
+                                  "label":  "从站地址",
+                                  "unit":  "",
+                                  "enum":  [
+                                               1,
+                                               2,
+                                               3,
+                                               4,
+                                               5,
+                                               6,
+                                               7,
+                                               8,
+                                               9,
+                                               10
+                                           ]
+                              },
+                   "ProtocolID":  {
+                                      "source":  "static",
+                                      "value":  0,
+                                      "label":  "协议标识"
+                                  },
+                   "StartByteAddress":  {
+                                            "source":  "static",
+                                            "value":  0,
+                                            "label":  "起始字节地址",
+                                            "unit":  "字节"
+                                        },
+                   "ByteCount":  {
+                                     "source":  "static",
+                                     "value":  2,
+                                     "label":  "数据字节跨度",
+                                     "unit":  "字节"
+                                 },
+                   "BitOffset":  {
+                                     "source":  "static",
+                                     "value":  0,
+                                     "label":  "字节内位偏移",
+                                     "unit":  "位"
+                                 },
+                   "TransactionID":  {
+                                         "source":  "auto",
+                                         "strategy":  "autoIncrement",
+                                         "params":  {
+                                                        "seed":  1
+                                                    },
+                                         "label":  "事务ID"
+                                     }
+               },
+    "operations":  {
+                       "ReadCoils":  {
+                                         "kind":  "read",
+                                         "requestTemplate":  [
+                                                                 "{TransactionID:X4}",
+                                                                 "{ProtocolID:X4}",
+                                                                 "00 06",
+                                                                 "{UnitID:X2}",
+                                                                 "01",
+                                                                 "{StartAddress:X4}",
+                                                                 "{RegisterCount:X4}"
+                                                             ],
+                                         "outputs":  {
+                                                         "StartAddress":  {
+                                                                              "source":  "auto",
+                                                                              "strategy":  "derivedLength",
+                                                                              "expr":  "StartByteAddress * 8",
+                                                                              "label":  "起始线圈位址",
+                                                                              "unit":  "位"
+                                                                          },
+                                                         "RegisterCount":  {
+                                                                               "source":  "auto",
+                                                                               "strategy":  "derivedLength",
+                                                                               "expr":  "ByteCount * 8",
+                                                                               "label":  "读取线圈数",
+                                                                               "unit":  "个"
+                                                                           }
+                                                     },
+                                         "responseParser":  {
+                                                                "validCondition":  "resp[7] == 0x01",
+                                                                "dataStartIndex":  9,
+                                                                "dataLengthExpr":  "resp[8]"
+                                                            }
+                                     },
+                       "ReadDiscreteInputs":  {
+                                                  "kind":  "read",
+                                                  "requestTemplate":  [
+                                                                          "{TransactionID:X4}",
+                                                                          "{ProtocolID:X4}",
+                                                                          "00 06",
+                                                                          "{UnitID:X2}",
+                                                                          "02",
+                                                                          "{StartAddress:X4}",
+                                                                          "{RegisterCount:X4}"
+                                                                      ],
+                                                  "outputs":  {
+                                                                  "StartAddress":  {
+                                                                                       "source":  "auto",
+                                                                                       "strategy":  "derivedLength",
+                                                                                       "expr":  "StartByteAddress * 8",
+                                                                                       "label":  "起始输入位址",
+                                                                                       "unit":  "位"
+                                                                                   },
+                                                                  "RegisterCount":  {
+                                                                                        "source":  "auto",
+                                                                                        "strategy":  "derivedLength",
+                                                                                        "expr":  "ByteCount * 8",
+                                                                                        "label":  "读取输入位数",
+                                                                                        "unit":  "个"
+                                                                                    }
+                                                              },
+                                                  "responseParser":  {
+                                                                         "validCondition":  "resp[7] == 0x02",
+                                                                         "dataStartIndex":  9,
+                                                                         "dataLengthExpr":  "resp[8]"
+                                                                     }
+                                              },
+                       "ReadHoldingRegisters":  {
+                                                    "kind":  "read",
+                                                    "requestTemplate":  [
+                                                                            "{TransactionID:X4}",
+                                                                            "{ProtocolID:X4}",
+                                                                            "00 06",
+                                                                            "{UnitID:X2}",
+                                                                            "03",
+                                                                            "{StartAddress:X4}",
+                                                                            "{RegisterCount:X4}"
+                                                                        ],
+                                                    "outputs":  {
+                                                                    "StartAddress":  {
+                                                                                         "source":  "auto",
+                                                                                         "strategy":  "derivedLength",
+                                                                                         "expr":  "StartByteAddress / 2",
+                                                                                         "label":  "起始地址",
+                                                                                         "unit":  "寄存器号"
+                                                                                     },
+                                                                    "RegisterCount":  {
+                                                                                          "source":  "auto",
+                                                                                          "strategy":  "derivedLength",
+                                                                                          "expr":  "ByteCount / 2",
+                                                                                          "label":  "读取数量",
+                                                                                          "unit":  "个"
+                                                                                      }
+                                                                },
+                                                    "responseParser":  {
+                                                                           "validCondition":  "resp[7] == 0x03",
+                                                                           "dataStartIndex":  9,
+                                                                           "dataLengthExpr":  "resp[8]"
+                                                                       }
+                                                },
+                       "ReadInputRegisters":  {
+                                                  "kind":  "read",
+                                                  "requestTemplate":  [
+                                                                          "{TransactionID:X4}",
+                                                                          "{ProtocolID:X4}",
+                                                                          "00 06",
+                                                                          "{UnitID:X2}",
+                                                                          "04",
+                                                                          "{StartAddress:X4}",
+                                                                          "{RegisterCount:X4}"
+                                                                      ],
+                                                  "outputs":  {
+                                                                  "StartAddress":  {
+                                                                                       "source":  "auto",
+                                                                                       "strategy":  "derivedLength",
+                                                                                       "expr":  "StartByteAddress / 2",
+                                                                                       "label":  "起始地址",
+                                                                                       "unit":  "寄存器号"
+                                                                                   },
+                                                                  "RegisterCount":  {
+                                                                                        "source":  "auto",
+                                                                                        "strategy":  "derivedLength",
+                                                                                        "expr":  "ByteCount / 2",
+                                                                                        "label":  "读取数量",
+                                                                                        "unit":  "个"
+                                                                                    }
+                                                              },
+                                                  "responseParser":  {
+                                                                         "validCondition":  "resp[7] == 0x04",
+                                                                         "dataStartIndex":  9,
+                                                                         "dataLengthExpr":  "resp[8]"
+                                                                     }
+                                              },
+                       "WriteSingleCoil":  {
+                                               "kind":  "write",
+                                               "requestTemplate":  [
+                                                                       "{TransactionID:X4}",
+                                                                       "{ProtocolID:X4}",
+                                                                       "00 06",
+                                                                       "{UnitID:X2}",
+                                                                       "05",
+                                                                       "{StartAddress:X4}",
+                                                                       "{WriteValue:X4}"
+                                                                   ],
+                                               "outputs":  {
+                                                               "StartAddress":  {
+                                                                                    "source":  "auto",
+                                                                                    "strategy":  "derivedLength",
+                                                                                    "expr":  "StartByteAddress * 8 + BitOffset",
+                                                                                    "label":  "起始线圈位址",
+                                                                                    "unit":  "位"
+                                                                                }
+                                                           },
+                                               "responseParser":  {
+                                                                      "validCondition":  "resp[7] == 0x05",
+                                                                      "dataStartIndex":  12,
+                                                                      "dataLengthExpr":  null
+                                                                  }
+                                           },
+                       "WriteMultipleCoils":  {
+                                                  "kind":  "write",
+                                                  "requestTemplate":  [
+                                                                          "{TransactionID:X4}",
+                                                                          "{ProtocolID:X4}",
+                                                                          "{PDULength:X4}",
+                                                                          "{UnitID:X2}",
+                                                                          "0F",
+                                                                          "{StartAddress:X4}",
+                                                                          "{RegisterCount:X4}",
+                                                                          "{CoilByteCount:X2}",
+                                                                          "{WriteValue:raw}"
+                                                                      ],
+                                                  "outputs":  {
+                                                                  "StartAddress":  {
+                                                                                       "source":  "auto",
+                                                                                       "strategy":  "derivedLength",
+                                                                                       "expr":  "StartByteAddress * 8 + BitOffset",
+                                                                                       "label":  "起始线圈位址",
+                                                                                       "unit":  "位"
+                                                                                   },
+                                                                  "RegisterCount":  {
+                                                                                        "source":  "auto",
+                                                                                        "strategy":  "derivedLength",
+                                                                                        "expr":  "{WriteValue:len} * 8",
+                                                                                        "label":  "写入线圈数",
+                                                                                        "unit":  "个"
+                                                                                    },
+                                                                  "CoilByteCount":  {
+                                                                                        "source":  "auto",
+                                                                                        "strategy":  "derivedLength",
+                                                                                        "expr":  "{WriteValue:len}",
+                                                                                        "label":  "字节数",
+                                                                                        "unit":  "字节"
+                                                                                    },
+                                                                  "PDULength":  {
+                                                                                    "source":  "auto",
+                                                                                    "strategy":  "derivedLength",
+                                                                                    "expr":  "{Frame:fixed} - 6 + {WriteValue:len}",
+                                                                                    "label":  "PDU 长度 (含 UnitID 起算)"
+                                                                                }
+                                                              },
+                                                  "responseParser":  {
+                                                                         "validCondition":  "resp[7] == 0x0F",
+                                                                         "dataStartIndex":  12,
+                                                                         "dataLengthExpr":  null
+                                                                     }
+                                              },
+                       "WriteMultipleRegisters":  {
+                                                      "kind":  "write",
+                                                      "requestTemplate":  [
+                                                                              "{TransactionID:X4}",
+                                                                              "{ProtocolID:X4}",
+                                                                              "{PDULength:X4}",
+                                                                              "{UnitID:X2}",
+                                                                              "10",
+                                                                              "{StartAddress:X4}",
+                                                                              "{RegisterCount:X4}",
+                                                                              "{RegByteCount:X2}",
+                                                                              "{WriteValue:raw}"
+                                                                          ],
+                                                      "outputs":  {
+                                                                      "StartAddress":  {
+                                                                                           "source":  "auto",
+                                                                                           "strategy":  "derivedLength",
+                                                                                           "expr":  "StartByteAddress / 2",
+                                                                                           "label":  "起始地址",
+                                                                                           "unit":  "寄存器号"
+                                                                                       },
+                                                                      "RegisterCount":  {
+                                                                                            "source":  "auto",
+                                                                                            "strategy":  "derivedLength",
+                                                                                            "expr":  "{WriteValue:len} / 2",
+                                                                                            "label":  "写入数量",
+                                                                                            "unit":  "个"
+                                                                                        },
+                                                                      "RegByteCount":  {
+                                                                                           "source":  "auto",
+                                                                                           "strategy":  "derivedLength",
+                                                                                           "expr":  "{WriteValue:len}",
+                                                                                           "label":  "字节数",
+                                                                                           "unit":  "字节"
+                                                                                       },
+                                                                      "PDULength":  {
+                                                                                        "source":  "auto",
+                                                                                        "strategy":  "derivedLength",
+                                                                                        "expr":  "{Frame:fixed} - 6 + {WriteValue:len}",
+                                                                                        "label":  "PDU 长度 (含 UnitID 起算)"
+                                                                                    }
+                                                                  },
+                                                      "responseParser":  {
+                                                                             "validCondition":  "resp[7] == 0x10",
+                                                                             "dataStartIndex":  12,
+                                                                             "dataLengthExpr":  null
+                                                                         }
+                                                  },
+                       "WriteSingleRegister":  {
+                                                   "kind":  "write",
+                                                   "requestTemplate":  [
+                                                                           "{TransactionID:X4}",
+                                                                           "{ProtocolID:X4}",
+                                                                           "00 06",
+                                                                           "{UnitID:X2}",
+                                                                           "06",
+                                                                           "{StartAddress:X4}",
+                                                                           "{WriteValue:X4}"
+                                                                       ],
+                                                   "outputs":  {
+                                                                   "StartAddress":  {
+                                                                                        "source":  "auto",
+                                                                                        "strategy":  "derivedLength",
+                                                                                        "expr":  "StartByteAddress / 2",
+                                                                                        "label":  "起始地址",
+                                                                                        "unit":  "寄存器号"
+                                                                                    }
+                                                               },
+                                                   "responseParser":  {
+                                                                          "validCondition":  "resp[7] == 0x06",
+                                                                          "dataStartIndex":  12,
+                                                                          "dataLengthExpr":  null
+                                                                      }
+                                               }
+                   },
+    "handshake":  [
+
+                  ]
+}

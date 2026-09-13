@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{84C035CC-15F3-4A69-AC9B-41B7C6973FCC}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files\include_MyProt_Engine">
+      <UniqueIdentifier>{FE25A1F1-2330-42BB-97CF-BC31ABFE63AB}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{2900B419-2241-406C-AC00-97EDD37E4048}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{4986B19E-7378-4D3D-9C4B-2D7798B2B648}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\MyProt\Engine\RequestBuilder.hpp">
+      <Filter>Header Files\include_MyProt_Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Engine\ResponseParser.hpp">
+      <Filter>Header Files\include_MyProt_Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Engine\ExpressionEvaluator.hpp">
+      <Filter>Header Files\include_MyProt_Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Engine\AutoIncrementProvider.hpp">
+      <Filter>Header Files\include_MyProt_Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Engine\AutoComputeProvider.hpp">
+      <Filter>Header Files\include_MyProt_Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Engine\MiniExpression.hpp">
+      <Filter>Header Files\include_MyProt_Engine</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\RequestBuilder.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ResponseParser.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ExpressionEvaluator.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AutoComputeProvider.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\MiniExpression.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

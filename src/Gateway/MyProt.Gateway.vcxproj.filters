@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{A6EFEF91-CC51-4367-8A3B-2EB7F8652EC5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files\include_MyProt_Gateway">
+      <UniqueIdentifier>{9E5F3B45-2C25-4D08-B51C-7C4024FCE3AE}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{CECFCC71-60E1-4FE5-A765-F2F09559C3CB}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{2D6D7849-052E-41B5-96B4-34AB51DEEC16}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\MyProt\Gateway\TagGrouper.hpp">
+      <Filter>Header Files\include_MyProt_Gateway</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Gateway\TagReader.hpp">
+      <Filter>Header Files\include_MyProt_Gateway</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Gateway\MergedRequest.hpp">
+      <Filter>Header Files\include_MyProt_Gateway</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Gateway\ChannelManager.hpp">
+      <Filter>Header Files\include_MyProt_Gateway</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Gateway\ProtocolGateway.hpp">
+      <Filter>Header Files\include_MyProt_Gateway</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Gateway\ProtocolLookup.hpp">
+      <Filter>Header Files\include_MyProt_Gateway</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\TagGrouper.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\TagReader.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ChannelManager.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ProtocolGateway.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

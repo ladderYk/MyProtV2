@@ -1,0 +1,99 @@
+{
+  "Devices": [
+    {
+      "id": "PLC1",
+      "protocol": "ModbusTCP",
+      "host": "127.0.0.1",
+      "port": 502
+    },
+    {
+      "id": "AGV1",
+      "protocol": "SEER",
+      "host": "192.168.1.100",
+      "port": 11500
+    },
+    {
+      "id": "S7PLC1",
+      "protocol": "S7",
+      "host": "192.168.0.1",
+      "port": 102
+    }
+  ],
+  "Tags": [
+    {
+      "tagName": "Temperature",
+      "deviceId": "PLC1",
+      "operation": "ReadHoldingRegisters",
+      "variables": {
+        "UnitID": 1,
+        "StartAddress": 0,
+        "RegisterCount": 2
+      },
+      "scanRateMs": 1000
+    },
+    {
+      "tagName": "Pressure",
+      "deviceId": "PLC1",
+      "operation": "ReadHoldingRegisters",
+      "variables": {
+        "UnitID": 1,
+        "StartAddress": 2,
+        "RegisterCount": 2
+      },
+      "scanRateMs": 1000
+    },
+    {
+      "tagName": "RobotStatus",
+      "deviceId": "AGV1",
+      "operation": "GetRobotStatus",
+      "variables": {
+        "Seq": 1,
+        "ApiType": 2000
+      },
+      "scanRateMs": 1000
+    },
+    {
+      "tagName": "RobotPosition",
+      "deviceId": "AGV1",
+      "operation": "GetPosition",
+      "variables": {
+        "Seq": 2,
+        "ApiType": 2001
+      },
+      "scanRateMs": 500
+    },
+    {
+      "tagName": "BatteryLevel",
+      "deviceId": "AGV1",
+      "operation": "GetBattery",
+      "variables": {
+        "Seq": 3,
+        "ApiType": 2003
+      },
+      "scanRateMs": 5000
+    },
+    {
+      "tagName": "S7_DB1_Word0",
+      "deviceId": "S7PLC1",
+      "operation": "ReadDB",
+      "variables": {
+        "TransactionID": 1,
+        "DBNumber": 1,
+        "AddrHi": 0,
+        "AddrLo": 0
+      },
+      "scanRateMs": 1000
+    },
+    {
+      "tagName": "S7_M0_Byte0",
+      "deviceId": "S7PLC1",
+      "operation": "ReadM",
+      "variables": {
+        "TransactionID": 2,
+        "AddrHi": 0,
+        "AddrLo": 0
+      },
+      "scanRateMs": 1000
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{A7B8EDA6-E231-4188-AB2B-C7FA57D5BD46}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files\include_MyProt_Core">
+      <UniqueIdentifier>{B1693C68-0CC7-48BC-BA7A-A04BEB2E5D94}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{2812FC88-C271-4B1D-A399-E1FCD8BB372C}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{E261DFBC-DA15-4720-800D-536EF30CA4A4}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\MyProt\Core\Expected.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Core\ByteView.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Core\ByteOrder.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Core\Config.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Core\Optional.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Core\Value.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Core\Log.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Core\Metrics.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Core\ServerConfig.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Core\SimulationConfig.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Core 是 header-only 库, 仅一个空翻译单元用于生成 .lib 供下游 link -->
+    <ClCompile Include="src\MyProt.Core.ForceLib.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

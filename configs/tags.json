@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 2,
+  "resilience": {
+    "maxAttempts": 3,
+    "backoffBaseMs": 100,
+    "backoffMaxMs": 1000,
+    "failureThreshold": 5,
+    "cooldownMs": 10000,
+    "halfOpenProbes": 1
+  },
+  "webApi": {
+    "bindAddress": "127.0.0.1",
+    "requireAuth": false,
+    "rateLimitRps": 5,
+    "rateLimitBurst": 10
+  },
+  "devices": [
+    {
+      "id": "PLC-001",
+      "protocol": "modbus-tcp",
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 502,
+        "timeoutMs": 3000
+      },
+      "requestTimeoutMs": 3000
+    },
+    {
+      "id": "PLC_1200",
+      "protocol": "s7-1200",
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 102,
+        "timeoutMs": 5000
+      },
+      "requestTimeoutMs": 2000
+    }
+  ],
+  "tags": [
+    {
+      "name": "PLC-001.Coil0",
+      "deviceId": "PLC-001",
+      "operation": "ReadCoils",
+      "variables": {
+        "StartByteAddress": 0,
+        "ByteCount": 1
+      },
+      "bitOffset": 0,
+      "scanRateMs": 3000,
+      "finalType": "Bool"
+    },
+    {
+      "name": "PLC-001.Coil0_3",
+      "deviceId": "PLC-001",
+      "operation": "ReadCoils",
+      "variables": {
+        "StartByteAddress": 0,
+        "ByteCount": 1
+      },
+      "bitOffset": 3,
+      "scanRateMs": 3000,
+      "finalType": "Bool"
+    },
+    {
+      "name": "PLC-001.Di0",
+      "deviceId": "PLC-001",
+      "operation": "ReadDiscreteInputs",
+      "variables": {
+        "StartByteAddress": 0,
+        "ByteCount": 1
+      },
+      "bitOffset": 0,
+      "scanRateMs": 3000,
+      "finalType": "Bool"
+    },
+    {
+      "name": "PLC-001.HR0",
+      "deviceId": "PLC-001",
+      "operation": "ReadHoldingRegisters",
+      "variables": {
+        "StartByteAddress": 0,
+        "ByteCount": 2
+      },
+      "scanRateMs": 2000,
+      "finalType": "UInt16"
+    },
+    {
+      "name": "PLC-001.HR1",
+      "deviceId": "PLC-001",
+      "operation": "ReadHoldingRegisters",
+      "variables": {
+        "StartByteAddress": 2,
+        "ByteCount": 2
+      },
+      "scanRateMs": 2000,
+      "finalType": "UInt16"
+    },
+    {
+      "name": "PLC-001.HR2",
+      "deviceId": "PLC-001",
+      "operation": "ReadHoldingRegisters",
+      "variables": {
+        "StartByteAddress": 4,
+        "ByteCount": 2
+      },
+      "scanRateMs": 2000,
+      "finalType": "UInt16"
+    },
+    {
+      "name": "PLC-001.HR100",
+      "deviceId": "PLC-001",
+      "operation": "ReadHoldingRegisters",
+      "variables": {
+        "StartByteAddress": 200,
+        "ByteCount": 2
+      },
+      "scanRateMs": 2000,
+      "finalType": "UInt16"
+    },
+    {
+      "name": "PLC-001.Float10",
+      "deviceId": "PLC-001",
+      "operation": "ReadHoldingRegisters",
+      "writeOperation": "WriteMultipleRegisters",
+      "variables": {
+        "StartByteAddress": 20,
+        "ByteCount": 4
+      },
+      "scanRateMs": 2000,
+      "finalType": "Float"
+    },
+    {
+      "name": "PLC-001.Int32_40",
+      "deviceId": "PLC-001",
+      "operation": "ReadHoldingRegisters",
+      "writeOperation": "WriteMultipleRegisters",
+      "variables": {
+        "StartByteAddress": 80,
+        "ByteCount": 4
+      },
+      "scanRateMs": 2000,
+      "finalType": "Int32"
+    },
+    {
+      "name": "PLC-001.IR0",
+      "deviceId": "PLC-001",
+      "operation": "ReadInputRegisters",
+      "variables": {
+        "StartByteAddress": 0,
+        "ByteCount": 2
+      },
+      "scanRateMs": 3000,
+      "finalType": "UInt16"
+    },
+    {
+      "name": "PLC-001.HR20",
+      "deviceId": "PLC-001",
+      "operation": "ReadHoldingRegisters",
+      "variables": {
+        "StartByteAddress": 40,
+        "ByteCount": 2
+      },
+      "scanRateMs": 2000,
+      "finalType": "UInt16"
+    },
+    {
+      "name": "PLC-001.HR30",
+      "deviceId": "PLC-001",
+      "operation": "ReadHoldingRegisters",
+      "variables": {
+        "StartByteAddress": 60,
+        "ByteCount": 6
+      },
+      "scanRateMs": 2000,
+      "finalType": "ByteArray"
+    },
+    {
+      "name": "PLC_1200.DBW0",
+      "deviceId": "PLC_1200",
+      "operation": "ReadVarWord",
+      "variables": {
+        "StartByteAddress": 0,
+        "ByteCount": 2,
+        "DBNumber": 1,
+        "Area": 132
+      },
+      "scanRateMs": 2000,
+      "finalType": "UInt16",
+      "coalesce": false,
+      "writeOperation": "WriteVarWord"
+    },
+    {
+      "name": "PLC_1200.DBD4",
+      "deviceId": "PLC_1200",
+      "operation": "ReadVarWord",
+      "writeOperation": "WriteVarWord",
+      "variables": {
+        "StartByteAddress": 4,
+        "ByteCount": 4,
+        "DBNumber": 1,
+        "Area": 132
+      },
+      "scanRateMs": 2000,
+      "finalType": "Float",
+      "coalesce": false
+    },
+    {
+      "name": "PLC_1200.DBX0_1",
+      "deviceId": "PLC_1200",
+      "operation": "ReadVarBit",
+      "writeOperation": "WriteVarBit",
+      "variables": {
+        "StartByteAddress": 0,
+        "ByteCount": 1,
+        "DBNumber": 1,
+        "Area": 132
+      },
+      "bitOffset": 1,
+      "scanRateMs": 3000,
+      "finalType": "Bool",
+      "coalesce": false
+    }
+  ]
+}

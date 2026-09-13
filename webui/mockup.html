@@ -1,0 +1,2385 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" data-density="comfortable">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MyProt 管理控制台 — 设计方案 v4</title>
+<style>
+/* ============================================================
+   1. 设计令牌 (semantic tokens)
+   —— 所有组件只引用变量, 不写死色值。换肤/密度只切根属性。
+   ============================================================ */
+:root{
+  --surface:#ffffff;
+  --surface-muted:#f8fafc;
+  --surface-sunken:#f1f5f9;
+  --surface-hover:#f8fafc;
+
+  --border:#e2e8f0;
+  --border-strong:#cbd5e1;
+  --border-soft:#f1f5f9;
+
+  --text:#1e293b;
+  --text-2:#475569;
+  --text-muted:#64748b;
+  --text-faint:#94a3b8;
+
+  --accent:#2563eb;
+  --accent-hover:#1d4ed8;
+  --accent-soft:#eff6ff;
+  --accent-fg:#ffffff;
+  /* 局部 (操作级) 作用域标识色 —— 与全局的蓝形成层级区分 */
+  --local:#7c3aed;
+  --local-soft:#f5f3ff;
+
+  --ok:#15803d;      --ok-soft:#dcfce7;
+  --warn:#b45309;    --warn-soft:#fef3c7;
+  --danger:#b91c1c;  --danger-soft:#fee2e2;
+  --stale:#64748b;   --stale-soft:#f1f5f9;
+
+  --nav-bg:#1e293b;
+  --nav-fg:#cbd5e1;
+  --nav-fg-dim:#94a3b8;
+  --nav-group:#64748b;
+
+  --row-pad-y:8px;
+  --field-h:34px;
+  --radius:8px;
+  --radius-lg:10px;
+  --gap:14px;
+  --mono:ui-monospace,Consolas,"SF Mono",Menlo,"Courier New",monospace;
+}
+
+[data-theme="dark"]{
+  --surface:#111827;
+  --surface-muted:#161f2f;
+  --surface-sunken:#1b2537;
+  --surface-hover:#1b2537;
+
+  --border:#26334a;
+  --border-strong:#3a4a66;
+  --border-soft:#1f2b3f;
+
+  --text:#e5e9f0;
+  --text-2:#c3cbd9;
+  --text-muted:#94a3b8;
+  --text-faint:#6b7a90;
+
+  --accent:#4f8df7;
+  --accent-hover:#6ba0f9;
+  --accent-soft:#1b2f52;
+  --accent-fg:#ffffff;
+  --local:#a78bfa;
+  --local-soft:#2b1f4d;
+
+  --ok:#4ade80;      --ok-soft:#14351f;
+  --warn:#fbbf24;    --warn-soft:#3d2c0a;
+  --danger:#f87171;  --danger-soft:#3d1a1a;
+  --stale:#94a3b8;   --stale-soft:#1e293b;
+
+  --nav-bg:#0b1220;
+  --nav-fg:#cbd5e1;
+  --nav-fg-dim:#7c8aa3;
+  --nav-group:#5b6980;
+}
+
+/* 密度: 紧凑模式只压缩行高与控件高度 */
+[data-density="compact"]{
+  --row-pad-y:5px;
+  --field-h:30px;
+  --gap:10px;
+}
+
+/* ============================================================
+   2. 基础
+   ============================================================ */
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{
+  font-family:"Segoe UI","Microsoft YaHei",-apple-system,sans-serif;
+  font-size:14px;
+  color:var(--text);
+  background:var(--surface-sunken);
+  display:flex;
+  flex-direction:column;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;cursor:pointer;background:none;border:none;color:inherit;}
+input,select,textarea{font:inherit;color:inherit;}
+code{font-family:var(--mono);}
+a{color:var(--accent);text-decoration:none;}
+a:hover{text-decoration:underline;}
+::-webkit-scrollbar{width:9px;height:9px;}
+::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:5px;}
+::-webkit-scrollbar-track{background:transparent;}
+
+/* 数值列等宽数字: 跳动时不产生横向抖动 */
+.num,.mono-val,.data td.num{font-variant-numeric:tabular-nums;}
+
+/* ============================================================
+   3. 顶部菜单栏 + 底部状态栏
+   ============================================================ */
+.menubar{
+  flex-shrink:0;
+  height:46px;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:0 12px;
+  background:var(--nav-bg);
+  color:var(--nav-fg);
+  box-shadow:0 1px 4px rgba(0,0,0,.22);
+  z-index:30;
+}
+.menubar .spacer{flex:1;}
+
+/* ── 下拉菜单 (运行 / 配置 / 诊断) ── */
+.menu{position:relative;}
+.menu > button{
+  display:flex;align-items:center;gap:6px;
+  padding:7px 13px;border-radius:6px;font-size:13.5px;color:var(--nav-fg);
+}
+.menu > button:hover{background:rgba(255,255,255,.08);color:#fff;}
+.menu.open > button,
+.menu.here > button{background:rgba(255,255,255,.13);color:#fff;font-weight:600;}
+.menu-caret{font-size:9px;opacity:.7;}
+.menu-pop{
+  display:none;position:absolute;left:0;top:calc(100% + 6px);min-width:212px;
+  background:var(--surface);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--radius-lg);
+  box-shadow:0 16px 40px rgba(0,0,0,.28);z-index:40;padding:5px;
+}
+.menu.open .menu-pop{display:block;}
+.menu-item{
+  display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+  padding:8px 10px;border-radius:6px;font-size:13px;color:var(--text-2);
+}
+.menu-item:hover{background:var(--surface-hover);color:var(--text);}
+.menu-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600;}
+.menu-item .mi{width:14px;text-align:center;font-size:12px;opacity:.75;flex-shrink:0;}
+
+/* 顶栏右侧的紧凑健康指示 */
+.health{
+  display:flex;align-items:center;gap:6px;flex-shrink:0;
+  font-size:12.5px;color:#4ade80;padding:0 4px;
+}
+
+/* ── 底部状态栏 ── */
+.statusbar{
+  flex-shrink:0;
+  height:30px;
+  display:flex;align-items:center;
+  padding:0 10px;
+  background:var(--nav-bg);
+  color:var(--nav-fg);
+  border-top:1px solid rgba(0,0,0,.4);
+  z-index:20;
+}
+.statusbar .spacer{flex:1;}
+.statusbar .seg-mini{margin-left:10px;}
+.menu-sep{height:1px;background:var(--border-soft);margin:5px 6px;}
+.reload-row .lbl{font-size:11.5px;color:var(--text-muted);white-space:nowrap;}
+/* 顶栏上的功能按钮 (校验问题 / 备份) */
+.ghost.on{background:rgba(255,255,255,.15);color:#fff;font-weight:600;}
+.ghost .nav-badge{margin-left:5px;background:var(--danger);color:#fff;}
+.ghost .mk{opacity:.75;margin-right:2px;}
+
+/* ── 页面内页签 (设备 / 标签 / 全局参数) ── */
+.tabbar{
+  display:flex;gap:2px;flex-shrink:0;
+  border-bottom:1px solid var(--border);margin-bottom:var(--gap);
+}
+.tabbar .tab{
+  display:flex;align-items:center;gap:7px;
+  padding:9px 16px;font-size:13.5px;color:var(--text-muted);
+  border-bottom:2px solid transparent;margin-bottom:-1px;
+}
+.tabbar .tab:hover{color:var(--text-2);}
+.tabbar .tab.active{color:var(--accent);font-weight:600;border-bottom-color:var(--accent);}
+.tabpane{display:none;flex:1;min-height:0;flex-direction:column;}
+.tabpane.active{display:flex;}
+
+/* ── 协议级子页签 (常规与传输 / 成帧 / 全局变量 / 握手 / 变量别名) ── */
+.subtabs{
+  display:flex;gap:4px;flex-wrap:wrap;flex-shrink:0;
+  padding:9px 14px;background:var(--surface-muted);
+  border-bottom:1px solid var(--border);
+}
+.subtabs button{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:5px 12px;border-radius:6px;font-size:12.5px;
+  color:var(--text-muted);border:1px solid transparent;
+}
+.subtabs button:hover{color:var(--text-2);background:var(--surface);}
+.subtabs button.active{background:var(--accent);color:#fff;font-weight:600;}
+.subtabs button.active .cnt{background:rgba(255,255,255,.28);color:#fff;}
+.subpane{display:none;padding:14px;}
+.subpane.active{display:block;}
+/* 协议级在独立分页里, 由分页容器负责滚动, 卡片本身不再限高 */
+.scope-card{display:flex;flex-direction:column;}
+.scope-card .subpane{overflow-y:auto;flex:1;min-height:0;}
+
+/* ── 作用域分段 (协议级 / 操作级) ── */
+.scopebar{display:flex;align-items:center;gap:8px;flex-shrink:0;margin-bottom:var(--gap);}
+.scopebar button{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:8px 15px;border-radius:8px;font-size:13.5px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text-muted);
+}
+.scopebar button:hover{border-color:var(--border-strong);color:var(--text-2);}
+.scopebar button.active{
+  color:var(--text);font-weight:600;
+  border-color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent);
+}
+.scopepane{display:none;flex:1;min-height:0;flex-direction:column;overflow-y:auto;}
+.scopepane.active{display:flex;}
+
+/* 操作级详情的一行紧凑表头 */
+.op-head{
+  display:flex;align-items:center;gap:10px;flex-shrink:0;
+  padding:9px 13px;border:1px solid var(--border);border-radius:var(--radius-lg);
+  background:var(--surface-muted);margin-bottom:var(--gap);
+}
+.op-title{font-family:var(--mono);font-weight:600;font-size:14px;color:var(--local);}
+
+/* 协议级表单在宽卡片里改用三列, 避免输入框被拉得过宽 */
+#scope-global .form-grid{grid-template-columns:repeat(3,minmax(0,1fr));}
+@media (max-width:1100px){
+  #scope-global .form-grid{grid-template-columns:1fr;}
+}
+.sub-sec{display:flex;align-items:center;gap:10px;margin:16px 0 10px;}
+/* 判别结构的分支容器: 只有 type 命中的分支会渲染在这里 */
+.branch{
+  margin-top:8px;padding:11px 13px;
+  border-left:2px solid var(--border-strong);
+  background:var(--surface-muted);border-radius:0 6px 6px 0;
+}
+.branch-note{font-size:11.5px;color:var(--text-faint);line-height:1.65;margin-bottom:9px;}
+.branch-note code{background:var(--accent-soft);color:var(--accent);padding:1px 5px;border-radius:4px;}
+
+/* 握手步骤 */
+.hs-step{border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden;}
+.hs-head{
+  display:flex;align-items:center;gap:9px;padding:9px 12px;
+  background:var(--surface-muted);border-bottom:1px solid var(--border);
+}
+.hs-idx{
+  width:20px;height:20px;border-radius:5px;flex-shrink:0;
+  background:var(--accent-soft);color:var(--accent);
+  font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;
+}
+.hs-name{font-family:var(--mono);font-weight:600;font-size:13px;}
+.hs-body{padding:11px 12px;}
+.hs-row{display:flex;align-items:flex-start;gap:10px;font-size:12.5px;margin-bottom:7px;}
+.hs-row:last-child{margin-bottom:0;}
+.hs-k{width:88px;flex-shrink:0;color:var(--text-muted);}
+.hs-v{flex:1;min-width:0;font-family:var(--mono);word-break:break-all;color:var(--text-2);line-height:1.6;}
+
+/* 变量别名映射 */
+.alias-row{
+  display:flex;align-items:center;gap:10px;
+  padding:8px 11px;border:1px solid var(--border);border-radius:7px;
+  margin-bottom:8px;font-size:12.5px;
+}
+.alias-row code{font-size:12px;padding:1px 7px;border-radius:4px;}
+.alias-row code.from{background:var(--accent-soft);color:var(--accent);}
+.alias-row code.to{background:var(--local-soft);color:var(--local);}
+.alias-arrow{color:var(--text-faint);}
+
+/* ── 右侧栏内的备份条目 ── */
+.bak-item{border:1px solid var(--border);border-radius:7px;padding:9px 11px;margin-bottom:9px;}
+.bak-head{display:flex;align-items:center;gap:8px;margin-bottom:5px;}
+.bak-head code{font-size:11.5px;color:var(--accent);background:var(--accent-soft);padding:1px 6px;border-radius:4px;}
+.bak-time{font-size:11px;color:var(--text-faint);margin-left:auto;font-variant-numeric:tabular-nums;}
+.bak-sum{font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:8px;}
+.bak-act{display:flex;gap:6px;}
+.brand{display:flex;align-items:center;gap:9px;font-weight:600;color:#fff;flex-shrink:0;}
+.brand-mark{
+  width:28px;height:28px;border-radius:7px;background:var(--accent);
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;letter-spacing:.03em;color:#fff;
+}
+
+.st{
+  display:flex;align-items:center;gap:6px;
+  padding:0 12px;font-size:12.5px;white-space:nowrap;
+  border-right:1px solid rgba(255,255,255,.08);
+  color:var(--nav-fg);
+}
+.st:last-child{border-right:none;}
+.st-k{color:var(--nav-fg-dim);}
+.st b{font-variant-numeric:tabular-nums;color:#fff;font-weight:600;}
+.st-sub{color:var(--warn);font-size:11.5px;}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex-shrink:0;}
+.dot.pulse{box-shadow:0 0 0 0 rgba(74,222,128,.7);animation:pulse 2s infinite;}
+@keyframes pulse{70%{box-shadow:0 0 0 6px rgba(74,222,128,0);}100%{box-shadow:0 0 0 0 rgba(74,222,128,0);}}
+.st.mono{font-family:var(--mono);color:var(--nav-fg-dim);font-size:12px;}
+
+.topbar-actions{display:flex;align-items:center;gap:7px;flex-shrink:0;}
+.ghost{
+  font-size:12.5px;padding:6px 11px;border-radius:6px;
+  color:var(--nav-fg);white-space:nowrap;
+}
+.ghost:hover{background:rgba(255,255,255,.09);color:#fff;}
+.seg-mini{display:inline-flex;border:1px solid rgba(255,255,255,.14);border-radius:6px;overflow:hidden;}
+.seg-mini button{
+  padding:5px 9px;font-size:12px;color:var(--nav-fg-dim);
+}
+.seg-mini button + button{border-left:1px solid rgba(255,255,255,.14);}
+.seg-mini button.active{background:var(--accent);color:#fff;}
+
+/* 热重载: 点开给结果摘要, 不再是一句"完成" */
+.reload-wrap{position:relative;}
+.reload-pop{
+  display:none;position:absolute;right:0;top:calc(100% + 8px);width:340px;
+  background:var(--surface);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--radius-lg);
+  box-shadow:0 16px 40px rgba(0,0,0,.28);z-index:40;overflow:hidden;
+}
+.reload-pop.open{display:block;}
+.reload-pop h4{font-size:12px;padding:10px 14px;background:var(--surface-muted);
+  border-bottom:1px solid var(--border);color:var(--text-muted);font-weight:600;}
+.reload-row{display:flex;align-items:center;gap:8px;padding:9px 14px;font-size:13px;
+  border-bottom:1px solid var(--border-soft);}
+.reload-row:last-child{border-bottom:none;}
+.reload-row .f{font-family:var(--mono);flex:1;color:var(--text-2);}
+.reload-foot{padding:9px 14px;background:var(--surface-muted);font-size:12px;color:var(--text-muted);
+  border-top:1px solid var(--border);}
+
+/* ============================================================
+   4. 主体骨架: 内容 / 右侧上下文栏
+   ============================================================ */
+.shell{flex:1;min-height:0;display:flex;}
+
+/* 菜单项右侧的计数徽标 */
+.nav-badge{
+  margin-left:auto;font-size:11px;font-weight:700;padding:0 6px;border-radius:999px;
+  background:var(--surface-sunken);color:var(--text-muted);flex-shrink:0;
+}
+.nav-badge.err{background:var(--danger-soft);color:var(--danger);}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;}
+.view{display:none;flex:1;min-height:0;flex-direction:column;padding:16px 18px;overflow:auto;}
+.view.active{display:flex;}
+
+/* v4 变更提示条 */
+.changelog{
+  display:flex;align-items:flex-start;gap:10px;
+  padding:10px 14px;margin-bottom:14px;border-radius:var(--radius);
+  background:var(--accent-soft);border:1px solid var(--border);
+  font-size:12.5px;color:var(--text-2);line-height:1.6;
+}
+.changelog b{color:var(--accent);}
+.changelog .x{margin-left:auto;color:var(--text-faint);font-size:16px;line-height:1;flex-shrink:0;}
+
+/* ============================================================
+   5. 右侧上下文栏 (字段说明 / 校验问题 / 变量溯源)
+   ============================================================ */
+.context{
+  width:322px;flex-shrink:0;
+  background:var(--surface);
+  border-left:1px solid var(--border);
+  display:flex;flex-direction:column;min-height:0;
+}
+.context.collapsed{display:none;}
+.ctx-tabs{display:flex;flex-shrink:0;border-bottom:1px solid var(--border);background:var(--surface-muted);}
+.ctx-tabs button{
+  flex:1;padding:10px 6px;font-size:12.5px;color:var(--text-muted);
+  border-bottom:2px solid transparent;
+}
+.ctx-tabs button:hover{color:var(--text-2);}
+.ctx-tabs button.active{color:var(--accent);font-weight:600;border-bottom-color:var(--accent);background:var(--surface);}
+.ctx-tabs .pill{
+  display:inline-block;margin-left:4px;padding:0 5px;border-radius:999px;
+  font-size:10.5px;font-weight:700;background:var(--danger-soft);color:var(--danger);
+}
+.ctx-body{flex:1;min-height:0;overflow-y:auto;padding:14px;}
+.ctx-pane{display:none;}
+.ctx-pane.active{display:block;}
+.ctx-empty{color:var(--text-faint);font-size:12.5px;text-align:center;padding:36px 12px;line-height:1.7;}
+
+.help-block h5{font-size:13px;margin-bottom:6px;color:var(--text);font-family:var(--mono);}
+.help-block .path{
+  display:inline-block;font-family:var(--mono);font-size:11px;color:var(--accent);
+  background:var(--accent-soft);padding:1px 6px;border-radius:4px;margin-bottom:10px;
+}
+.help-block p{font-size:12.5px;line-height:1.75;color:var(--text-2);margin-bottom:8px;}
+.help-block ul{margin:0 0 8px 16px;font-size:12.5px;color:var(--text-2);line-height:1.7;}
+.help-block .meta{
+  margin-top:10px;padding:8px 10px;background:var(--surface-muted);
+  border-radius:6px;font-size:12px;color:var(--text-muted);line-height:1.6;
+}
+.help-block .meta b{color:var(--text-2);}
+
+/* 校验问题条目 (右侧栏与诊断页共用) */
+.prob{
+  border:1px solid var(--border);border-left-width:3px;border-radius:7px;
+  padding:9px 11px;margin-bottom:9px;background:var(--surface);
+  cursor:pointer;
+}
+.prob:hover{border-color:var(--accent);}
+.prob.err{border-left-color:var(--danger);}
+.prob.warn{border-left-color:var(--warn);}
+.prob.active{background:var(--accent-soft);border-color:var(--accent);}
+.prob-head{display:flex;align-items:center;gap:7px;margin-bottom:5px;}
+.sev{
+  font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:4px;flex-shrink:0;
+  letter-spacing:.02em;
+}
+.sev.err{background:var(--danger-soft);color:var(--danger);}
+.sev.warn{background:var(--warn-soft);color:var(--warn);}
+.prob-file{font-family:var(--mono);font-size:11px;color:var(--text-faint);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.prob-msg{font-size:12.5px;line-height:1.6;color:var(--text-2);}
+.prob-path{
+  display:block;font-family:var(--mono);font-size:11px;color:var(--accent);
+  margin-top:5px;word-break:break-all;
+}
+.prob-go{
+  margin-left:auto;font-size:11.5px;color:var(--accent);
+  white-space:nowrap;flex-shrink:0;
+}
+
+/* 变量溯源 (4 层覆盖链) */
+.trace-legend{font-size:11.5px;color:var(--text-muted);line-height:1.7;margin-bottom:10px;}
+.trace-sub{
+  font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text-faint);
+  margin:0 0 6px;
+}
+.trace-chain{display:flex;flex-direction:column;gap:6px;}
+.trace-layer{
+  display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:6px;
+  border:1px solid var(--border);font-size:12px;background:var(--surface);
+}
+.trace-layer.effective{border-color:var(--accent);background:var(--accent-soft);}
+.trace-layer .lv{font-weight:600;color:var(--text-2);flex:1;}
+.trace-layer .vv{font-family:var(--mono);color:var(--text);}
+.trace-layer .mk{font-size:10px;color:var(--accent);font-weight:700;}
+.trace-empty{color:var(--text-faint);font-size:12px;}
+
+/* ============================================================
+   6. 通用卡片 / 分区
+   ============================================================ */
+.card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-lg);margin-bottom:var(--gap);overflow:hidden;
+}
+.card:last-child{margin-bottom:0;}
+.card-head{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 14px;background:var(--surface-muted);
+  border-bottom:1px solid var(--border);font-weight:600;font-size:13px;
+}
+.card-head .spacer{flex:1;}
+.card-body{padding:14px;}
+
+/* 竖线小标题 */
+.sec-title{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:13px;color:var(--text-2);}
+.sec-title::before{content:'';width:3px;height:14px;border-radius:2px;background:var(--accent);flex-shrink:0;}
+
+.page-head{display:flex;align-items:baseline;gap:14px;margin-bottom:14px;flex-shrink:0;}
+.page-head h2{font-size:16px;}
+.page-meta{font-size:12.5px;color:var(--text-muted);}
+
+/* ============================================================
+   7. 表单
+   ============================================================ */
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:26px;row-gap:12px;}
+.form-grid.one{grid-template-columns:1fr;}
+.span2{grid-column:1/-1;}
+.field{display:flex;align-items:center;gap:10px;min-width:0;}
+.field > label{
+  flex-shrink:0;width:104px;font-size:12.5px;color:var(--text-muted);text-align:right;
+}
+.ctl{
+  flex:1;min-width:0;height:var(--field-h);padding:0 10px;
+  border:1px solid var(--border-strong);border-radius:6px;
+  background:var(--surface);font-size:13px;
+}
+.ctl:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+.ctl.mono{font-family:var(--mono);font-size:12.5px;}
+.ctl.num{width:88px;flex:none;text-align:right;font-variant-numeric:tabular-nums;}
+select.ctl{cursor:pointer;}
+textarea.ctl{height:auto;padding:10px;line-height:1.6;}
+.unit{font-size:11.5px;color:var(--text-faint);font-family:var(--mono);white-space:nowrap;}
+.field-hint{font-size:11.5px;color:var(--text-faint);line-height:1.5;}
+
+/* 字段级校验态 */
+.field.bad .ctl{border-color:var(--danger);background:var(--danger-soft);}
+.field-err{grid-column:1/-1;font-size:11.5px;color:var(--danger);margin-top:-4px;line-height:1.5;}
+.field.warn .ctl{border-color:var(--warn);}
+
+/* 定位闪烁 */
+.flash{animation:flash 1.1s ease 2;}
+@keyframes flash{
+  0%,100%{box-shadow:0 0 0 0 rgba(37,99,235,0);}
+  40%{box-shadow:0 0 0 4px var(--accent-soft);}
+}
+
+/* ============================================================
+   8. 按钮 / 分段控件 / 工具条
+   ============================================================ */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 13px;border-radius:6px;font-size:13px;white-space:nowrap;
+  border:1px solid var(--border-strong);background:var(--surface);color:var(--text-2);
+  transition:background .15s,border-color .15s;
+}
+.btn:hover{border-color:var(--text-faint);}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);}
+.btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);}
+.btn.danger{color:var(--danger);border-color:var(--danger-soft);}
+.btn.danger:hover{background:var(--danger-soft);}
+.btn.small{padding:4px 10px;font-size:12.5px;}
+.btn.tiny{padding:2px 8px;font-size:11.5px;}
+.btn:disabled{opacity:.45;cursor:not-allowed;}
+.btn-toggle{background:var(--surface);}
+.btn-toggle.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600;}
+
+.toolbar{
+  display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+  padding:9px 13px;background:var(--surface-muted);
+  border:1px solid var(--border);border-radius:var(--radius);margin-bottom:var(--gap);
+  flex-shrink:0;
+}
+.toolbar .spacer{flex:1;}
+.toolbar .file{font-family:var(--mono);font-size:12.5px;color:var(--accent);font-weight:600;}
+.dirty-dot{width:7px;height:7px;border-radius:50%;background:var(--warn);display:inline-block;}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden;}
+.seg button{padding:5px 12px;font-size:12.5px;color:var(--text-muted);background:var(--surface);}
+.seg button + button{border-left:1px solid var(--border);}
+.seg button.active{background:var(--accent);color:var(--accent-fg);}
+
+/* ============================================================
+   9. 表格
+   ============================================================ */
+.table-wrap{
+  flex:1;min-height:0;overflow:auto;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
+}
+table.data{width:100%;border-collapse:collapse;font-size:13px;}
+table.data th,table.data td{
+  text-align:left;padding:var(--row-pad-y) 14px;
+  border-bottom:1px solid var(--border-soft);vertical-align:middle;
+}
+table.data th{
+  position:sticky;top:0;z-index:2;
+  background:var(--surface-muted);color:var(--text-muted);
+  font-weight:600;font-size:12px;white-space:nowrap;
+}
+table.data tbody tr:hover td{background:var(--surface-hover);}
+table.data td.mono{font-family:var(--mono);font-size:12.5px;}
+table.data td.val{font-family:var(--mono);font-size:13.5px;font-variant-numeric:tabular-nums;font-weight:600;}
+table.data.mini{font-size:12.5px;}
+table.data.mini th,table.data.mini td{padding:calc(var(--row-pad-y) - 2px) 9px;}
+table.data.mini td .ctl{height:28px;}
+
+/* 异常行: 左侧色条 + 优先展示 */
+tr.q-bad td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
+tr.q-uncertain td:first-child{box-shadow:inset 3px 0 0 var(--warn);}
+tr.q-stale td:first-child{box-shadow:inset 3px 0 0 var(--stale);}
+tr.frozen td{opacity:.6;}
+
+/* 设备分组头 */
+.group-head{
+  display:flex;align-items:center;gap:10px;
+  padding:8px 14px;background:var(--surface-muted);
+  border-bottom:1px solid var(--border);cursor:pointer;user-select:none;
+}
+.group-head:hover{background:var(--surface-sunken);}
+.group-caret{color:var(--text-faint);font-size:11px;width:10px;}
+.group-name{font-family:var(--mono);font-weight:600;color:var(--accent);font-size:13px;}
+.group-state{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ok);}
+.group-state.off{color:var(--warn);}
+.group-meta{font-size:11.5px;color:var(--text-faint);margin-left:auto;
+  font-variant-numeric:tabular-nums;}
+
+/* ============================================================
+   10. 徽标 / 质量态 (四态)
+   ============================================================ */
+.badge{
+  display:inline-block;padding:1px 9px;border-radius:999px;
+  font-size:11px;font-weight:600;
+}
+.badge.good{background:var(--ok-soft);color:var(--ok);}
+.badge.bad{background:var(--danger-soft);color:var(--danger);}
+.badge.uncertain{background:var(--warn-soft);color:var(--warn);}
+.badge.stale{background:var(--stale-soft);color:var(--stale);}
+
+.type-badge{
+  font-size:10.5px;padding:1px 6px;border-radius:4px;font-weight:600;
+  background:var(--surface-sunken);color:var(--text-muted);font-family:var(--mono);
+  margin-left:6px;
+}
+.type-badge.bool{background:var(--ok-soft);color:var(--ok);}
+.type-badge.uint16{background:var(--accent-soft);color:var(--accent);}
+.type-badge.float{background:var(--warn-soft);color:var(--warn);}
+.type-badge.int32{background:var(--ok-soft);color:var(--ok);}
+.type-badge.bytearray{background:var(--surface-sunken);color:var(--text-muted);}
+
+/* ============================================================
+   11. 请求模板 token 条 (三色语义)
+   ============================================================ */
+.tpl-bar{display:flex;flex-wrap:wrap;gap:5px 8px;align-items:center;}
+.tpl-token{
+  font-family:var(--mono);font-size:12.5px;padding:3px 9px;border-radius:5px;
+  border:1px solid transparent;
+}
+/* 填充色 = 变量层级 (全局/局部); 虚线边框 = 由 inputs 派生的 outputs */
+.tpl-token.g{background:var(--accent-soft);color:var(--accent);border-color:var(--accent-soft);}
+.tpl-token.l{background:var(--local-soft);color:var(--local);border-color:var(--local-soft);}
+.tpl-token.lit{background:var(--surface-sunken);color:var(--text-muted);border-color:var(--border);}
+.tpl-token.bad{background:var(--danger-soft);color:var(--danger);border-color:var(--danger);}
+.tpl-token.derived{border-style:dashed;border-color:currentColor;}
+.legend{
+  display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-faint);
+  margin-left:auto;font-weight:400;flex-wrap:wrap;
+}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block;}
+.legend i.g{background:var(--accent-soft);border:1px solid var(--accent);}
+.legend i.l{background:var(--local-soft);border:1px solid var(--local);}
+.legend i.lit{background:var(--surface-sunken);border:1px solid var(--border-strong);}
+.legend i.bad{background:var(--danger-soft);border:1px solid var(--danger);}
+.legend i.d{background:transparent;border:1px dashed var(--text-faint);}
+
+/* ============================================================
+   11b. 作用域分组 (协议级 / 操作级) + 变量表
+   ============================================================ */
+.scope-card{margin-bottom:12px;}
+.scope-chip{
+  font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;
+  letter-spacing:.02em;flex-shrink:0;
+}
+.scope-chip.g{background:var(--accent);color:#fff;}
+.scope-chip.l{background:var(--local);color:#fff;}
+.scope-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.scope-col{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;min-width:0;}
+.scope-col-head{
+  display:flex;align-items:center;gap:7px;
+  padding:8px 11px;background:var(--surface-muted);
+  border-bottom:1px solid var(--border);font-size:12.5px;font-weight:600;
+}
+.lv-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.lv-dot.g{background:var(--accent);}
+.lv-dot.l{background:var(--local);}
+.cnt{
+  font-size:11px;font-weight:700;padding:0 6px;border-radius:999px;
+  background:var(--surface-sunken);color:var(--text-muted);flex-shrink:0;
+}
+/* 来源标签 */
+.src{font-size:10.5px;padding:1px 7px;border-radius:999px;font-weight:600;white-space:nowrap;}
+.src.static{background:var(--accent-soft);color:var(--accent);}
+.src.auto{background:var(--warn-soft);color:var(--warn);}
+.src.derived{background:var(--local-soft);color:var(--local);}
+/* 层级标记: 覆盖全局 / 仅本操作 */
+.ov{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:4px;white-space:nowrap;}
+.ov.over{background:var(--local-soft);color:var(--local);}
+.ov.own{background:var(--surface-sunken);color:var(--text-faint);}
+.empty-cell{
+  color:var(--text-faint);font-size:12px;text-align:center;
+  padding:20px 12px;line-height:1.8;
+}
+/* 表格单元格的内边距会覆盖上面的 padding, 这里提权补回 */
+table.data td.empty-cell{padding:20px 12px;}
+.empty-cell code{background:var(--surface-sunken);padding:1px 5px;border-radius:4px;}
+
+/* ============================================================
+   12. 主从布局 (左索引 + 右详情)
+   ============================================================ */
+.split{display:flex;gap:var(--gap);align-items:stretch;flex:1;min-height:0;}
+.split-list{
+  width:228px;flex-shrink:0;display:flex;flex-direction:column;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
+  overflow:hidden;
+}
+.split-search{padding:8px;border-bottom:1px solid var(--border-soft);}
+.split-search input{width:100%;height:30px;padding:0 9px;border:1px solid var(--border-strong);
+  border-radius:6px;font-size:12.5px;background:var(--surface);}
+.split-items{list-style:none;flex:1;overflow-y:auto;padding:5px;}
+.split-items li{
+  display:flex;align-items:center;gap:6px;
+  padding:6px 9px;border-radius:5px;font-size:12.5px;cursor:pointer;
+}
+.split-items li:hover{background:var(--surface-hover);}
+.split-items li.active{background:var(--accent-soft);color:var(--accent);font-weight:600;}
+.split-items .nm{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.split-detail{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;overflow-y:auto;}
+
+/* ============================================================
+   13. Misc
+   ============================================================ */
+.kv{display:flex;flex-wrap:wrap;gap:6px;}
+.kv-item{background:var(--surface-sunken);border-radius:5px;padding:3px 9px;font-size:12px;}
+.kv-item b{font-family:var(--mono);color:var(--accent);}
+.kv-item .num{font-variant-numeric:tabular-nums;}
+
+.note{
+  display:flex;gap:9px;align-items:flex-start;
+  padding:10px 13px;border-radius:var(--radius);font-size:12.5px;line-height:1.7;
+  border:1px solid var(--border);background:var(--surface-muted);color:var(--text-2);
+  margin-bottom:var(--gap);
+}
+.note.info{background:var(--accent-soft);border-color:var(--accent-soft);color:var(--text-2);}
+.note.warn{background:var(--warn-soft);border-color:var(--warn-soft);}
+.note.err{background:var(--danger-soft);border-color:var(--danger-soft);}
+.note b{color:var(--text);}
+.note code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:4px;}
+
+.empty{text-align:center;color:var(--text-faint);padding:44px 16px;font-size:13px;line-height:1.8;}
+.spark{display:block;width:74px;height:20px;}
+.spark polyline{fill:none;stroke-width:1.3;}
+.spark.good polyline{stroke:var(--accent);}
+.spark.bad polyline{stroke:var(--danger);}
+.spark.uncertain polyline{stroke:var(--warn);}
+
+/* 探测条: 预检概要 */
+.precheck{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:12px 14px;border-radius:var(--radius-lg);margin-bottom:var(--gap);
+  background:var(--surface);border:1px solid var(--border);
+}
+.precheck .big{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1;}
+.precheck .big.err{color:var(--danger);}
+.precheck .big.warn{color:var(--warn);}
+.precheck .big.ok{color:var(--ok);}
+.precheck .lbl{font-size:11.5px;color:var(--text-muted);}
+
+.toast-wrap{position:fixed;right:16px;bottom:42px;display:flex;flex-direction:column;gap:8px;z-index:80;}
+.toast{
+  background:var(--nav-bg);color:#fff;font-size:13px;padding:10px 14px;border-radius:7px;
+  box-shadow:0 8px 24px rgba(0,0,0,.3);max-width:380px;line-height:1.6;
+}
+.toast.err{background:var(--danger);}
+
+.mock-note{
+  position:fixed;right:14px;bottom:42px;z-index:70;
+  background:#334155;color:#fff;font-size:11.5px;padding:5px 11px;border-radius:6px;
+  opacity:.92;
+}
+
+/* ============================================================
+   14. 响应式
+   ============================================================ */
+@media (max-width:1280px){
+  .context{width:280px;}
+}
+@media (max-width:1100px){
+  .context{display:none;}          /* 上下文栏在窄屏收起, 内容优先 */
+  .form-grid{grid-template-columns:1fr;}
+  .scope-grid{grid-template-columns:1fr;}
+  .split{flex-direction:column;}
+  .split-list{width:100%;max-height:170px;}
+}
+@media (max-width:860px){
+  .statusbar .st:nth-child(n+3){display:none;}
+  .menubar .brand-name{display:none;}
+  .menu > button{padding:7px 10px;font-size:13px;}
+}
+@media (max-width:680px){
+  .brand-name{display:none;}
+  .form-grid{grid-template-columns:1fr;}
+  .field{flex-wrap:wrap;}
+  .field > label{width:100%;text-align:left;}
+  .view{padding:12px;}
+}
+</style>
+</head>
+<body>
+
+<!-- ==================== 顶部菜单栏 ==================== -->
+<header class="menubar">
+  <div class="brand">
+    <span class="brand-mark">MP</span>
+    <span class="brand-name">MyProt 管理控制台</span>
+  </div>
+
+  <!-- 运行 -->
+  <div class="menu" data-menu="run">
+    <button>运行<span class="menu-caret">▾</span></button>
+    <div class="menu-pop">
+      <button class="menu-item active" data-view="live"><span class="mi">◉</span><span>实时监控</span><span class="nav-badge err">2</span></button>
+      <button class="menu-item" data-view="sim"><span class="mi">▦</span><span>仿真控制</span></button>
+    </div>
+  </div>
+
+  <!-- 配置 -->
+  <div class="menu" data-menu="config">
+    <button>配置<span class="menu-caret">▾</span></button>
+    <div class="menu-pop">
+      <button class="menu-item" data-view="proto"><span class="mi">⌗</span><span>协议配置</span></button>
+      <button class="menu-item" data-view="devices"><span class="mi">▣</span><span>设备与标签</span></button>
+    </div>
+  </div>
+
+  <span class="spacer"></span>
+
+  <span class="health"><i class="dot pulse"></i>运行中</span>
+
+  <div class="topbar-actions">
+    <button class="ghost" data-view="problems"><span class="mk">⚠</span>校验问题<span class="nav-badge">2</span></button>
+    <button class="ghost" id="backupBtn">备份</button>
+    <div class="reload-wrap">
+      <button class="ghost" id="reloadBtn">热重载 ▾</button>
+      <div class="reload-pop" id="reloadPop">
+        <h4>上次热重载 · 12:03:41 · 耗时 240ms</h4>
+        <div class="reload-row"><span class="sev" style="background:var(--ok-soft);color:var(--ok)">OK</span><span class="f">protocols/modbus-tcp.json</span><span class="lbl">12 标签</span></div>
+        <div class="reload-row"><span class="sev" style="background:var(--ok-soft);color:var(--ok)">OK</span><span class="f">protocols/s7-1200.json</span><span class="lbl">3 标签</span></div>
+        <div class="reload-row"><span class="sev warn">WARN</span><span class="f">tags.json</span><span class="lbl">1 条告警</span></div>
+        <div class="reload-foot">重载按钮只在磁盘配置与运行态不一致时才需要点击；保存已自动触发。</div>
+      </div>
+    </div>
+    <button class="ghost" id="ctxToggle">侧栏</button>
+    <button class="ghost">文档</button>
+    <button class="ghost">退出</button>
+  </div>
+</header>
+
+<div class="shell">
+
+  <!-- ==================== 内容区 ==================== -->
+  <main class="main">
+
+    <!-- ────────── 实时监控 ────────── -->
+    <section class="view active" id="view-live">
+      <div class="changelog" id="changelog">
+        <span>本稿相对旧版的变化：菜单收敛为 <b>运行 / 配置</b> 两项（页面 9 → 5；同属 tags.json 的设备 · 标签 · 韧性策略 · 管理面安全合并为一页，配置备份并入右侧栏）· <b>顶部菜单栏</b> + <b>底部状态栏</b> · 协议页区分 <b>协议级（全局）</b> 与 <b>操作级（局部）</b> 的 inputs / outputs · <b>右侧上下文栏</b>（字段说明 / 校验问题 / 变量溯源 / 备份） · <b>校验问题可点击定位字段</b> · 暗色与密度切换 · 质量四态（补 Stale）。</span>
+        <button class="x" onclick="document.getElementById('changelog').remove()">×</button>
+      </div>
+
+      <div class="page-head">
+        <h2>实时监控</h2>
+        <span class="page-meta">15 标签 · 13 Good · 1 Uncertain · 1 Bad · 更新于 14:32:05</span>
+      </div>
+
+      <div class="toolbar">
+        <input class="ctl" style="max-width:250px" placeholder="按标签名 / 设备过滤…" />
+        <select class="ctl" style="width:150px;flex:none">
+          <option>全部设备</option><option>PLC-001</option><option>PLC_1200</option>
+        </select>
+        <button class="btn small btn-toggle" id="onlyBad">仅看异常</button>
+        <button class="btn small btn-toggle" id="freezeBtn">暂停刷新</button>
+        <span class="spacer"></span>
+        <span class="page-meta">实时推送 <i class="dot pulse" style="display:inline-block;vertical-align:middle"></i></span>
+        <button class="btn small">导出 CSV</button>
+        <button class="btn small primary">立即刷新</button>
+      </div>
+
+      <div class="table-wrap" id="liveTable">
+        <div class="group-head">
+          <span class="group-caret">▾</span>
+          <span class="group-name">PLC-001</span>
+          <span class="group-state"><i class="dot"></i>在线</span>
+          <span class="group-meta">最后成功 14:32:05 · 12 标签 · 10 Good · 1 Uncertain · 1 Bad</span>
+        </div>
+        <table class="data">
+          <thead><tr>
+            <th style="width:180px">标签</th><th style="width:120px">值</th><th style="width:96px">质量</th>
+            <th style="width:110px">趋势 (30 点)</th><th style="width:100px">时间</th><th style="width:80px">操作</th>
+          </tr></thead>
+          <tbody>
+            <tr class="q-good">
+              <td class="mono">Coil0<span class="type-badge bool">Bool</span></td>
+              <td class="val">true</td>
+              <td><span class="badge good">Good</span></td>
+              <td><svg class="spark good" viewBox="0 0 74 20" preserveAspectRatio="none"><polyline points="0,12 9,10 18,14 27,8 36,11 45,9 54,13 63,10 74,11"/></svg></td>
+              <td class="mono">14:32:05</td>
+              <td><button class="btn tiny">写入</button></td>
+            </tr>
+            <tr class="q-good">
+              <td class="mono">HR0<span class="type-badge uint16">UInt16</span></td>
+              <td class="val">1234</td>
+              <td><span class="badge good">Good</span></td>
+              <td><svg class="spark good" viewBox="0 0 74 20" preserveAspectRatio="none"><polyline points="0,8 9,10 18,12 27,9 36,11 45,13 54,10 63,12 74,9"/></svg></td>
+              <td class="mono">14:32:05</td>
+              <td><button class="btn tiny">写入</button></td>
+            </tr>
+            <tr class="q-good">
+              <td class="mono">Float10<span class="type-badge float">Float</span></td>
+              <td class="val">3.14</td>
+              <td><span class="badge good">Good</span></td>
+              <td><svg class="spark good" viewBox="0 0 74 20" preserveAspectRatio="none"><polyline points="0,10 9,12 18,14 27,11 36,13 45,15 54,12 63,14 74,13"/></svg></td>
+              <td class="mono">14:32:05</td>
+              <td><button class="btn tiny">写入</button></td>
+            </tr>
+            <tr class="q-uncertain" data-q="uncertain">
+              <td class="mono">IR0<span class="type-badge uint16">UInt16</span></td>
+              <td class="val">42</td>
+              <td><span class="badge uncertain">Uncertain</span></td>
+              <td><svg class="spark uncertain" viewBox="0 0 74 20" preserveAspectRatio="none"><polyline points="0,12 9,10 18,14 27,8 36,11 45,9 54,13 63,10 74,12"/></svg></td>
+              <td class="mono">14:32:02</td>
+              <td><button class="btn tiny">写入</button></td>
+            </tr>
+            <tr class="q-bad" data-q="bad">
+              <td class="mono">HR20<span class="type-badge uint16">UInt16</span></td>
+              <td class="val" style="color:var(--danger)">—</td>
+              <td><span class="badge bad">Bad</span></td>
+              <td><span class="page-meta">—</span></td>
+              <td class="mono">14:31:58</td>
+              <td><button class="btn tiny">写入</button></td>
+            </tr>
+            <tr class="q-stale" data-q="stale">
+              <td class="mono">HR30<span class="type-badge bytearray">ByteArray</span></td>
+              <td class="val">00 0A 1F</td>
+              <td><span class="badge stale">Stale</span></td>
+              <td><span class="page-meta">—</span></td>
+              <td class="mono">14:29:41</td>
+              <td><button class="btn tiny">写入</button></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="group-head">
+          <span class="group-caret">▾</span>
+          <span class="group-name">PLC_1200</span>
+          <span class="group-state"><i class="dot"></i>在线</span>
+          <span class="group-meta">最后成功 14:32:05 · 3 标签 · 3 Good</span>
+        </div>
+        <table class="data">
+          <thead><tr>
+            <th style="width:180px">标签</th><th style="width:120px">值</th><th style="width:96px">质量</th>
+            <th style="width:110px">趋势 (30 点)</th><th style="width:100px">时间</th><th style="width:80px">操作</th>
+          </tr></thead>
+          <tbody>
+            <tr class="q-good"><td class="mono">DBW0<span class="type-badge uint16">UInt16</span></td><td class="val">100</td>
+              <td><span class="badge good">Good</span></td><td><span class="page-meta">—</span></td>
+              <td class="mono">14:32:05</td><td><button class="btn tiny">写入</button></td></tr>
+            <tr class="q-good"><td class="mono">DBD4<span class="type-badge float">Float</span></td><td class="val">1.5</td>
+              <td><span class="badge good">Good</span></td><td><span class="page-meta">—</span></td>
+              <td class="mono">14:32:05</td><td><button class="btn tiny">写入</button></td></tr>
+            <tr class="q-good"><td class="mono">DBX0_1<span class="type-badge bool">Bool</span></td><td class="val">false</td>
+              <td><span class="badge good">Good</span></td><td><span class="page-meta">—</span></td>
+              <td class="mono">14:32:05</td><td><button class="btn tiny">写入</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ────────── 仿真控制 ────────── -->
+    <section class="view" id="view-sim">
+      <div class="page-head">
+        <h2>仿真控制</h2>
+        <span class="page-meta">2 个仿真器在运行</span>
+      </div>
+
+      <!-- 修正: 仿真参数在 server.json, 不在协议配置里 -->
+      <div class="note info">
+        <span>仿真参数（监听端口 / 寄存器数量 / 初始值 / 行为映射）属于<b>服务端部署属性</b>，保存在
+        <code>configs/server.json</code> 的 <code>simulation</code> 节，<b>不在协议配置里</b>。
+        协议层已与该段解耦（v1.1）。</span>
+        <button class="btn small" style="margin-left:auto;flex-shrink:0">编辑 server.json</button>
+      </div>
+
+      <div class="toolbar">
+        <div class="kv">
+          <span class="kv-item" style="cursor:pointer;border:1px solid var(--accent);background:var(--accent-soft)">
+            <b>modbus-tcp</b> : 502 · <span class="num">65536</span> 寄存器
+          </span>
+          <span class="kv-item" style="cursor:pointer"><b>s7-1200</b> : 102 · <span class="num">65536</span> 寄存器</span>
+        </div>
+        <span class="spacer"></span>
+        <span class="page-meta"><i class="dot pulse" style="display:inline-block;vertical-align:middle"></i> 运行中</span>
+      </div>
+
+      <div class="toolbar">
+        <span class="page-meta">起始地址</span><input class="ctl num" value="0" />
+        <span class="page-meta">数量</span><input class="ctl num" value="16" />
+        <button class="btn small primary">读取</button>
+        <button class="btn small btn-toggle" id="simPoll">3s 自动刷新</button>
+        <span class="spacer"></span>
+        <span class="page-meta">回车或点「写入」提交；写值立即对设备侧可见</span>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr>
+            <th style="width:90px">地址</th><th style="width:110px">十六进制</th>
+            <th style="width:110px">当前值</th><th style="width:150px">新值</th><th></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">0</td><td class="mono">0x0000</td><td class="val">0</td>
+              <td><input class="ctl mono" style="width:120px;height:28px" placeholder="0" /></td>
+              <td><button class="btn tiny primary">写入</button></td></tr>
+            <tr style="background:var(--warn-soft)"><td class="mono">1</td><td class="mono">0x0001</td><td class="val">1</td>
+              <td><input class="ctl mono" style="width:120px;height:28px" value="999" /></td>
+              <td><button class="btn tiny primary">写入</button></td></tr>
+            <tr><td class="mono">2</td><td class="mono">0x0002</td><td class="val">2</td>
+              <td><input class="ctl mono" style="width:120px;height:28px" /></td>
+              <td><button class="btn tiny primary">写入</button></td></tr>
+            <tr><td class="mono">3</td><td class="mono">0x0003</td><td class="val">3</td>
+              <td><input class="ctl mono" style="width:120px;height:28px" /></td>
+              <td><button class="btn tiny primary">写入</button></td></tr>
+            <tr><td class="mono">4</td><td class="mono">0x0004</td><td class="val">4</td>
+              <td><input class="ctl mono" style="width:120px;height:28px" /></td>
+              <td><button class="btn tiny primary">写入</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ────────── 协议配置 ────────── -->
+    <section class="view" id="view-proto">
+      <!-- 对象选择并入工具栏, 减少顶部横条层数 -->
+      <div class="toolbar">
+        <select class="ctl" id="protoSelect" style="width:168px;flex:none">
+          <option value="modbus-tcp">modbus-tcp</option>
+          <option value="s7-1200">s7-1200</option>
+        </select>
+        <span class="file" id="protoFile">modbus-tcp.json</span>
+        <span class="dirty-dot" title="有未保存修改"></span>
+        <span class="page-meta">未保存</span>
+        <span class="spacer"></span>
+        <div class="seg"><button class="active">表单</button><button>JSON</button></div>
+        <button class="btn small" id="precheckBtn">预检</button>
+        <button class="btn small danger">删除</button>
+        <button class="btn small primary" id="saveBtn">保存</button>
+      </div>
+
+      <!-- 作用域分段: 一次展开一个, 各自拿满剩余高度 (两段同屏在 1024 高度下放不下) -->
+      <div class="scopebar">
+        <button data-scope="global">
+          <span class="scope-chip g">协议级</span>全局
+          <span class="cnt" id="scGlobalCnt">0 · 0</span>
+        </button>
+        <button class="active" data-scope="op">
+          <span class="scope-chip l">操作级</span>局部
+          <span class="cnt" id="scOpCnt">0</span>
+        </button>
+        <span class="page-meta" style="margin-left:auto">同一份协议文件里的两个作用域 —— 两层如何叠加见右侧栏「变量溯源」</span>
+      </div>
+
+      <!-- ═══════ 协议级 (全局) — 所有操作共享 ═══════ -->
+      <div class="scopepane" id="scope-global">
+      <div class="card scope-card" id="globalScope">
+        <div class="card-head">
+          <span class="scope-chip g">协议级</span>
+          <span class="sec-title">全局</span>
+          <span class="page-meta">所有操作共享 · 操作级同名变量会覆盖此处</span>
+        </div>
+
+        <!-- v5: 协议级子页签 —— 把 6 组配置收进一屏, 避免和操作级叠成一条长列 -->
+        <div class="subtabs">
+          <button class="active" data-sub="basic">常规与传输</button>
+          <button data-sub="framing">成帧</button>
+          <button data-sub="vars">全局变量<span class="cnt" id="subVarCnt">0</span></button>
+          <button data-sub="handshake">握手<span class="cnt" id="subHsCnt">0</span></button>
+          <button data-sub="alias">变量别名<span class="cnt" id="subAliasCnt">0</span></button>
+        </div>
+
+        <!-- ① 常规与传输 -->
+        <div class="subpane active" id="sub-basic">
+          <div class="form-grid">
+            <div class="field" data-help="protocolName"><label>协议名</label>
+              <input class="ctl mono" id="fProtoName" readonly /></div>
+            <div class="field" data-help="schemaVersion"><label>schemaVersion</label>
+              <input class="ctl" style="width:80px;flex:none" value="2" readonly /></div>
+            <div class="field" data-help="dataByteOrder"><label>数据字节序</label>
+              <input class="ctl mono" id="fByteOrder" readonly /></div>
+            <div class="field" data-help="defaultWriteOperation"><label>默认写操作</label>
+              <input class="ctl mono" id="fWriteOp" readonly /></div>
+            <div class="field" data-help="writeBytesOperation"><label>字节写操作</label>
+              <input class="ctl mono" id="fWriteBytesOp" readonly /></div>
+          </div>
+
+          <div class="sub-sec">
+            <span class="sec-title">传输</span>
+            <span class="page-meta">判别结构 —— 只有选中的类型分支生效，其余分支不下发</span>
+          </div>
+          <div class="form-grid">
+            <div class="field" data-help="transport.type"><label>传输类型</label>
+              <select class="ctl" id="fTransportType" style="width:160px;flex:none">
+                <option>Tcp</option><option>Tls</option><option>Serial</option>
+              </select></div>
+          </div>
+          <div class="branch" id="transportBranch"></div>
+        </div>
+
+        <!-- ② 成帧 -->
+        <div class="subpane" id="sub-framing">
+          <div class="form-grid">
+            <div class="field" data-help="framing.type"><label>成帧方式</label>
+              <select class="ctl" id="fFramingType" style="width:180px;flex:none">
+                <option>LengthField</option><option>Fixed</option><option>Silence</option>
+              </select></div>
+          </div>
+          <div class="branch" id="framingBranch"></div>
+        </div>
+
+        <!-- ③ 全局变量 -->
+        <div class="subpane" id="sub-vars">
+          <div class="toolbar" style="margin-bottom:10px">
+            <span class="page-meta">协议级 inputs / outputs 会被所有操作继承</span>
+            <span class="spacer"></span>
+            <button class="btn small">新增全局变量</button>
+          </div>
+          <div class="scope-grid">
+            <div class="scope-col">
+              <div class="scope-col-head">
+                <span class="lv-dot g"></span>全局 inputs<span class="cnt" id="gInCount">0</span>
+                <span class="page-meta" style="margin-left:auto">被所有操作继承</span>
+              </div>
+              <table class="data mini">
+                <thead><tr>
+                  <th style="width:128px">变量名</th><th style="width:58px">来源</th>
+                  <th style="width:100px">值</th><th>说明</th>
+                </tr></thead>
+                <tbody id="gInBody"></tbody>
+              </table>
+            </div>
+            <div class="scope-col">
+              <div class="scope-col-head">
+                <span class="lv-dot g"></span>全局 outputs<span class="cnt" id="gOutCount">0</span>
+                <span class="page-meta" style="margin-left:auto">由 inputs 派生 · 所有操作可用</span>
+              </div>
+              <table class="data mini">
+                <thead><tr>
+                  <th style="width:112px">变量名</th><th>表达式 expr</th>
+                  <th style="width:104px">说明</th>
+                </tr></thead>
+                <tbody id="gOutBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ④ 握手 -->
+        <div class="subpane" id="sub-handshake">
+          <div class="toolbar" style="margin-bottom:10px">
+            <span class="page-meta">连接建立后按序执行；每步可独立覆盖帧格式、提取会话变量</span>
+            <span class="spacer"></span>
+            <button class="btn small">新增握手步骤</button>
+          </div>
+          <div id="hsList"></div>
+        </div>
+
+        <!-- ⑤ 变量别名 -->
+        <div class="subpane" id="sub-alias">
+          <div class="note info" style="margin-bottom:12px">
+            把<b>用户自定义的变量名</b>映射到引擎内部契约名。可映射的契约名已收敛为 <b>2 个</b>
+            —— 引擎真正查表读取的跨协议字节单位。别名在<b>加载期一次性归一化</b>到
+            tag.variables / inputs / outputs / 请求模板，运行期各消费点无需感知别名；
+            管理面看到的仍是自定义名。
+          </div>
+          <div id="aliasList"></div>
+        </div>
+      </div><!-- /globalScope card -->
+      </div><!-- /scope-global -->
+
+      <!-- ═══════ 操作级 (局部) — 仅选中操作生效 ═══════ -->
+      <div class="scopepane active" id="scope-op">
+      <div class="split">
+        <div class="split-list">
+          <div class="split-search"><input placeholder="搜索操作名" /></div>
+          <ul class="split-items" id="opList"></ul>
+        </div>
+
+        <div class="split-detail">
+          <!-- 操作头: 一行紧凑展示, 不占卡片高度 -->
+          <div class="op-head">
+            <span class="lv-dot l"></span>
+            <code class="op-title" id="scopeOpName">ReadHoldingRegisters</code>
+            <span class="page-meta">kind</span>
+            <select class="ctl" id="fOpKind" data-help="operation.kind" style="width:104px;flex:none;height:28px">
+              <option>read</option><option>write</option>
+            </select>
+            <span class="page-meta">仅用于 UI 过滤与校验，运行时不依赖</span>
+            <span class="spacer"></span>
+            <button class="btn small danger">删除操作</button>
+          </div>
+
+          <!-- 局部 inputs -->
+          <div class="card">
+            <div class="card-head">
+              <span class="lv-dot l"></span>
+              <span class="sec-title">局部 inputs</span><span class="cnt" id="lInCount">0</span>
+              <span class="page-meta">同名时覆盖全局 inputs</span>
+              <span class="spacer"></span>
+              <button class="btn small">新增局部变量</button>
+            </div>
+            <div class="card-body" style="padding:0">
+              <table class="data mini">
+                <thead><tr>
+                  <th style="width:148px">变量名</th><th style="width:66px">来源</th>
+                  <th style="width:118px">值</th><th>label</th><th style="width:112px">层级</th>
+                </tr></thead>
+                <tbody id="lInBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 请求模板 -->
+          <div class="card" id="fld-tpl">
+            <div class="card-head">
+              <span class="sec-title">请求模板</span>
+              <span class="legend">
+                <i class="g"></i>全局变量<i class="l"></i>局部变量
+                <i class="d"></i>派生<i class="lit"></i>字面量<i class="bad"></i>未声明
+              </span>
+            </div>
+            <div class="card-body">
+              <div class="tpl-bar" id="tplBar"></div>
+            </div>
+          </div>
+
+          <!-- 局部 outputs -->
+          <div class="card">
+            <div class="card-head">
+              <span class="lv-dot l"></span>
+              <span class="sec-title">局部 outputs</span><span class="cnt" id="lOutCount">0</span>
+              <span class="page-meta">同名时覆盖全局 outputs</span>
+              <span class="spacer"></span>
+              <button class="btn small">新增派生变量</button>
+            </div>
+            <div class="card-body" style="padding:0">
+              <table class="data mini">
+                <thead><tr>
+                  <th style="width:148px">变量名</th><th>表达式 expr</th>
+                  <th style="width:118px">label</th><th style="width:96px">unit</th><th style="width:100px">层级</th>
+                </tr></thead>
+                <tbody id="lOutBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 响应解析 -->
+          <div class="card">
+            <div class="card-head"><span class="sec-title">响应解析</span><span class="spacer"></span>
+              <span class="sev err" id="rpErrChip" style="display:none">1 ERROR</span>
+              <span class="sev warn" id="rpWarnChip">1 WARN</span></div>
+            <div class="card-body">
+              <div class="form-grid">
+                <div class="field span2" data-help="responseParser.validCondition"><label>有效条件</label>
+                  <input class="ctl mono" id="rpVc" /></div>
+
+                <!-- ERROR 示例: 由预检发现, 点右侧「校验问题」可定位到这里 -->
+                <div class="field" id="fld-dataStartIndex" data-help="responseParser.dataStartIndex">
+                  <label>数据起始下标</label>
+                  <input class="ctl num" id="rpDsi" /><span class="unit">字节</span>
+                </div>
+                <div class="field" id="fld-dataLengthExpr" data-help="responseParser.dataLengthExpr">
+                  <label>数据长度表达式</label>
+                  <input class="ctl mono" id="rpDle" />
+                </div>
+                <div class="field-err" id="rpErrText" style="display:none">
+                  数据起始下标须 &gt; 0，当前为 0 → 每轮解析得到的字节数为 0（quality 恒为 Bad）。
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </div><!-- /scope-op -->
+    </section>
+
+    <!-- ────────── 设备 ────────── -->
+    <section class="view" id="view-devices">
+      <div class="page-head">
+        <h2>设备与标签</h2>
+        <span class="page-meta">同一个配置文件 tags.json · 2 台设备 · 15 个标签 · 全局参数（韧性 / 管理面）也在其中</span>
+      </div>
+
+      <!-- 页面内页签: 合并原本拆成 4 个菜单项的内容 -->
+      <div class="tabbar">
+        <button class="tab active" data-tab="devices">设备<span class="cnt">2</span></button>
+        <button class="tab" data-tab="tags">标签<span class="cnt">15</span></button>
+        <button class="tab" data-tab="global">全局参数</button>
+      </div>
+
+      <!-- ── 页签 1: 设备 ── -->
+      <div class="tabpane active" id="tab-devices">
+        <div class="toolbar">
+          <span class="spacer"></span>
+          <button class="btn small primary">新增设备</button>
+        </div>
+        <div class="split">
+          <div class="split-list">
+            <div class="split-search"><input placeholder="搜索设备 ID" /></div>
+            <ul class="split-items">
+              <li class="active"><span class="nm">PLC-001</span><i class="dot" style="margin-left:auto"></i></li>
+              <li><span class="nm">PLC_1200</span><i class="dot" style="margin-left:auto"></i></li>
+            </ul>
+          </div>
+          <div class="split-detail">
+            <div class="card">
+              <div class="card-head"><span class="sec-title">PLC-001</span><span class="spacer"></span>
+                <span class="badge good">在线</span><button class="btn small danger">删除</button></div>
+              <div class="card-body">
+                <div class="form-grid">
+                  <div class="field" data-help="device.id"><label>设备 ID</label><input class="ctl mono" value="PLC-001" /></div>
+                  <div class="field" data-help="device.protocol"><label>协议</label>
+                    <select class="ctl"><option>modbus-tcp</option><option>s7-1200</option></select></div>
+                  <div class="field" data-help="device.connection.host"><label>主机</label><input class="ctl mono" value="127.0.0.1" /></div>
+                  <div class="field" data-help="device.connection.port"><label>端口</label><input class="ctl num" value="502" /></div>
+                  <div class="field" data-help="device.connection.timeoutMs"><label>连接超时</label>
+                    <input class="ctl num" value="3000" /><span class="unit">ms</span></div>
+                  <div class="field" data-help="device.requestTimeoutMs"><label>请求超时</label>
+                    <input class="ctl num" value="3000" /><span class="unit">ms</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 页签 2: 标签 ── -->
+      <div class="tabpane" id="tab-tags">
+        <div class="toolbar"><span class="spacer"></span><button class="btn small primary">新增标签</button></div>
+        <div class="split">
+          <div class="split-list">
+            <div class="split-search"><input placeholder="搜索标签名 / 设备" /></div>
+            <ul class="split-items">
+              <li><span class="nm">PLC-001.Coil0</span><span class="type-badge bool">Bool</span></li>
+              <li class="active"><span class="nm">PLC-001.HR0</span><span class="type-badge uint16">UInt16</span></li>
+              <li><span class="nm">PLC-001.Float10</span><span class="type-badge float">Float</span></li>
+              <li><span class="nm">PLC-001.HR30</span><span class="type-badge bytearray">ByteArray</span></li>
+              <li><span class="nm">PLC_1200.DBW0</span><span class="type-badge uint16">UInt16</span></li>
+              <li><span class="nm">PLC_1200.DBX0_1</span><span class="type-badge bool">Bool</span></li>
+            </ul>
+          </div>
+          <div class="split-detail">
+            <div class="card">
+              <div class="card-head"><span class="sec-title">PLC-001.HR0</span><span class="spacer"></span>
+                <span class="sev warn">1 WARN</span>
+                <button class="btn small danger">删除</button></div>
+              <div class="card-body">
+                <div class="form-grid">
+                  <div class="field" data-help="tag.name"><label>标签名</label><input class="ctl mono" value="PLC-001.HR0" /></div>
+                  <div class="field" data-help="tag.deviceId"><label>设备</label>
+                    <select class="ctl"><option>PLC-001</option><option>PLC_1200</option></select></div>
+                  <div class="field" data-help="tag.operation"><label>操作</label>
+                    <select class="ctl"><option>ReadHoldingRegisters</option><option>ReadCoils</option></select></div>
+                  <div class="field" data-help="tag.writeOperation"><label>写操作</label>
+                    <select class="ctl"><option>（无）</option><option>WriteSingleRegister</option></select></div>
+                  <div class="field" data-help="tag.finalType"><label>最终类型</label>
+                    <select class="ctl"><option>UInt16</option><option>Int32</option><option>Float</option><option>Bool</option></select></div>
+                  <div class="field" data-help="tag.scanRateMs"><label>扫描周期</label>
+                    <input class="ctl num" value="2000" /><span class="unit">ms</span></div>
+                  <div class="field" id="fld-reportMode" data-help="tag.reportMode">
+                    <label>上报模式</label>
+                    <select class="ctl"><option>Always</option><option>OnChange</option></select>
+                  </div>
+                  <div class="field" data-help="tag.coalesce"><label>合并扫描</label>
+                    <select class="ctl" style="width:100px;flex:none"><option>是</option><option>否</option></select></div>
+                  <div class="field" data-help="tag.bitOffset"><label>位偏移</label>
+                    <input class="ctl num" value="—" /><span class="unit">0-7 · 留空 = 未声明</span></div>
+                </div>
+
+                <div class="note warn" style="margin:14px 0 10px">
+                  上报模式 <code>OnChange</code> 的变化过滤<b>尚未实现</b>，当前行为等价于 <code>Always</code>。
+                  选它不会报错，但不会有过滤效果。
+                </div>
+
+                <div class="form-grid one">
+                  <div>
+                    <div class="page-meta" style="margin-bottom:6px">请求变量 (variables)</div>
+                    <div class="kv">
+                      <span class="kv-item" id="fld-bitoffset" style="border:1px dashed var(--danger)">
+                        <b>StartByteAddress</b> <span style="color:var(--danger)">未声明 → 将按地址 0 采集</span>
+                      </span>
+                      <span class="kv-item"><b>ByteCount</b> = <span class="num">2</span></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 页签 3: 全局参数 (原「韧性策略」+「管理面安全」两个菜单项) ── -->
+      <div class="tabpane" id="tab-global">
+        <div class="card">
+          <div class="card-head">
+            <span class="sec-title">韧性策略</span>
+            <span class="page-meta">重连 / 退避 / 熔断</span>
+          </div>
+          <div class="card-body">
+            <div class="note warn" style="margin:0 0 14px">
+              全局 <code>resilience</code> 段目前<b>只对「最大尝试次数」和「退避」生效</b>；
+              <code>failureThreshold</code> / <code>cooldownMs</code> / <code>halfOpenProbes</code>
+              尚未接入熔断器，改了不会有实际效果。
+            </div>
+            <div class="form-grid">
+              <div class="field" data-help="resilience.maxAttempts"><label>最大尝试</label><input class="ctl num" value="3" /></div>
+              <div class="field" data-help="resilience.backoffBaseMs"><label>退避基数</label><input class="ctl num" value="100" /><span class="unit">ms</span></div>
+              <div class="field" data-help="resilience.backoffMaxMs"><label>退避上限</label><input class="ctl num" value="1000" /><span class="unit">ms</span></div>
+              <div class="field" data-help="resilience.failureThreshold"><label>失败阈值</label><input class="ctl num" value="5" /><span class="unit" style="color:var(--warn)">未生效</span></div>
+              <div class="field" data-help="resilience.cooldownMs"><label>冷却时间</label><input class="ctl num" value="10000" /><span class="unit" style="color:var(--warn)">未生效</span></div>
+              <div class="field" data-help="resilience.halfOpenProbes"><label>半开探测数</label><input class="ctl num" value="1" /><span class="unit" style="color:var(--warn)">未生效</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="sec-title">管理面安全</span>
+            <span class="page-meta">绑定 / 鉴权 / 限流</span>
+          </div>
+          <div class="card-body">
+            <div class="note err" style="margin:0 0 14px">
+              当前配置：绑定 <code>127.0.0.1</code>（仅环回）+ <code>requireAuth = false</code>。
+              环回绑定下风险可控，但一旦改成 <code>0.0.0.0</code>，写配置 / 写数据 / 仿真寄存器等接口
+              <b>将无需任何凭据即可从任意网卡访问</b>。
+            </div>
+            <div class="form-grid">
+              <div class="field" data-help="webApi.bindAddress"><label>监听地址</label><input class="ctl mono" value="127.0.0.1" /></div>
+              <div class="field" data-help="webApi.requireAuth"><label>需要鉴权</label>
+                <select class="ctl" style="width:100px;flex:none"><option>否</option><option>是</option></select></div>
+              <div class="field" data-help="webApi.rateLimit"><label>限流速率</label><input class="ctl num" value="5" /><span class="unit">req/s</span></div>
+              <div class="field" data-help="webApi.burstLimit"><label>突发额度</label><input class="ctl num" value="10" /></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ────────── 校验问题 (诊断) ────────── -->
+    <section class="view" id="view-problems">
+      <div class="page-head"><h2>校验问题</h2>
+        <span class="page-meta">最后预检 12:03:38 · 由配置校验器产出</span></div>
+
+      <div class="precheck">
+        <div><div class="big err">2</div><div class="lbl">Error · 阻止保存</div></div>
+        <div><div class="big warn">3</div><div class="lbl">Warning · 可保存</div></div>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn small" id="recheckBtn">重新预检</button>
+        <button class="btn small primary">修复并保存</button>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span class="sec-title">Error</span><span class="spacer"></span>
+          <span class="page-meta">必须修复，否则无法保存</span></div>
+        <div class="card-body">
+          <div class="prob err" data-locate="fld-dataStartIndex" data-view="proto" data-scope="op">
+            <div class="prob-head"><span class="sev err">ERROR</span>
+              <span class="prob-file">protocols/modbus-tcp.json</span>
+              <span class="prob-go">定位 ›</span></div>
+            <div class="prob-msg">数据起始下标为 0，解析得到的字节数为 0，采集质量将恒为 Bad。</div>
+            <code class="prob-path">operations.ReadHoldingRegisters.responseParser.dataStartIndex</code>
+          </div>
+
+          <div class="prob err" data-locate="fld-bitoffset" data-view="devices" data-tab="tags">
+            <div class="prob-head"><span class="sev err">ERROR</span>
+              <span class="prob-file">tags.json</span>
+              <span class="prob-go">定位 ›</span></div>
+            <div class="prob-msg">读标签未声明起始地址，分组时将按地址 0 采集，读到的点位可能不是预期的寄存器。</div>
+            <code class="prob-path">tags[6].variables.StartByteAddress</code>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span class="sec-title">Warning</span><span class="spacer"></span>
+          <span class="page-meta">可保存，但运行期行为可能与预期不同</span></div>
+        <div class="card-body">
+          <div class="prob warn" data-locate="fld-dataLengthExpr" data-view="proto" data-scope="op">
+            <div class="prob-head"><span class="sev warn">WARN</span>
+              <span class="prob-file">protocols/modbus-tcp.json</span>
+              <span class="prob-go">定位 ›</span></div>
+            <div class="prob-msg">dataLengthExpr 目前只被仿真器使用；客户端解析实际按标签的 ByteCount 取长度。</div>
+            <code class="prob-path">operations.ReadHoldingRegisters.responseParser.dataLengthExpr</code>
+          </div>
+
+          <div class="prob warn" data-locate="fld-reportMode" data-view="devices" data-tab="tags">
+            <div class="prob-head"><span class="sev warn">WARN</span>
+              <span class="prob-file">tags.json</span>
+              <span class="prob-go">定位 ›</span></div>
+            <div class="prob-msg">OnChange 变化过滤尚未实现，当前等价于 Always。</div>
+            <code class="prob-path">tags[7].reportMode</code>
+          </div>
+
+          <div class="prob warn" data-locate="fld-lih" data-view="proto" data-proto="s7-1200" data-scope="global" data-sub="framing">
+            <div class="prob-head"><span class="sev warn">WARN</span>
+              <span class="prob-file">protocols/s7-1200.json</span>
+              <span class="prob-go">定位 ›</span></div>
+            <div class="prob-msg">lengthIncludesHeader=true 且帧头长 4、长度域偏移 2 时，长度字段的异常值（如 1）会产生极短帧并使后续帧永久错位；引擎侧缺少最小帧长校验，配置层面无法规避，请确认对端长度域语义。</div>
+            <code class="prob-path">framing.lengthIncludesHeader</code>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ==================== 右侧上下文栏 ==================== -->
+  <aside class="context" id="context">
+    <div class="ctx-tabs">
+      <button class="active" data-ctx="help">字段说明</button>
+      <button data-ctx="problems">校验问题<span class="pill">2</span></button>
+      <button data-ctx="trace">变量溯源</button>
+      <button data-ctx="backup">备份</button>
+    </div>
+    <div class="ctx-body">
+
+      <div class="ctx-pane active" id="ctx-help">
+        <div class="ctx-empty" id="helpEmpty">
+          点击或聚焦任意表单字段，这里显示该字段的含义、取值约束与相关说明。
+        </div>
+        <div class="help-block" id="helpBody" style="display:none"></div>
+      </div>
+
+      <div class="ctx-pane" id="ctx-problems">
+        <div class="prob err" data-locate="fld-dataStartIndex" data-view="proto" data-scope="op">
+          <div class="prob-head"><span class="sev err">ERROR</span>
+            <span class="prob-file">modbus-tcp.json</span><span class="prob-go">定位 ›</span></div>
+          <div class="prob-msg">数据起始下标为 0，解析字节数为 0。</div>
+          <code class="prob-path">...responseParser.dataStartIndex</code>
+        </div>
+        <div class="prob warn" data-locate="fld-dataLengthExpr" data-view="proto" data-scope="op">
+          <div class="prob-head"><span class="sev warn">WARN</span>
+            <span class="prob-file">modbus-tcp.json</span><span class="prob-go">定位 ›</span></div>
+          <div class="prob-msg">dataLengthExpr 仅仿真器使用。</div>
+          <code class="prob-path">...responseParser.dataLengthExpr</code>
+        </div>
+        <div class="prob warn" data-locate="fld-reportMode" data-view="devices" data-tab="tags">
+          <div class="prob-head"><span class="sev warn">WARN</span>
+            <span class="prob-file">tags.json</span><span class="prob-go">定位 ›</span></div>
+          <div class="prob-msg">OnChange 变化过滤尚未实现。</div>
+          <code class="prob-path">tags[7].reportMode</code>
+        </div>
+        <button class="btn small" style="width:100%;justify-content:center" data-view="problems">查看全部 5 条 ›</button>
+      </div>
+
+      <div class="ctx-pane" id="ctx-trace"></div>
+
+      <div class="ctx-pane" id="ctx-backup">
+        <div class="trace-legend">
+          当前文件：<code id="bakFile">modbus-tcp.json</code><br>
+          每个配置文件环形保留 5 份，回滚按文件进行。
+        </div>
+        <div class="bak-item">
+          <div class="bak-head"><code>bak.1</code><span class="bak-time">09-10 12:03</span></div>
+          <div class="bak-sum">dataStartIndex: 9（正确的值）· 4.1 KB</div>
+          <div class="bak-act"><button class="btn tiny">对比</button><button class="btn tiny danger">回滚</button></div>
+        </div>
+        <div class="bak-item">
+          <div class="bak-head"><code>bak.2</code><span class="bak-time">09-10 10:41</span></div>
+          <div class="bak-sum">maxFrameSize: 4096 · 4.1 KB</div>
+          <div class="bak-act"><button class="btn tiny">对比</button><button class="btn tiny danger">回滚</button></div>
+        </div>
+        <div class="bak-item">
+          <div class="bak-head"><code>bak.3</code><span class="bak-time">09-09 18:20</span></div>
+          <div class="bak-sum">schemaVersion 1 → 2 · 4.0 KB</div>
+          <div class="bak-act"><button class="btn tiny">对比</button><button class="btn tiny danger">回滚</button></div>
+        </div>
+        <div class="note" style="margin-top:2px">
+          「对比」并排显示差异；回滚用统一弹窗二次确认，不再用浏览器原生 confirm。
+        </div>
+      </div>
+
+    </div>
+  </aside>
+
+</div>
+
+<!-- ==================== 底部状态栏 ==================== -->
+<footer class="statusbar">
+  <span class="st"><span class="st-k">引擎</span><b style="color:#4ade80">运行中</b></span>
+  <span class="st"><span class="st-k">采集</span><b>13</b>/15<span class="st-sub">2 需关注</span></span>
+  <span class="st"><span class="st-k">最后重载</span><b>12:03:41</b></span>
+  <span class="st"><span class="st-k">代际</span><b>2</b></span>
+  <span class="st mono">127.0.0.1:8080</span>
+  <span class="spacer"></span>
+  <span class="st"><span class="st-k">设计稿</span><b>v4</b></span>
+  <div class="seg-mini" id="themeSeg">
+    <button data-set-theme="light" class="active">亮</button>
+    <button data-set-theme="dark">暗</button>
+  </div>
+  <div class="seg-mini" id="densitySeg">
+    <button data-set-density="comfortable" class="active">舒适</button>
+    <button data-set-density="compact">紧凑</button>
+  </div>
+</footer>
+
+<div class="toast-wrap" id="toastWrap"></div>
+<div class="mock-note">设计稿 v4 · 静态原型（数据为演示样例）</div>
+
+<script>
+/* ============================================================
+   视图切换
+   ============================================================ */
+function showView(name){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  const v=document.getElementById('view-'+name);
+  if(v) v.classList.add('active');
+  document.querySelectorAll('.menu-item').forEach(n=>{
+    n.classList.toggle('active', n.dataset.view===name);
+  });
+  // 命中的菜单项所属的顶级菜单保持高亮, 让"我在哪"始终可见
+  document.querySelectorAll('.menu').forEach(m=>{
+    m.classList.toggle('here', !!m.querySelector('.menu-item.active'));
+    m.classList.remove('open');
+  });
+  // 顶栏直达按钮 (校验问题) 的选中态
+  document.querySelectorAll('.ghost[data-view]').forEach(g=>{
+    g.classList.toggle('on', g.dataset.view===name);
+  });
+}
+
+/* 页面内页签 (设备 / 标签 / 全局参数) */
+function showTab(name){
+  document.querySelectorAll('.tabpane').forEach(p=>p.classList.remove('active'));
+  const p=document.getElementById('tab-'+name);
+  if(p) p.classList.add('active');
+  document.querySelectorAll('.tabbar .tab').forEach(t=>{
+    t.classList.toggle('active', t.dataset.tab===name);
+  });
+}
+document.querySelectorAll('.tabbar .tab').forEach(t=>{
+  t.addEventListener('click',()=>showTab(t.dataset.tab));
+});
+
+/* 顶栏「备份」→ 打开右侧栏的备份页签 */
+document.getElementById('backupBtn').addEventListener('click',()=>{
+  document.getElementById('context').classList.remove('collapsed');
+  showCtx('backup');
+});
+
+/* 顶部下拉菜单: 点击展开 / 点击空白处收起 */
+document.querySelectorAll('.menu').forEach(m=>{
+  m.querySelector('button').addEventListener('click',e=>{
+    e.stopPropagation();
+    const wasOpen=m.classList.contains('open');
+    document.querySelectorAll('.menu').forEach(x=>x.classList.remove('open'));
+    if(!wasOpen) m.classList.add('open');
+  });
+});
+document.addEventListener('click',()=>{
+  document.querySelectorAll('.menu').forEach(x=>x.classList.remove('open'));
+});
+document.querySelectorAll('.menu-item').forEach(it=>{
+  it.addEventListener('click',()=>showView(it.dataset.view));
+});
+
+/* ============================================================
+   主题 / 密度
+   ============================================================ */
+document.querySelectorAll('[data-set-theme]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.documentElement.dataset.theme=b.dataset.setTheme;
+    document.querySelectorAll('[data-set-theme]').forEach(x=>x.classList.toggle('active',x===b));
+  });
+});
+document.querySelectorAll('[data-set-density]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.documentElement.dataset.density=b.dataset.setDensity;
+    document.querySelectorAll('[data-set-density]').forEach(x=>x.classList.toggle('active',x===b));
+  });
+});
+
+/* ============================================================
+   右侧上下文栏
+   ============================================================ */
+function showCtx(tab){
+  document.querySelectorAll('.ctx-tabs button').forEach(b=>b.classList.toggle('active',b.dataset.ctx===tab));
+  document.querySelectorAll('.ctx-pane').forEach(p=>p.classList.remove('active'));
+  const p=document.getElementById('ctx-'+tab);
+  if(p) p.classList.add('active');
+}
+document.querySelectorAll('.ctx-tabs button').forEach(b=>{
+  b.addEventListener('click',()=>showCtx(b.dataset.ctx));
+});
+document.getElementById('ctxToggle').addEventListener('click',()=>{
+  document.getElementById('context').classList.toggle('collapsed');
+});
+
+/* ============================================================
+   字段说明 —— 聚焦/点击字段时更新右侧栏
+   ============================================================ */
+const HELP={
+  'protocolName':{p:'protocolName',t:'协议名',d:'协议的唯一标识，同时也是配置文件名（protocols/&lt;name&gt;.json）。改这里需要同时重命名文件。',m:'类型 String · 必填 · 唯一'},
+  'schemaVersion':{p:'schemaVersion',t:'配置代际号',d:'标识配置格式的机器代际。加载器以<b>精确匹配</b>方式校验：小于当前受支持版本会被直接拒绝并提示「配置代际过旧」。',m:'当前受支持版本 <b>2</b> · 新建协议模板必须写 2'},
+  'dataByteOrder':{p:'dataByteOrder',t:'数据字节序',d:'用于装配 32/64 位跨寄存器值（Int32 / Float 等），与长度域的 byteOrder 是两件事，不要混淆。',m:'取值 BigEndian | LittleEndian | WordBigByteLittle | WordLittleByteBig'},
+  'defaultWriteOperation':{p:'defaultWriteOperation',t:'默认写操作',d:'标量写入（/api/data/write 传 value）时使用的操作名。变长写入使用 writeBytesOperation。',m:'须是 operations 中已存在的操作名'},
+  'transport.type':{p:'transport.type',t:'传输类型',d:'决定底层通道实现。Serial 需要额外配置串口参数。',m:'取值 Tcp | Tls | Serial'},
+  'framing.type':{p:'framing.type',t:'成帧方式',d:'LengthField 表示按长度域切帧，是 Modbus / S7 的常用方式；Fixed 表示定长。',m:'LengthField 需配合下面 4 个字段'},
+  'framing.lengthFieldOffset':{p:'framing.lengthFieldOffset',t:'长度域偏移',d:'长度字段相对帧首的字节偏移。Modbus TCP 的 MBAP 头中长度域在第 5 字节，故为 4。',m:'须 ≥ 0'},
+  'framing.lengthFieldLength':{p:'framing.lengthFieldLength',t:'长度域宽度',d:'长度字段占用的字节数。',m:'取值 1 | 2 | 4'},
+  'framing.lengthIncludesHeader':{p:'framing.lengthIncludesHeader',t:'长度是否含帧头',d:'长度字段的值是否把帧头也算在内。Modbus TCP 不含（值为 6）；S7 含（需把帧头计入）。',m:'注意：该项配错会导致粘包后永久错位'},
+  'framing.byteOrder':{p:'framing.byteOrder',t:'长度域字节序',d:'仅作用于长度字段本身的字节序，不影响数据区。',m:'取值 BigEndian | LittleEndian'},
+  'framing.headerLength':{p:'framing.headerLength',t:'帧头长度',d:'长度字段之前的固定字节数。总帧长 = 帧头长度 + 长度域值 + 长度修正量。',m:'须 ≥ 0'},
+  'framing.maxFrameSize':{p:'framing.maxFrameSize',t:'最大帧长',d:'长度域解析的上限保护。超过该值会被判为非法帧。',m:'须 ≥ 帧头长度 + 长度域宽度'},
+  'framing.lengthAdjustment':{p:'framing.lengthAdjustment',t:'长度修正量',d:'bodyLen = 长度域解析值 + 长度修正量。当协议帧总长与实际数据长度不一致时使用（例如帧尾含 CRC 字节）。',m:'可为负 · 默认 0'},
+  'framing.fixedLength':{p:'framing.fixedLength',t:'固定帧长',d:'定长成帧方式下的帧字节数，不解析长度字段。',m:'须 > 0'},
+  'framing.silence.charTimeUs':{p:'framing.silence.charTimeUs',t:'单字符时间',d:'仅作诊断参考。填 0 时按协议级波特率与数据位自动折算。',m:'单位 µs · 0 = 自动折算'},
+  'framing.silence.frameGapUs':{p:'framing.silence.frameGapUs',t:'帧间静默阈值',d:'两帧之间的静默间隔超过该值即判定为帧边界。',m:'<b>须 &gt; 0 显式配置</b>；v1.27 起引擎不再默认套用 Modbus RTU 的 3.5×charTimeUs 约定'},
+  'framing.silence.maxFrameSize':{p:'framing.silence.maxFrameSize',t:'最大帧长',d:'静默成帧下的帧长上限保护。',m:'默认 256 字节'},
+  'transport.tcp.defaultPort':{p:'transport.tcp.defaultPort',t:'默认端口',d:'该协议的默认 TCP 端口。设备级 connection.port 为 0 时回退到这里。',m:'取值 1–65535 · 缺省 502'},
+  'transport.tls.defaultPort':{p:'transport.tls.defaultPort',t:'默认端口',d:'TLS 连接的默认端口。',m:'取值 1–65535'},
+  'transport.tls.certFile':{p:'transport.tls.certFile',t:'客户端证书',d:'TLS 双向认证时使用的客户端证书文件。',m:'certFile / keyFile 齐备才会启用 SSL'},
+  'transport.tls.keyFile':{p:'transport.tls.keyFile',t:'客户端私钥',d:'与客户端证书配对的私钥文件。',m:'与 certFile 成对出现'},
+  'transport.tls.caFile':{p:'transport.tls.caFile',t:'CA 证书',d:'用于校验服务端证书的 CA 文件。',m:'verifyServer=true 时生效'},
+  'transport.tls.verifyServer':{p:'transport.tls.verifyServer',t:'校验服务端证书',d:'开启后校验服务端证书链，关闭则接受任意证书（不建议用于生产）。',m:'布尔 · 默认 true'},
+  'transport.serial.portName':{p:'transport.serial.portName',t:'串口名',d:'串口设备名，可由设备级 connection.portName 覆盖。',m:"如 COM1 / /dev/ttyUSB0"},
+  'transport.serial.baudRate':{p:'transport.serial.baudRate',t:'波特率',d:'串口通信速率。',m:'默认 9600'},
+  'transport.serial.dataBits':{p:'transport.serial.dataBits',t:'数据位',d:'单字符数据位数。',m:'常取 7 / 8 · 默认 8'},
+  'transport.serial.parity':{p:'transport.serial.parity',t:'校验位',d:'串口奇偶校验方式。',m:'取值 None | Odd | Even'},
+  'transport.serial.stopBits':{p:'transport.serial.stopBits',t:'停止位',d:'单字符停止位数。',m:'取值 One | Two'},
+  'writeBytesOperation':{p:'writeBytesOperation',t:'字节写操作',d:'变长写（POST /api/data/write 传 bytes）使用的操作名。标量写用 writeOperation。',m:'含变长写能力的协议必填；v1.24 起不再回退到 Modbus 默认值'},
+  'operation.kind':{p:'operations[].kind',t:'操作语义',d:'标注该操作是读还是写。运行时不依赖它（写路径按引用区分），但校验器会核对：标签的读操作须为 read、写操作须为 write。',m:'取值 read | write · 可留空 = 未标注'},
+  'variableAliases':{p:'variableAliases',t:'变量别名',d:'把用户自定义名映射到引擎契约名。加载期一次性归一化到标签变量、inputs/outputs 与请求模板，运行期各消费点无需感知别名。',m:'仅 <b>2 个契约名</b>可被映射：StartByteAddress / ByteCount；别名不可与 inputs/outputs 已有键、以及 Frame/__frameLen/__frameEnd 等保留名冲突'},
+  'tag.bitOffset':{p:'tag.bitOffset',t:'位偏移',d:'该标签读取的字节内的位位置，仅 Bool 类型取位时使用。声明后解析按 (raw[0] &gt;&gt; bitOffset) &amp; 1 取位。',m:'取值 0-7 · 留空 = 未声明，此时按整字节 raw[0]!=0（旧语义）'},
+  'responseParser.validCondition':{p:'responseParser.validCondition',t:'有效条件',d:'响应校验表达式，如 resp[7] == 0x03。留空表示跳过校验，任何响应都按有效处理。',m:'留空 / 表达式字符串'},
+  'responseParser.dataStartIndex':{p:'responseParser.dataStartIndex',t:'数据起始下标',d:'响应报文中数据区的起始字节下标。',m:'<b>须 &gt; 0</b>；为 0 时解析得到的字节数为 0，质量恒为 Bad'},
+  'responseParser.dataLengthExpr':{p:'responseParser.dataLengthExpr',t:'数据长度表达式',d:'声明数据区长度。注意：<b>客户端解析器目前不消费该字段</b>，实际长度取标签 variables 的 ByteCount；该表达式只被仿真器使用。',m:'当前为“可写但不生效”，已列为 Warning'},
+  'device.id':{p:'device.id',t:'设备 ID',d:'设备的唯一标识。改名时会自动同步引用它的标签。',m:'类型 String · 必填 · 唯一'},
+  'device.protocol':{p:'device.protocol',t:'协议',d:'该设备使用的协议配置名，决定可用的操作（operation）列表。',m:'须是 protocols/ 下已存在的协议名'},
+  'device.connection.host':{p:'device.connection.host',t:'主机',d:'设备 IP 或主机名。',m:'类型 String · 必填'},
+  'device.connection.port':{p:'device.connection.port',t:'端口',d:'设备监听端口。切换协议时会自动带出该协议的默认端口。',m:'取值 1–65535 · 默认 502'},
+  'device.connection.timeoutMs':{p:'device.connection.timeoutMs',t:'连接超时',d:'建立 TCP 连接的最长等待时间。',m:'单位 ms · 默认 3000'},
+  'device.requestTimeoutMs':{p:'device.requestTimeoutMs',t:'请求超时',d:'单次请求等待响应的最长时间，也是写接口同步等待的上限。',m:'单位 ms · 默认 3000'},
+  'tag.name':{p:'tag.name',t:'标签名',d:'标签的唯一标识，规范上使用「设备名.点名」的全限定形式。',m:'类型 String · 必填 · 唯一'},
+  'tag.deviceId':{p:'tag.deviceId',t:'所属设备',d:'决定该标签走哪个协议与哪条连接。',m:'须是 devices 中已存在的设备 ID'},
+  'tag.operation':{p:'tag.operation',t:'读操作',d:'轮询该标签时使用的操作名。',m:'须存在于所属协议的 operations 中'},
+  'tag.writeOperation':{p:'tag.writeOperation',t:'写操作',d:'非空表示该标签可写。写入时按此操作构建请求，并可用 writeVariables 覆盖变量。',m:'留空 = 只读标签'},
+  'tag.finalType':{p:'tag.finalType',t:'最终类型',d:'把读取到的原始字节解释为哪种数据类型，决定上报值的形态。',m:'取值 UInt16 | Int16 | UInt32 | Int32 | UInt64 | Int64 | Float | Double | Bool | String | ByteArray'},
+  'tag.scanRateMs':{p:'tag.scanRateMs',t:'扫描周期',d:'该标签的轮询间隔。周期相同的标签会被合并到同一次请求。',m:'单位 ms'},
+  'tag.reportMode':{p:'tag.reportMode',t:'上报模式',d:'Always 每轮都上报；OnChange 仅在值变化时上报。',m:'<b>OnChange 尚未实现</b>，当前等价于 Always（已列为 Warning）'},
+  'tag.coalesce':{p:'tag.coalesce',t:'合并扫描',d:'是否允许与地址相邻的同类标签合并成一次批量读取，减少请求数。',m:'布尔 · 默认开启'},
+  'resilience.maxAttempts':{p:'resilience.maxAttempts',t:'最大尝试次数',d:'单次采集失败后的总尝试次数（含首次）。',m:'已生效'},
+  'resilience.backoffBaseMs':{p:'resilience.backoffBaseMs',t:'退避基数',d:'重试退避的起始间隔，通常按指数增长。',m:'单位 ms · 已生效'},
+  'resilience.backoffMaxMs':{p:'resilience.backoffMaxMs',t:'退避上限',d:'退避间隔的上限，避免无限增长。',m:'单位 ms · 已生效'},
+  'resilience.failureThreshold':{p:'resilience.failureThreshold',t:'失败阈值',d:'连续失败多少次后打开熔断器。',m:'<b>尚未接入熔断器</b>，改动无效'},
+  'resilience.cooldownMs':{p:'resilience.cooldownMs',t:'冷却时间',d:'熔断打开后多久进入半开态。',m:'<b>尚未接入熔断器</b>，改动无效'},
+  'resilience.halfOpenProbes':{p:'resilience.halfOpenProbes',t:'半开探测数',d:'半开态下允许放行的探测请求数。',m:'<b>尚未接入熔断器</b>，改动无效'},
+  'webApi.bindAddress':{p:'webApi.bindAddress',t:'管理面监听地址',d:'默认仅环回（127.0.0.1）。改为 0.0.0.0 会把管理面暴露到所有网卡。',m:'端口以启动参数 --port 为准'},
+  'webApi.requireAuth':{p:'webApi.requireAuth',t:'需要鉴权',d:'开启后所有管理面请求须携带 Bearer token（环境变量 MYPROT_API_TOKEN）。',m:'<b>非环回绑定 + 关闭鉴权 = 写接口无认证暴露</b>'},
+  'webApi.rateLimit':{p:'webApi.rateLimit',t:'限流速率',d:'敏感端点（写配置 / 重载 / 回滚）的令牌桶速率。',m:'单位 req/s'},
+  'webApi.burstLimit':{p:'webApi.burstLimit',t:'突发额度',d:'令牌桶允许的瞬时突发请求数。',m:'整数'}
+};
+
+function renderHelp(key){
+  const h=HELP[key];
+  if(!h) return;
+  document.getElementById('helpEmpty').style.display='none';
+  const box=document.getElementById('helpBody');
+  box.style.display='block';
+  box.innerHTML='<h5>'+h.t+'</h5><span class="path">'+h.p+'</span><p>'+h.d+'</p>'
+    + (h.m?'<div class="meta"><b>约束 · </b>'+h.m+'</div>':'');
+  showCtx('help');
+}
+function bindHelp(){
+  document.querySelectorAll('[data-help]').forEach(el=>{
+    if(el.dataset.helpBound) return;      // 动态渲染的分支字段需要重复绑定
+    el.dataset.helpBound='1';
+    el.addEventListener('focusin',()=>renderHelp(el.dataset.help));
+    el.addEventListener('click',()=>renderHelp(el.dataset.help));
+  });
+}
+bindHelp();
+
+/* ============================================================
+   校验问题 → 定位字段
+   ============================================================ */
+function locate(btn){
+  // 问题条目可指明所属协议: 先切到该协议 tab 再定位
+  if(btn.dataset.proto && PROTO[btn.dataset.proto] && btn.dataset.proto!==curProto){
+    curProto=btn.dataset.proto;
+    curOp=Object.keys(PROTO[curProto].ops)[0];
+    renderProto();
+  }
+  const view=btn.dataset.view||'proto';
+  const id=btn.dataset.locate;
+  showView(view);
+  if(btn.dataset.tab) showTab(btn.dataset.tab);   // 问题位于页内页签时先切页签
+  if(btn.dataset.scope) showScope(btn.dataset.scope); // 问题所在的作用域分页
+  if(btn.dataset.sub) showSub(btn.dataset.sub);   // 问题位于协议级子页签时先切子页签
+  document.querySelectorAll('.prob').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');
+  const el=document.getElementById(id);
+  if(!el) return;
+  el.scrollIntoView({behavior:'smooth',block:'center'});
+  el.classList.add('flash');
+  setTimeout(()=>el.classList.remove('flash'),2400);
+  if(el.dataset.help) renderHelp(el.dataset.help);
+}
+document.querySelectorAll('[data-locate]').forEach(b=>{
+  b.addEventListener('click',()=>locate(b));
+});
+function bindLater(){
+  document.querySelectorAll('[data-view]:not([data-locate]):not(.menu-item)').forEach(b=>{
+    if(b.dataset.bound) return;
+    b.dataset.bound='1';
+    b.addEventListener('click',()=>showView(b.dataset.view));
+  });
+}
+bindLater();
+
+/* ============================================================
+   实时监控: 仅看异常 / 暂停
+   ============================================================ */
+let onlyBad=false;
+document.getElementById('onlyBad').addEventListener('click',function(){
+  onlyBad=!onlyBad;
+  this.classList.toggle('on',onlyBad);
+  document.querySelectorAll('#liveTable tbody tr').forEach(tr=>{
+    const q=tr.dataset.q||'good';
+    tr.style.display=(onlyBad && q==='good')?'none':'';
+  });
+});
+let frozen=false;
+document.getElementById('freezeBtn').addEventListener('click',function(){
+  frozen=!frozen;
+  this.classList.toggle('on',frozen);
+  this.textContent=frozen?'已暂停':'暂停刷新';
+  document.querySelectorAll('#liveTable tbody tr').forEach(tr=>tr.classList.toggle('frozen',frozen));
+  toast(frozen?'已冻结显示：数据继续采集，页面不再刷新':'已恢复刷新');
+});
+
+/* ============================================================
+   仿真: 自动刷新 (真实开关状态)
+   ============================================================ */
+document.getElementById('simPoll').addEventListener('click',function(){
+  const on=this.classList.toggle('on');
+  this.textContent=on?'停止刷新':'3s 自动刷新';
+  toast(on?'已开启 3s 自动刷新':'已停止自动刷新');
+});
+
+/* ============================================================
+   保存 / 预检
+   ============================================================ */
+document.getElementById('precheckBtn').addEventListener('click',()=>{
+  toast('预检完成：2 Error / 3 Warning（未落盘）');
+  showCtx('problems');
+});
+document.getElementById('saveBtn').addEventListener('click',()=>{
+  toast('已阻止保存：存在 2 个 Error。点击右侧「校验问题」可定位到出错字段。',true);
+  showCtx('problems');
+});
+document.getElementById('recheckBtn').addEventListener('click',()=>{
+  toast('重新预检完成：2 Error / 3 Warning');
+});
+
+/* ============================================================
+   热重载下拉
+   ============================================================ */
+const pop=document.getElementById('reloadPop');
+document.getElementById('reloadBtn').addEventListener('click',e=>{
+  e.stopPropagation();
+  pop.classList.toggle('open');
+});
+document.addEventListener('click',()=>pop.classList.remove('open'));
+pop.addEventListener('click',e=>e.stopPropagation());
+
+/* ============================================================
+   协议配置 —— 协议级(全局) / 操作级(局部) 两层渲染
+   数据取自真实配置: configs/protocols/modbus-tcp.json / s7-1200.json
+
+   层级规则 (与后端一致):
+     inputs : 协议级 inputs  <  操作级 inputs  <  标签 variables  <  标签 writeVariables
+     outputs: 协议级 outputs <  操作级 outputs (同名时后者覆盖)
+   ============================================================ */
+const PROTO = {
+  'modbus-tcp': {
+    file:'modbus-tcp.json',
+    protocolName:'modbus-tcp',
+    dataByteOrder:'WordBigByteLittle',
+    writeOperation:'WriteSingleRegister',
+    writeBytesOperation:'WriteMultipleRegisters',
+    // 判别结构: 每个分支独立存放, 只有 type 命中的分支会下发
+    transport:{
+      type:'Tcp',
+      Tcp:{ defaultPort:502 },
+      Tls:{ defaultPort:0, certFile:'', keyFile:'', caFile:'', verifyServer:true },
+      Serial:{ portName:'COM1', baudRate:9600, dataBits:8, parity:'None', stopBits:'One' }
+    },
+    framing:{
+      type:'LengthField',
+      LengthField:{ lfo:4, lfl:2, lih:'否', bo:'BigEndian', hl:6, adj:0, mfs:260 },
+      Fixed:{ fixedLength:8 },
+      Silence:{ charTimeUs:0, frameGapUs:0, mfs:256 }
+    },
+    handshake:[],
+    aliases:{},
+    // 协议级 inputs —— 所有操作共享
+    globalInputs:[
+      {n:'UnitID',           src:'static', v:'1', l:'从站地址',     c:'enum 1..10'},
+      {n:'ProtocolID',       src:'static', v:'0', l:'协议标识'},
+      {n:'StartByteAddress', src:'static', v:'0', l:'起始字节地址', u:'字节'},
+      {n:'ByteCount',        src:'static', v:'2', l:'数据字节跨度', u:'字节'},
+      {n:'BitOffset',        src:'static', v:'0', l:'字节内位偏移', u:'位'},
+      {n:'TransactionID',    src:'auto',   v:'autoIncrement(seed=1)', l:'事务ID'}
+    ],
+    // 协议级 outputs —— modbus-tcp 顶层没有 outputs, 派生全部在操作级
+    globalOutputs:[],
+    ops:{
+      ReadHoldingRegisters:{
+        kind:'read', inputs:[],
+        outputs:[
+          {n:'StartAddress',  e:'StartByteAddress / 2', l:'起始地址', u:'寄存器号'},
+          {n:'RegisterCount', e:'ByteCount / 2',        l:'读取数量', u:'个'}
+        ],
+        tpl:['{TransactionID:X4}','{ProtocolID:X4}','00 06','{UnitID:X2}','03','{StartAddress:X4}','{RegisterCount:X4}'],
+        // 演示用: 该字段被改成了非法值 0 (真实配置为 9), 用于展示"预检 → 定位"
+        rp:{ vc:'resp[7] == 0x03', dsi:0, dsiBad:true, dle:'resp[8]' }
+      },
+      ReadCoils:{
+        kind:'read', inputs:[],
+        outputs:[
+          {n:'StartAddress',  e:'StartByteAddress * 8', l:'起始线圈位址', u:'位'},
+          {n:'RegisterCount', e:'ByteCount * 8',        l:'读取线圈数',   u:'个'}
+        ],
+        tpl:['{TransactionID:X4}','{ProtocolID:X4}','00 06','{UnitID:X2}','01','{StartAddress:X4}','{RegisterCount:X4}'],
+        rp:{ vc:'resp[7] == 0x01', dsi:9, dle:'resp[8]' }
+      },
+      WriteSingleRegister:{
+        kind:'write', inputs:[],
+        outputs:[ {n:'StartAddress', e:'StartByteAddress / 2', l:'起始地址', u:'寄存器号'} ],
+        tpl:['{TransactionID:X4}','{ProtocolID:X4}','00 06','{UnitID:X2}','06','{StartAddress:X4}','{WriteValue:X4}'],
+        rp:{ vc:'resp[7] == 0x06', dsi:12, dle:null }
+      },
+      WriteMultipleRegisters:{
+        kind:'write', inputs:[],
+        outputs:[
+          {n:'StartAddress',  e:'StartByteAddress / 2',               l:'起始地址',   u:'寄存器号'},
+          {n:'RegisterCount', e:'{WriteValue:len} / 2',               l:'写入数量',   u:'个'},
+          {n:'RegByteCount',  e:'{WriteValue:len}',                   l:'字节数',     u:'字节'},
+          {n:'PDULength',     e:'{Frame:fixed} - 6 + {WriteValue:len}', l:'PDU 长度 (含 UnitID 起算)'}
+        ],
+        tpl:['{TransactionID:X4}','{ProtocolID:X4}','{PDULength:X4}','{UnitID:X2}','10','{StartAddress:X4}','{RegisterCount:X4}','{RegByteCount:X2}','{WriteValue:raw}'],
+        rp:{ vc:'resp[7] == 0x10', dsi:12, dle:null }
+      }
+    }
+  },
+
+  's7-1200': {
+    file:'s7-1200.json',
+    protocolName:'s7-1200',
+    dataByteOrder:'BigEndian',
+    writeOperation:'',          // s7-1200.json 未声明 → 标量写不可用
+    writeBytesOperation:'',     // 同上
+    transport:{
+      type:'Tcp',
+      Tcp:{},                   // s7-1200.json 未声明 defaultPort
+      Tls:{ defaultPort:0, certFile:'', keyFile:'', caFile:'', verifyServer:true },
+      Serial:{ portName:'COM1', baudRate:9600, dataBits:8, parity:'None', stopBits:'One' }
+    },
+    framing:{
+      type:'LengthField',
+      LengthField:{ lfo:2, lfl:2, lih:'是', bo:'BigEndian', hl:4, adj:0, mfs:4096 },
+      Fixed:{ fixedLength:8 },
+      Silence:{ charTimeUs:0, frameGapUs:0, mfs:256 }
+    },
+    // S7 必须先做 COTP / Setup 协商, 否则后续读写全部失败
+    handshake:[
+      { name:'COTP_CR',
+        tpl:['03 00 00 16','11 E0 00 00 00 01 00','C1 02 01 00','C2 02 01 02','C0 01 0A'],
+        valid:'resp[5] == 0xD0', timeout:3000 },
+      { name:'S7_Setup',
+        tpl:['03 00 00 19','02 F0 80','32 01 00 00 00 01 00 08 00 00','F0 00 00 08 00 01 03 C0'],
+        valid:'resp[8] == 0x03', timeout:3000 }
+    ],
+    aliases:{},
+    globalInputs:[
+      {n:'StartByteAddress', src:'static', v:'0', l:'起始字节地址', u:'字节'},
+      {n:'ByteCount',        src:'static', v:'2', l:'数据字节跨度', u:'字节'},
+      {n:'BitOffset',        src:'static', v:'0', l:'字节内位偏移', u:'位'},
+      {n:'DBNumber',         src:'static', v:'1', l:'DB 块号'},
+      {n:'Area',             src:'static', v:'132', l:'区域码', c:'132=DB / 131=M / 129=I / 130=Q'},
+      {n:'TransactionID',    src:'auto',   v:'autoIncrement(seed=1)', l:'事务ID'}
+    ],
+    // 协议级 outputs —— S7 在这里声明三字节地址, 所有操作共享
+    globalOutputs:[
+      {n:'AddrLo',  e:'(StartByteAddress * 8) % 256',        l:'S7 地址低字节'},
+      {n:'AddrMid', e:'((StartByteAddress * 8) / 256) % 256', l:'S7 地址中字节'},
+      {n:'AddrHi',  e:'(StartByteAddress * 8) / 65536',       l:'S7 地址高字节'}
+    ],
+    ops:{
+      ReadVarWord:{
+        kind:'read', inputs:[],
+        outputs:[ {n:'Length', e:'ByteCount / 2', l:'WORD 元素数量', u:'个'} ],
+        tpl:['03 00 00 1F','02 F0 80','32 01 00 00','{TransactionID:X4}','00 0E','00 00','04 01','12 0A 10','04','{Length:X4}','{DBNumber:X4}','{Area:X2}','{AddrHi:X2}','{AddrMid:X2}','{AddrLo:X2}'],
+        rp:{ vc:'resp[21] == 0xFF', dsi:25, dle:'' }
+      },
+      ReadVarBit:{
+        kind:'read', inputs:[],
+        outputs:[ {n:'Length', e:'ByteCount', l:'BYTE 字节数量', u:'字节'} ],
+        tpl:['03 00 00 1F','02 F0 80','32 01 00 00','{TransactionID:X4}','00 0E','00 00','04 01','12 0A 10','03','{Length:X4}','{DBNumber:X4}','{Area:X2}','{AddrHi:X2}','{AddrMid:X2}','{AddrLo:X2}'],
+        rp:{ vc:'resp[21] == 0xFF', dsi:25, dle:'' }
+      },
+      WriteVarWord:{
+        kind:'write',
+        inputs:[ {n:'WriteValue', src:'static', l:'写入载荷 (byteArray)'} ],
+        // 这里的 AddrLo/Mid/Hi 覆盖了协议级同名 outputs (表达式多了 BitOffset)
+        outputs:[
+          {n:'AddrLo',     e:'(StartByteAddress * 8) % 256',              l:'S7 地址低字节', u:'位寻址 = 字节地址<<3 + 位偏移'},
+          {n:'AddrMid',    e:'((StartByteAddress * 8) / 256) % 256',      l:'S7 地址中字节'},
+          {n:'AddrHi',     e:'(StartByteAddress * 8) / 65536',            l:'S7 地址高字节'},
+          {n:'ItemLength', e:'ByteCount / 2',                             l:'元素数 (WORD)', u:'个'},
+          {n:'PDULength',  e:'{Frame:fixed} + {WriteValue:len}',          l:'PDU 长度（TPKT 总帧长）'},
+          {n:'DataLen',    e:'{WriteValue:len} + 4',                      l:'数据区总长', u:'字节'},
+          {n:'DataBits',   e:'{WriteValue:len} * 8',                      l:'位长度', u:'bit'}
+        ],
+        tpl:['03 00','{PDULength:X4}','02 F0 80','32 01 00 00','{TransactionID:X4}','00 0E','{DataLen:X4}','05 01','12 0A 10','04','{ItemLength:X4}','{DBNumber:X4}','{Area:X2}','{AddrHi:X2}','{AddrMid:X2}','{AddrLo:X2}','00','04','{DataBits:X4}','{WriteValue:raw}'],
+        rp:{ vc:'resp[21] == 0xFF', dsi:25, dle:'' }
+      }
+    }
+  }
+};
+
+let curProto='modbus-tcp';
+let curOp='ReadHoldingRegisters';
+
+/* 模板片段 → 层级分类 (token 底色 = 层级, 虚线 = 派生) */
+function classifyToken(seg,P,op){
+  const m=seg.match(/^\{(\w+)(?::([^}]+))?\}$/);
+  if(!m) return {cls:'lit', tip:'固定 hex 字面量'};
+  const name=m[1], fmt=m[2]||'X4';
+  if(fmt==='raw') return {cls:'l', tip:'写载荷 · 由 {Name:raw} 自动识别'};
+  if(op.inputs.some(v=>v.n===name))      return {cls:'l', tip:'局部 inputs · 仅本操作'};
+  if(P.globalInputs.some(v=>v.n===name)) return {cls:'g', tip:'全局 inputs · 协议级共享'};
+  if(op.outputs.some(v=>v.n===name))     return {cls:'l derived', tip:'局部 outputs · 派生自 inputs（覆盖同名全局）'};
+  if(P.globalOutputs.some(v=>v.n===name))return {cls:'g derived', tip:'全局 outputs · 派生自 inputs'};
+  return {cls:'bad', tip:'未在 inputs / outputs 中声明'};
+}
+
+function renderProto(){
+  const P=PROTO[curProto];
+  const op=P.ops[curOp] || P.ops[Object.keys(P.ops)[0]];
+  curOp=Object.keys(P.ops).find(k=>P.ops[k]===op);
+
+  const gInNames=new Set(P.globalInputs.map(v=>v.n));
+  const gOutNames=new Set(P.globalOutputs.map(v=>v.n));
+
+  /* 协议级: 常规与传输 */
+  document.getElementById('protoFile').textContent=P.file;
+  document.getElementById('fProtoName').value=P.protocolName;
+  document.getElementById('fByteOrder').value=P.dataByteOrder;
+  document.getElementById('fWriteOp').value=P.writeOperation||'（未设置 — 标量写不可用）';
+  document.getElementById('fWriteBytesOp').value=P.writeBytesOperation||'（未设置 — 变长写不可用）';
+  document.getElementById('fTransportType').value=P.transport.type;
+  document.getElementById('fFramingType').value=P.framing.type;
+  renderTransportBranch();
+  renderFramingBranch();
+
+  /* 协议级: 子页签计数 + 握手 / 别名 */
+  document.getElementById('subVarCnt').textContent=P.globalInputs.length+'·'+P.globalOutputs.length;
+  document.getElementById('subHsCnt').textContent=P.handshake.length;
+  document.getElementById('subAliasCnt').textContent=Object.keys(P.aliases).length;
+  renderHandshake();
+  renderAliases();
+
+  /* 操作级: kind */
+  document.getElementById('fOpKind').value=op.kind||'read';
+
+  /* ── 协议级: 全局 inputs ── */
+  document.getElementById('gInCount').textContent=P.globalInputs.length;
+  document.getElementById('gInBody').innerHTML = P.globalInputs.length
+    ? P.globalInputs.map(v=>
+        '<tr>'
+        +'<td class="mono">'+v.n+'</td>'
+        +'<td><span class="src '+v.src+'">'+v.src+'</span></td>'
+        +'<td class="mono">'+v.v+(v.u?' <span class="page-meta">'+v.u+'</span>':'')+'</td>'
+        +'<td class="page-meta">'+(v.l||'')
+          +(v.c?' <span class="mono">'+v.c+'</span>':'')+'</td>'
+        +'</tr>').join('')
+    : '<tr><td colspan="4" class="empty-cell">该协议未声明协议级 inputs</td></tr>';
+
+  /* ── 协议级: 全局 outputs ── */
+  document.getElementById('gOutCount').textContent=P.globalOutputs.length;
+  document.getElementById('gOutBody').innerHTML = P.globalOutputs.length
+    ? P.globalOutputs.map(v=>
+        '<tr>'
+        +'<td class="mono" style="color:var(--accent)">'+v.n+'</td>'
+        +'<td class="mono">'+v.e+'</td>'
+        +'<td class="page-meta">'+(v.l||'')+(v.u?' · '+v.u:'')+'</td>'
+        +'</tr>').join('')
+    : '<tr><td colspan="3" class="empty-cell">该协议未声明协议级 outputs —— 派生变量全部在操作级声明（见「操作级」的局部 outputs）'
+      +'<br>需要跨操作共享的派生（如 S7 的 AddrLo/Mid/Hi）才在此声明，在工具栏切到 <code>s7-1200</code> 可看到实例</td></tr>';
+
+  /* ── 操作级: 局部 inputs ── */
+  document.getElementById('lInCount').textContent=op.inputs.length;
+  document.getElementById('lInBody').innerHTML = op.inputs.length
+    ? op.inputs.map(v=>
+        '<tr>'
+        +'<td class="mono">'+v.n+'</td>'
+        +'<td><span class="src '+v.src+'">'+v.src+'</span></td>'
+        +'<td class="mono">'+(v.v||'—')+'</td>'
+        +'<td class="page-meta">'+(v.l||'')+'</td>'
+        +'<td>'+(gInNames.has(v.n)
+            ? '<span class="ov over">覆盖全局 inputs</span>'
+            : '<span class="ov own">仅本操作</span>')+'</td>'
+        +'</tr>').join('')
+    : '<tr><td colspan="5" class="empty-cell">本操作未声明局部 inputs —— 模板里的变量直接取自协议级的全局 inputs</td></tr>';
+
+  /* ── 操作级: 局部 outputs ── */
+  document.getElementById('lOutCount').textContent=op.outputs.length;
+  document.getElementById('lOutBody').innerHTML = op.outputs.length
+    ? op.outputs.map(v=>
+        '<tr>'
+        +'<td class="mono" style="color:var(--local)">'+v.n+'</td>'
+        +'<td class="mono">'+v.e+'</td>'
+        +'<td class="page-meta">'+(v.l||'')+'</td>'
+        +'<td class="mono page-meta">'+(v.u||'')+'</td>'
+        +'<td>'+(gOutNames.has(v.n)
+            ? '<span class="ov over">覆盖全局 outputs</span>'
+            : '<span class="ov own">仅本操作</span>')+'</td>'
+        +'</tr>').join('')
+    : '<tr><td colspan="5" class="empty-cell">本操作无派生输出</td></tr>';
+
+  /* ── 请求模板 token ── */
+  document.getElementById('tplBar').innerHTML = op.tpl.map(seg=>{
+    const c=classifyToken(seg,P,op);
+    return '<span class="tpl-token '+c.cls+'" title="'+c.tip+'">'+seg+'</span>';
+  }).join('');
+
+  /* ── 响应解析 ── */
+  document.getElementById('rpVc').value=op.rp.vc||'';
+  document.getElementById('rpDsi').value=op.rp.dsi;
+  document.getElementById('rpDle').value=(op.rp.dle===null||op.rp.dle===undefined)?'':op.rp.dle;
+  const bad=!!op.rp.dsiBad;
+  document.getElementById('fld-dataStartIndex').classList.toggle('bad',bad);
+  document.getElementById('rpErrText').style.display=bad?'':'none';
+  document.getElementById('rpErrChip').style.display=bad?'':'none';
+
+  /* ── 操作索引 ── */
+  const ul=document.getElementById('opList');
+  ul.innerHTML=Object.keys(P.ops).map(n=>{
+    const k=P.ops[n].kind;
+    return '<li class="'+(n===curOp?'active':'')+'" data-op="'+n+'">'
+      +'<span class="nm">'+n+'</span>'
+      +'<span class="type-badge" style="margin-left:auto;background:'
+      +(k==='write'?'var(--warn-soft);color:var(--warn)':'var(--accent-soft);color:var(--accent)')
+      +'">'+(k==='write'?'写':'读')+'</span></li>';
+  }).join('');
+  ul.querySelectorAll('li').forEach(li=>{
+    li.addEventListener('click',()=>{ curOp=li.dataset.op; renderProto(); });
+  });
+  document.getElementById('scopeOpName').textContent=curOp;
+
+  /* ── 协议选择器 / 作用域分段计数 ── */
+  document.getElementById('protoSelect').value=curProto;
+  document.getElementById('scGlobalCnt').textContent=P.globalInputs.length+' · '+P.globalOutputs.length;
+  document.getElementById('scOpCnt').textContent=Object.keys(P.ops).length;
+
+  bindHelp();
+  renderTrace();
+}
+
+/* ============================================================
+   判别结构分支渲染 (transport / framing)
+   只有 type 命中的分支会渲染, 明确告知其余分支不下发
+   ============================================================ */
+function fld(o){
+  return '<div class="field"'+(o.id?' id="'+o.id+'"':'')
+    + (o.help?' data-help="'+o.help+'"':'')+'>'
+    + '<label>'+o.label+'</label>'
+    + '<input class="ctl '+(o.mono?'mono':'num')+'" value="'+o.val+'" readonly />'
+    + (o.unit?'<span class="unit">'+o.unit+'</span>':'')
+    + '</div>';
+}
+
+function renderTransportBranch(){
+  const P=PROTO[curProto], t=P.transport.type, b=P.transport[t]||{};
+  const others=Object.keys(P.transport).filter(k=>k!=='type'&&k!==t);
+  let note='<div class="branch-note">生效分支 <code>transport.'+t+'</code>';
+  if(others.length) note+='　其余分支（'+others.join(' / ')+'）不下发';
+  note+='</div>';
+  let rows='';
+  if(t==='Tcp'){
+    rows = Object.keys(b).length
+      ? '<div class="form-grid">'
+        + fld({help:'transport.tcp.defaultPort',label:'默认端口',val:b.defaultPort,unit:'端口'})
+        + '</div>'
+      : '<div class="empty-cell">该协议未声明 <code>defaultPort</code> —— 端口由设备级 '
+        + '<code>connection.port</code> 提供（S7 即如此）</div>';
+  } else if(t==='Tls'){
+    rows='<div class="form-grid">'
+      + fld({help:'transport.tls.defaultPort',label:'默认端口',val:b.defaultPort,unit:'端口'})
+      + fld({help:'transport.tls.verifyServer',label:'校验服务端证书',val:String(b.verifyServer),mono:true})
+      + fld({help:'transport.tls.certFile',label:'证书文件',val:b.certFile||'（未设置）',mono:true})
+      + fld({help:'transport.tls.keyFile',label:'私钥文件',val:b.keyFile||'（未设置）',mono:true})
+      + fld({help:'transport.tls.caFile',label:'CA 文件',val:b.caFile||'（未设置）',mono:true})
+      + '</div>';
+  } else if(t==='Serial'){
+    rows='<div class="form-grid">'
+      + fld({help:'transport.serial.portName',label:'串口名',val:b.portName,mono:true})
+      + fld({help:'transport.serial.baudRate',label:'波特率',val:b.baudRate,unit:'bps'})
+      + fld({help:'transport.serial.dataBits',label:'数据位',val:b.dataBits})
+      + fld({help:'transport.serial.parity',label:'校验位',val:b.parity,mono:true})
+      + fld({help:'transport.serial.stopBits',label:'停止位',val:b.stopBits,mono:true})
+      + '</div>';
+  }
+  document.getElementById('transportBranch').innerHTML=note+rows;
+}
+
+function renderFramingBranch(){
+  const P=PROTO[curProto], t=P.framing.type, b=P.framing[t]||{};
+  const others=Object.keys(P.framing).filter(k=>k!=='type'&&k!==t);
+  let note='<div class="branch-note">生效分支 <code>framing.'+t+'</code>';
+  if(others.length) note+='　其余分支（'+others.join(' / ')+'）不下发';
+  note+='</div>';
+  let rows='';
+  if(t==='LengthField'){
+    note+='<div class="branch-note">总帧长 = 帧头长度 + 长度域值 + 长度修正量</div>';
+    rows='<div class="form-grid">'
+      + fld({help:'framing.lengthFieldOffset',label:'长度域偏移',val:b.lfo,unit:'字节'})
+      + fld({help:'framing.lengthFieldLength',label:'长度域宽度',val:b.lfl,unit:'字节'})
+      + fld({id:'fld-lih',help:'framing.lengthIncludesHeader',label:'长度含帧头',val:b.lih,mono:true})
+      + fld({help:'framing.byteOrder',label:'长度域字节序',val:b.bo,mono:true})
+      + fld({help:'framing.headerLength',label:'帧头长度',val:b.hl,unit:'字节'})
+      + fld({help:'framing.lengthAdjustment',label:'长度修正量',val:b.adj,unit:'字节'})
+      + fld({help:'framing.maxFrameSize',label:'最大帧长',val:b.mfs,unit:'字节'})
+      + '</div>';
+  } else if(t==='Fixed'){
+    note+='<div class="branch-note">定长帧: 不解析长度字段, 按固定字节数切帧</div>';
+    rows='<div class="form-grid">'
+      + fld({help:'framing.fixedLength',label:'固定帧长',val:b.fixedLength,unit:'字节'})
+      + '</div>';
+  } else if(t==='Silence'){
+    note+='<div class="branch-note">静默成帧（串口 / RTU）: 以帧间静默间隔判定边界。'
+      + '<b>frameGapUs 须 &gt; 0 显式配置</b>，v1.27 起引擎不再套用 3.5×charTimeUs 约定。</div>';
+    rows='<div class="form-grid">'
+      + fld({help:'framing.silence.charTimeUs',label:'单字符时间',val:b.charTimeUs,unit:'µs'})
+      + fld({help:'framing.silence.frameGapUs',label:'帧间静默阈值',val:b.frameGapUs,unit:'µs'})
+      + fld({help:'framing.silence.maxFrameSize',label:'最大帧长',val:b.mfs,unit:'字节'})
+      + '</div>';
+  }
+  document.getElementById('framingBranch').innerHTML=note+rows;
+}
+
+/* ── 握手步骤 ── */
+function renderHandshake(){
+  const P=PROTO[curProto], box=document.getElementById('hsList');
+  if(!P.handshake.length){
+    box.innerHTML='<div class="empty-cell">该协议无握手 —— 连接建立后直接收发请求。'
+      + '<br>需要先做协议级协商的（如 S7 的 COTP / Setup）在此声明；'
+      + '在工具栏切到 <code>s7-1200</code> 可看到两个真实步骤</div>';
+    return;
+  }
+  box.innerHTML=P.handshake.map((h,i)=>
+    '<div class="hs-step">'
+    + '<div class="hs-head"><span class="hs-idx">'+(i+1)+'</span>'
+    + '<span class="hs-name">'+h.name+'</span>'
+    + '<span class="spacer" style="flex:1"></span>'
+    + '<span class="page-meta">'+h.tpl.length+' 段模板</span>'
+    + '<button class="btn tiny danger">删除</button></div>'
+    + '<div class="hs-body">'
+    + '<div class="hs-row"><span class="hs-k">请求模板</span><span class="hs-v">'+h.tpl.join(' │ ')+'</span></div>'
+    + '<div class="hs-row"><span class="hs-k">成功条件</span><span class="hs-v">'+(h.valid||'（不校验）')+'</span></div>'
+    + '<div class="hs-row"><span class="hs-k">超时</span><span class="hs-v">'
+      +(h.timeout?h.timeout+' ms':'继承 device.connection.timeoutMs')+'</span></div>'
+    + '<div class="hs-row"><span class="hs-k">帧格式覆盖</span>'
+      + '<span class="hs-v" style="color:var(--text-faint)">使用通道默认帧格式</span></div>'
+    + '<div class="hs-row"><span class="hs-k">会话变量</span>'
+      + '<span class="hs-v" style="color:var(--text-faint)">未提取</span></div>'
+    + '</div></div>').join('');
+}
+
+/* ── 变量别名映射 ── */
+const CONTRACT_NAMES=['StartByteAddress','ByteCount'];   // v1.28: 契约名收敛为 2 个
+function renderAliases(){
+  const P=PROTO[curProto], keys=Object.keys(P.aliases);
+  let html = keys.length
+    ? keys.map(a=>'<div class="alias-row"><code class="from">'+a+'</code>'
+        + '<span class="alias-arrow">→</span><code class="to">'+P.aliases[a]+'</code>'
+        + '<span class="spacer" style="flex:1"></span>'
+        + '<button class="btn tiny danger">删除</button></div>').join('')
+    : '<div class="empty-cell">该协议未配置变量别名 —— 模板与标签直接使用引擎契约名。'
+      + '<br>若现场习惯别的叫法（如把 <code>StartByteAddress</code> 叫作 <code>Addr</code>），在此建立映射即可。</div>';
+  html+='<div class="page-meta" style="margin-top:12px">可被映射的契约名（仅这 2 个）：'
+    + CONTRACT_NAMES.map(n=>'<code style="font-size:11.5px">'+n+'</code>').join('　')
+    + '<br>其余旧名已不再是契约：<code>StartAddress</code> / <code>RegisterCount</code> 由协议 outputs 自行声明，'
+    + '<code>WriteValue</code> 是写路径默认值（标签 writeVariable 可覆盖），'
+    + '<code>BitOffset</code> 已改为标签一等字段。</div>';
+  document.getElementById('aliasList').innerHTML=html;
+}
+
+/* 变量溯源: 输入覆盖链 + 输出派生链 */
+function renderTrace(){
+  const P=PROTO[curProto], op=P.ops[curOp];
+  const gOut=new Set(P.globalOutputs.map(v=>v.n));
+  const overridden=op.outputs.filter(v=>gOut.has(v.n)).map(v=>v.n);
+  const inChain=[
+    {t:'协议级 inputs',     v:P.globalInputs.length?P.globalInputs.map(x=>x.n).join(' · '):'（未声明）'},
+    {t:'操作级 inputs',     v:op.inputs.length?op.inputs.map(x=>x.n).join(' · '):'（未声明）'},
+    {t:'标签 variables',    v:'StartByteAddress = 0', eff:true},
+    {t:'标签 writeVariables', v:'（该标签只读）'}
+  ];
+  const outChain=[
+    {t:'协议级 outputs', v:P.globalOutputs.length?P.globalOutputs.map(x=>x.n).join(' · '):'（未声明）'},
+    {t:'操作级 outputs', v:op.outputs.length?op.outputs.map(x=>x.n).join(' · '):'（无）'}
+  ];
+  document.getElementById('ctx-trace').innerHTML=
+     '<div class="trace-legend">当前：<code>'+curProto+'</code> / <code>'+curOp+'</code></div>'
+    +'<div class="trace-sub">① 输入覆盖链 · 下层覆盖上层</div>'
+    +'<div class="trace-chain">'+inChain.map(l=>
+        '<div class="trace-layer'+(l.eff?' effective':'')+'">'
+        +'<span class="lv">'+l.t+'</span><span class="vv">'+l.v+'</span>'
+        +(l.eff?'<span class="mk">生效</span>':'')+'</div>').join('')
+    +'</div>'
+    +'<div class="trace-sub" style="margin-top:14px">② 输出派生链 · 同名时局部覆盖全局</div>'
+    +'<div class="trace-chain">'+outChain.map(l=>
+        '<div class="trace-layer"><span class="lv">'+l.t+'</span><span class="vv">'+l.v+'</span></div>').join('')
+    +'</div>'
+    +(overridden.length
+        ? '<div class="note" style="margin:12px 0 0"><span>本操作的 <code>'+overridden.join('</code> <code>')+'</code>'
+          +'<b>覆盖了协议级同名 outputs</b>，运行时以操作级为准。</span></div>'
+        : '');
+}
+
+/* 协议切换 (下拉) */
+document.getElementById('protoSelect').addEventListener('change',function(){
+  curProto=this.value;
+  curOp=Object.keys(PROTO[curProto].ops)[0];
+  renderProto();
+});
+
+/* 作用域分段: 协议级(全局) / 操作级(局部) 一次展开一个 */
+function showScope(name){
+  document.querySelectorAll('.scopepane').forEach(p=>p.classList.remove('active'));
+  const p=document.getElementById('scope-'+name);
+  if(p) p.classList.add('active');
+  document.querySelectorAll('.scopebar button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.scope===name);
+  });
+}
+document.querySelectorAll('.scopebar button').forEach(b=>{
+  b.addEventListener('click',()=>showScope(b.dataset.scope));
+});
+
+/* 协议级子页签 */
+function showSub(name){
+  document.querySelectorAll('.subpane').forEach(p=>p.classList.remove('active'));
+  const p=document.getElementById('sub-'+name);
+  if(p) p.classList.add('active');
+  document.querySelectorAll('.subtabs button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.sub===name);
+  });
+}
+document.querySelectorAll('.subtabs button').forEach(b=>{
+  b.addEventListener('click',()=>showSub(b.dataset.sub));
+});
+
+/* 判别结构类型切换: 只改 type, 生效分支随之切换 (演示"改哪个分支才生效") */
+document.getElementById('fTransportType').addEventListener('change',function(){
+  PROTO[curProto].transport.type=this.value;
+  renderTransportBranch(); bindHelp();
+  toast('传输类型 → '+this.value+'（仅该分支会下发）');
+});
+document.getElementById('fFramingType').addEventListener('change',function(){
+  PROTO[curProto].framing.type=this.value;
+  renderFramingBranch(); bindHelp();
+  toast('成帧方式 → '+this.value+'（仅该分支会下发）');
+});
+document.getElementById('fOpKind').addEventListener('change',function(){
+  PROTO[curProto].ops[curOp].kind=this.value;
+  renderProto();
+  toast('操作 '+curOp+' 的 kind → '+this.value);
+});
+
+renderProto();
+
+/* ============================================================
+   toast
+   ============================================================ */
+function toast(msg,isErr){
+  const w=document.getElementById('toastWrap');
+  const d=document.createElement('div');
+  d.className='toast'+(isErr?' err':'');
+  d.textContent=msg;
+  w.appendChild(d);
+  setTimeout(()=>d.remove(),3200);
+}
+</script>
+</body>
+</html>

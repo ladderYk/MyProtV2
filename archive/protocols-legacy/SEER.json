@@ -1,0 +1,87 @@
+{
+  "protocolName": "SEER",
+  "transport": {
+    "type": "Tcp",
+    "defaultPort": 11500
+  },
+  "framing": {
+    "type": "LengthField",
+    "lengthFieldOffset": 4,
+    "lengthFieldLength": 4,
+    "lengthIncludesHeader": false,
+    "byteOrder": "BigEndian",
+    "headerLength": 16
+  },
+  "connection": {
+    "responseTimeoutMs": 3000,
+    "interFrameDelayMs": 0,
+    "reconnectIntervalMs": 5000,
+    "maxReconnectAttempts": -1
+  },
+  "operations": {
+    "GetRobotStatus": {
+      "requestTemplate": [
+        "5A 01",
+        "{Seq:X4}",
+        "{Length:calc:X8}",
+        "{ApiType:X4}",
+        "00 00 00 00 00 00",
+        "${\"cmd\":\"status\"}"
+      ],
+      "responseParser": {
+        "validCondition": "resp[0] == 0x5A",
+        "dataStartIndex": 16,
+        "dataLengthExpr": "*",
+        "valueType": "ByteArray"
+      }
+    },
+    "GetPosition": {
+      "requestTemplate": [
+        "5A 01",
+        "{Seq:X4}",
+        "{Length:calc:X8}",
+        "{ApiType:X4}",
+        "00 00 00 00 00 00",
+        "${\"cmd\":\"pos\"}"
+      ],
+      "responseParser": {
+        "validCondition": "resp[0] == 0x5A",
+        "dataStartIndex": 16,
+        "dataLengthExpr": "*",
+        "valueType": "ByteArray"
+      }
+    },
+    "GetBattery": {
+      "requestTemplate": [
+        "5A 01",
+        "{Seq:X4}",
+        "{Length:calc:X8}",
+        "{ApiType:X4}",
+        "00 00 00 00 00 00",
+        "${\"cmd\":\"battery\"}"
+      ],
+      "responseParser": {
+        "validCondition": "resp[0] == 0x5A",
+        "dataStartIndex": 16,
+        "dataLengthExpr": "*",
+        "valueType": "ByteArray"
+      }
+    },
+    "Relocate": {
+      "requestTemplate": [
+        "5A 01",
+        "{Seq:X4}",
+        "{Length:calc:X8}",
+        "{ApiType:X4}",
+        "00 00 00 00 00 00",
+        "${\"x\":$(X),\"y\":$(Y),\"angle\":$(Angle)}"
+      ],
+      "responseParser": {
+        "validCondition": "resp[0] == 0x5A",
+        "dataStartIndex": 16,
+        "dataLengthExpr": "*",
+        "valueType": "ByteArray"
+      }
+    }
+  }
+}

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{A76C1B93-A0A8-4A60-99E7-C4E2D2B4877A}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files\include_MyProt_Transport">
+      <UniqueIdentifier>{10CDCA14-CE9E-4179-A453-B16C6E041BBA}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{8C39B65A-0B2A-4DF4-837B-B1F423FB98B6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{B9C868A8-28AA-4AA4-B550-304B0F7B3F3F}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\MyProt\Transport\IChannel.hpp">
+      <Filter>Header Files\include_MyProt_Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Transport\IFrameParser.hpp">
+      <Filter>Header Files\include_MyProt_Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Transport\LengthFieldFrameParser.hpp">
+      <Filter>Header Files\include_MyProt_Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Transport\TcpChannel.hpp">
+      <Filter>Header Files\include_MyProt_Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Transport\TlsChannel.hpp">
+      <Filter>Header Files\include_MyProt_Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Transport\SerialChannel.hpp">
+      <Filter>Header Files\include_MyProt_Transport</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\TcpChannel.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\TlsChannel.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SerialChannel.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\LengthFieldFrameParser.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{7307E7DF-A088-4B4D-8A44-9C2709E08FDE}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files\include_MyProt_WebApi">
+      <UniqueIdentifier>{A6DD5CEE-B4D7-4441-A49E-E4E90B70F41F}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{D97D2427-1BE2-4755-8F59-288861AE5B63}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{DFC88EE4-A949-4A2B-A3E6-298E59A2B094}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\MyProt\WebApi\WebApiServer.hpp">
+      <Filter>Header Files\include_MyProt_WebApi</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\WebApi\AuthMiddleware.hpp">
+      <Filter>Header Files\include_MyProt_WebApi</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\WebApiServer.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AuthMiddleware.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

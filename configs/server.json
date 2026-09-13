@@ -1,0 +1,39 @@
+{
+  "simulation": {
+    "listenPort": 11520,
+    "registerCount": 1000,
+    "initialValues": {
+      "0": 100,
+      "1": 101,
+      "2": 102,
+      "3": 103,
+      "10": 0,
+      "11": 17143,
+      "20": 2020,
+      "30": 111,
+      "31": 222,
+      "32": 333,
+      "40": 22136,
+      "41": 4660,
+      "100": 4321
+    },
+    "operations": {
+      "ReadHoldingRegisters": {
+        "kind": "read",
+        "addressVar": "StartAddress",
+        "countVar": "RegisterCount"
+      },
+      "ReadInputRegisters": {
+        "kind": "read",
+        "addressVar": "StartAddress",
+        "countVar": "RegisterCount"
+      },
+      "WriteSingleRegister": {
+        "kind": "write",
+        "addressVar": "StartAddress",
+        "dataOffset": 10
+      }
+    }
+  },
+  "schemaVersion": 2
+}

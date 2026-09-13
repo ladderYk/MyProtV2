@@ -1,0 +1,57 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{C3817C15-B163-4CD1-AF92-D031B2C67649}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files\include_MyProt_Service">
+      <UniqueIdentifier>{810F56BA-A4CF-4E1C-AF85-81FF3701EA7E}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{5DD29321-04B6-4A7D-9CE2-E32D82FC871C}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{7707D674-A32B-4007-8C05-4381288D5943}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\MyProt\Service\ConfigStore.hpp">
+      <Filter>Header Files\include_MyProt_Service</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Service\ConfigValidator.hpp">
+      <Filter>Header Files\include_MyProt_Service</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Service\SessionContext.hpp">
+      <Filter>Header Files\include_MyProt_Service</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Service\DeviceLifecycle.hpp">
+      <Filter>Header Files\include_MyProt_Service</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\ConfigStore.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\FrameConsistencyCheck.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ConfigDeepValidator.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SchemaRegistry.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ConfigDirectoryLoader.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SessionContext.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{6FA0E3AE-221D-4290-8A99-7C1CC485983D}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files\include_MyProt_Polling">
+      <UniqueIdentifier>{F11A4C30-9DF2-4BDD-99E3-69DC9C4305B8}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{9952AA3C-4261-4188-A8A5-49B9312C8924}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{CBB070DD-6A22-4823-9695-0511A008D5AB}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\MyProt\Polling\PollingEngine.hpp">
+      <Filter>Header Files\include_MyProt_Polling</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Polling\PollStats.hpp">
+      <Filter>Header Files\include_MyProt_Polling</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\PollingEngine.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

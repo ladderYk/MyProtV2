@@ -1,0 +1,87 @@
+/* 全局基础样式 + 按钮体系 */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #app { height: 100%; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color: #1e293b;
+  background: #f1f5f9;
+}
+button { font: inherit; cursor: pointer; }
+input, textarea { font: inherit; color: inherit; }
+
+.btn {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 14px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background .15s, border-color .15s;
+}
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.primary { background: #2563eb; color: #fff; }
+.btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+.btn.danger { background: #fff; color: #b91c1c; border-color: #fecaca; }
+.btn.danger:hover:not(:disabled) { background: #fee2e2; }
+.btn.small { padding: 3px 10px; font-size: 13px; }
+
+/* ── 全局排版增强 ── */
+
+/* 细滚动条 (大屏/面板通用偏好) */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+::-webkit-scrollbar-track { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+
+/* 面板标题: 左侧竖线装饰 (无背景, 非绝对定位) */
+.sec-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: #334155;
+}
+.sec-title::before {
+  content: '';
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: #2563eb;
+  flex-shrink: 0;
+}
+
+/* Element Plus 表单双列紧凑网格: el-form 加 .form-grid,
+   需跨列的字段 (长输入/键值编辑器) 在其 el-form-item 上加 .span2 */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 28px;
+}
+.form-grid > .el-form-item { margin-bottom: 14px; }
+.form-grid > .span2 { grid-column: 1 / -1; }
+@media (max-width: 1100px) {
+  .form-grid { grid-template-columns: 1fr; }
+}
+
+/* v2 增: 窄屏自适应 — 主从分栏堆叠, 左列表变横排快捷键条 */
+@media (max-width: 900px) {
+  .md-wrap { flex-direction: column; }
+  .md-list { width: 100% !important; max-height: 200px; }
+  .md-items { display: flex; flex-wrap: wrap; gap: 4px; }
+  .md-items li { flex: 1; min-width: 120px; }
+  .tform-tabs { flex-wrap: wrap; }
+  .proto-new { width: 100%; margin-left: 0 !important; margin-top: 8px; }
+  .form-grid { grid-template-columns: 1fr !important; }
+  .field label { width: 100%; }
+  .field .ctl { width: 100%; }
+}
+@media (max-width: 600px) {
+  .topbar { padding: 0 8px; }
+  .nav-item { padding: 6px 10px; font-size: 13px; }
+  .content { padding: 12px; }
+  .card-body { padding: 10px; }
+  .toolbar { flex-wrap: wrap; gap: 6px; }
+  .main-tabs { overflow-x: auto; }
+}
