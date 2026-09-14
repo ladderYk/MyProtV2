@@ -183,7 +183,8 @@ public:
 
 - **绝不写盘 / 不备份 / 不触发热重载** —— 这是与 `PUT /api/config/*` 的本质差别
 - `severity`：`error` 阻断保存；`warning` 仅提示（原 `[WARN]` 条目）
-- `ruleId`：稳定标识，首批 9 类（帧长一致性 / 派生长度 expr / 长度偏移自检 / 设备→协议 / 标签→设备 / 标签→操作 / 模板文法 / 版本门禁 / 名称重复）；未命中为 `unclassified`
+- `ruleId`：稳定标识，现 **22 类**。第一批 9 类（帧长一致性 / 派生长度 expr / 长度偏移自检 / 设备→协议 / 标签→设备 / 标签→操作 / 模板文法 / 版本门禁 / 名称重复）；第二批 13 类（成帧参数 `Silence`·`LengthField`·`framing.type`、传输参数 `transport.type`·`host`·`serial`、TLS `caFile`/未实现告警、操作与协议命名、标签字段 `finalType`·`bitOffset`·`direction`）；未命中为 `unclassified`。规则表见 `src/Service/src/ValidationIssue.cpp`（新增一类 = 表里加一行）
+- > `[webApi]` 段消息属全局 schema 域，不经 `protocols`/`tags` 域校验，**有意不建规则**（规则表宁缺勿假：建了也永不命中）
 - `subject` / `field`：供 UI 点击定位（协议：模块/操作；标签：设备/标签）；`message` 始终是校验器原文，**不丢信息**
 - 参数非法或缺失 → `400`；方法非 GET/POST → `405`；GET 目标配置不存在 → `404`
 

@@ -84,9 +84,14 @@ struct Rule {
     const char* fieldPattern;
 };
 
-/// 规则表 — 顺序敏感 (具体规则在前)。首批覆盖实测会遇到的拒绝原因:
-///   帧长一致性 / 派生长度 expr / 派生长度偏移自检 / 设备→协议 / 标签→设备 /
-///   标签→操作 / 模板文法 / 版本门禁 / 名称重复
+/// 规则表 — 顺序敏感 (具体规则在前)。
+/// 第一批 (保存被拒的主因): 帧长一致性 / 派生长度 expr / 派生长度偏移自检 /
+///   设备→协议 / 标签→设备 / 标签→操作 / 模板文法 / 版本门禁 / 名称重复
+/// 第二批 (参数与字段类, 覆盖实测产出的其余消息): 成帧参数 (Silence / LengthField /
+///   framing.type) / 传输参数 (transport.type / host / serial) / TLS /
+///   操作与协议命名 / 标签字段 (finalType / bitOffset / direction)
+/// 注: [webApi] 段消息属全局 schema 域, 不经 protocols|tags 域校验, 故**有意不建规则**
+///   (规则表宁缺勿假: 建了也永远不会命中)。
 const Rule kRules[] = {
     // ── 成帧类 (ADR-0012 §2 试算, FrameConsistencyCheck.cpp) ──
     { "frame.length_consistency", "protocol",
@@ -122,6 +127,53 @@ const Rule kRules[] = {
     { "name.duplicate", "",
       "全局重复",
       "全局重复: ", "" },
+
+    // ── 第二批: 成帧参数类 (规则2-5; Silence 与 LengthField 都含 "maxFrameSize", 前者在前) ──
+    { "frame.silence_params", "protocol",
+      "Silence frameGapUs 必须 ≥ 1|Silence maxFrameSize 必须 > 0",
+      "", "framing" },
+    { "frame.length_field_params", "protocol",
+      "Fixed fixedLength 必须 > 0|headerLength 必须 ≥|lengthFieldOffset 必须 ≥ 0|lengthFieldLength 取值须为|maxFrameSize (",
+      "", "framing" },
+    { "frame.framing_type", "protocol",
+      "framing.type 判别值越界|未知 framing.type|framing.type=\"Message\"",
+      "", "framing.type" },
+
+    // ── 第二批: 传输 / 通道参数类 (规则2/10) ──
+    { "transport.type", "protocol",
+      "transport.type 判别值越界|未知 transport.type",
+      "", "transport.type" },
+    { "transport.host", "protocol",
+      "connection.host 不能为空",
+      "设备 ", "devices.{subject}.connection.host" },
+    { "transport.serial_device", "protocol",
+      "Serial 设备 |Serial baudRate 必须 > 0|charTimeUs=0 时协议级 baudRate",
+      "设备 ", "devices.{subject}.transport" },
+    { "tls.ca_file", "protocol",
+      "TLS caFile 文件不存在",
+      "", "transport.tls.caFile" },
+    { "tls.not_implemented", "protocol",
+      "TLS 传输的运行期通道尚未实现",
+      "", "transport.tls" },
+
+    // ── 第二批: 操作 / 协议命名类 (规则1/6) ──
+    { "operation.empty", "protocol",
+      "operations 不能为空",
+      "", "operations" },
+    { "name.protocol_empty", "protocol",
+      "protocolName 为空",
+      "", "protocolName" },
+
+    // ── 第二批: 标签字段类 (tags 域; 规则13) ──
+    { "tag.final_type", "tags",
+      "finalType 取值非法|finalType=Bool 未声明 bitOffset",
+      "标签 ", "tags.{subject}.finalType" },
+    { "tag.bit_offset", "tags",
+      "bitOffset 必须 0-7|Bool 位标签 ByteCount",
+      "标签 ", "tags.{subject}.bitOffset" },
+    { "tag.direction", "tags",
+      "direction 取值非法",
+      "标签 ", "tags.{subject}.direction" },
 };
 
 } // namespace
