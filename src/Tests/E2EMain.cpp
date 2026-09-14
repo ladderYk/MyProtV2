@@ -1195,7 +1195,7 @@ int RunE2E() {
     }
     std::cout << std::endl;
 
-    // ──ConfigValidator 深度校验 (Config_Schema 鎼? 閸椾椒绨叉い纭咁潐閸?+ 版本门禁 + 鐠恒劍鏋冩禒璺虹穿閻? ──
+    // ── ConfigValidator 深度校验 (Config_Schema 规则 + 版本门禁 + 引用完整性) ──
     std::cout << "--- Test 11: Config Deep Validator ---" << std::endl;
     {
         using MyProt::Service::ConfigValidator;
@@ -1222,7 +1222,7 @@ int RunE2E() {
             if (pos != std::string::npos) s.replace(pos, std::string(from).size(), to);
             return s;
         };
-        // 诊断: 鐢ㄤ緥澶辫触鏃惰緭鍑哄疄鏀?errors/warnings (定位 needle 涓嶅尮閰?结构错误)
+        // 诊断: 用例失败时输出实收 errors/warnings (定位 needle 不匹配 / 结构错误)
         auto DumpVr = [](const char* tag,
                          const MyProt::Core::Expected<ValidationResult>& res) {
             std::cout << "    [" << tag << "] has_value="
@@ -1302,9 +1302,9 @@ int RunE2E() {
                   && VrHas::Error(res.value(), "strategy=crc"));
         }
 
-        // 8e: 鏈０鏄庡嚱鏁?{L:calc:X4} 鈫?规则6
+        // 8e: 未声明函数 {L:calc:X4} → 规则6
         //     (三段文法已移除 — :auto: / :calc: / 内联校验和均非法,
-        //      calc 不再是合法函数关键字 鈫?占位符文法不合法, 鐢辫鍒?拒绝)
+        //      calc 不是合法函数关键字 → 占位符文法不合法, 由规则6 拒绝)
         {
             const std::string bad = Patch(kValidProto,
                                           "\"{StartAddress:X4}\"", "\"{L:calc:X4}\"");
@@ -1312,7 +1312,7 @@ int RunE2E() {
             Check("11-6: 未声明占位符文法被拒",
                   res.has_value() && VrHas::Error(res.value(), "规则6"));
         }
-        // 8f: 标签引用未知设备 閳?鐟欏嫬鍨?2 (璺ㄦ枃浠跺紩鐢ㄦ牎楠?
+        // 8f: 标签引用未知设备 → 规则12 (跨文件引用校验)
         {
             const char* kRoot =
                 "{\"schemaVersion\":2,"
@@ -1376,7 +1376,7 @@ int RunE2E() {
                   && VrHas::Error(res.value(), "操作引用不存在"));
         }
 
-        // 8h: 缂傚搫銇?schemaVersion 閳?娴?Warning 闆堕敊璇?(ADR-0005 缺省语义)
+        // 8h: 缺省 schemaVersion → 仅 Warning 非错误 (ADR-0005 缺省语义)
         {
             const std::string noVer = Patch(kValidProto, "\"schemaVersion\":2,", "");
             auto res = ConfigValidator::validateProtocolJson(noVer, 2);
@@ -1387,9 +1387,9 @@ int RunE2E() {
                   && VrHas::Warn(res.value(), "缺失 schemaVersion"));
         }
 
-        // 8i: 璁惧绾?variables 缂傝櫣娓烽崶鐐衡偓鈧?閳?妯℃澘鍙橀噺鍙В鏋?(Config_Schema 鎼? 继承)
+        // 8i: 设备级 variables 缺省 → 模板变量可解析 (Config_Schema 变量继承)
         {
-            // 协议变体: UnitId 字节改为 {UnitID:X2} 鍗犱綅绗? 寮哄埗渚濊禆璁惧绾у彉閲?
+            // 协议变体: UnitId 字节改为 {UnitID:X2} 占位符, 强制依赖设备级变量
             const std::string protoUnit = Patch(kValidProto, "\"01\"", "\"{UnitID:X2}\"");
             const char* kRoot =
                 "{\"schemaVersion\":2,"
@@ -1423,7 +1423,7 @@ int RunE2E() {
                   && VrHas::Error(res.value(), "规则14"));
         }
 
-        // 8k: TLS 娴肩姾绶?閳?鍔犺浇鏈熻兘鍔涜鍛?(P2-5), 闂嗗爼鏁婄拠顖氬讲娣囨繂鐡?
+        // 8k: TLS 未实现 → 加载期能力告警 (P2-5)
         {
             const std::string protoTls = Patch(kValidProto,
                                                "\"type\":\"Tcp\"",
@@ -1437,14 +1437,14 @@ int RunE2E() {
     }
     std::cout << std::endl;
 
-    // ──ConfigStore 故障注入 (鍧忛厤缃嫆缁濊惤鐩?/ reload 婢惰精瑙﹂懛顏勫З閸ョ偞绮?/ 备份恢复) ──
+    // ── ConfigStore 故障注入 (坏配置拒绝落盘 / reload 失败回滚 / 备份恢复) ──
     std::cout << "--- Test 12: Config Fault Injection ---" << std::endl;
     {
         using MyProt::Service::ConfigScope;
         using MyProt::Service::ConfigStore;
         using MyProt::Service::ConfigStoreOptions;
 
-        // 准备独立测试目录 (娑撳秳绗?WebApi 测试共用)
+        // 准备独立测试目录 (与 WebApi 测试共用)
         const char* kFaultDir = "configs_fault_test";
         ::CreateDirectoryA(kFaultDir, NULL);
         const std::string faultProtoDir = std::string(kFaultDir) + "\\protocols";
@@ -1479,7 +1479,7 @@ int RunE2E() {
             "\"dataStartIndex\":9,\"dataLengthExpr\":\"resp[8]\"}}},"
             "\"handshake\":[]}";
 
-        // 9a: 鍧忛厤缃?(版本门禁 fail-fast) 閳?Save 拒绝且不落盘
+        // 9a: 坏配置 (版本门禁 fail-fast) → Save 拒绝且不落盘
         {
             auto r = store.Save(ConfigScope::Protocol, "modbus", "{\"schemaVersion\":99}");
             Check("12-1: 坏配置 Save 被拒绝", !r.has_value());
@@ -1898,7 +1898,7 @@ int RunE2E() {
                                      : std::vector<uint8_t>();
                 Check("写后读回 12345",
                       resp3.size() == 11 && resp3[9] == 0x30 && resp3[10] == 0x39);
-                Check("鏁版嵁鍖烘梺璇佷竴鑷",
+                Check("数据区校验一致",
                       simServer.Store().ReadRegisters(5, 1).size() == 2
                       && simServer.Store().ReadRegisters(5, 1)[0] == 0x30);
             }
@@ -1911,7 +1911,7 @@ int RunE2E() {
                                       tvars, {}, autoProvider);
             Check("14-6: 模板操作请求构建", reqT.has_value());
             if (reqT.has_value()) {
-                // SO_RCVTIMEO 2s: 浠跨湡鍣ㄤ笉搴旂瓟鏃舵湁鐣?FAIL, 防止套件永久挂起
+                // SO_RCVTIMEO 2s: 仿真器不应答时有界 FAIL, 防止套件永久挂起
                 client.SetReadTimeoutMs(2000);
                 const std::vector<uint8_t> respT =
                     client.SendReceive(reqT.value());
@@ -1919,9 +1919,9 @@ int RunE2E() {
                 bool okT = respT.size() == 14;
                 okT = okT && respT[0] == rq[0] && respT[1] == rq[1];   // TID 閸ョ偞妯?
                 okT = okT && respT[2] == 0x00 && respT[3] == 0x00;     // PID 固定 0
-                okT = okT && respT[4] == 0x00 && respT[5] == 0x08;     // LEN 闁插秶鐣?(14-6)
+                okT = okT && respT[4] == 0x00 && respT[5] == 0x08;     // LEN 校验 (14-6)
                 okT = okT && respT[6] == rq[6];                        // UID 閸ョ偞妯?                okT = okT && respT[7] == 0x10;
-                         // FC 閸ュ搫鐣?
+                         // FC 校验
                 for (int i = 0; okT && i < 4; ++i) {
                     okT = respT[8 + i] == rq[8 + i];                   // Addr+Value 閸ョ偞妯?
                 }
@@ -1934,13 +1934,13 @@ int RunE2E() {
                       reg9.size() == 2 && reg9[0] == 0x03 && reg9[1] == 0x09);
             }
 
-            // ── v1.1 澧? 鍗忚绾?defaultVariables + 鏍囩绾?variables 合并 (11x) ──
+            // ── 协议级 defaultVariables + 标签级 variables 合并 (11x) ──
             {
                 MyProt::Engine::RequestBuilder vbuilder;
                 MyProt::Engine::AutoComputeProvider vauto;
                 vauto.DeclareJson(
                     "{\"TransactionId\":{\"strategy\":\"autoIncrement\",\"params\":{\"seed\":1}}}");
-                // 鍗忚灞?defaultUnitID=42; 鏍囩灞傛病鍐?UnitID, 应继承为 42
+                // 协议层 defaultUnitID=42; 标签层没写 UnitID, 应继承为 42
                 std::unordered_map<std::string, uint32_t> protoDefs;
                 protoDefs["UnitID"] = 42;
                 std::unordered_map<std::string, uint32_t> tagVars;
@@ -1950,14 +1950,14 @@ int RunE2E() {
                 Check("14-9: 协议 default 继承 (UnitID 出现在 merged)", merged.count("UnitID") == 1);
                 Check("14-10: 协议 default 取值正确 (UnitID=42)", merged.at("UnitID") == 42);
                 Check("14-11: 标签 StartAddress 出现 (合并未丢)", merged.count("StartAddress") == 1);
-                // 鏍囩鍚屽悕閿鐩?
+                // 标签同名键覆盖
                 std::unordered_map<std::string, uint32_t> tagVars2;
                 tagVars2["StartAddress"] = 1;
                 tagVars2["UnitID"] = 7;
                 auto merged2 = MyProt::Engine::RequestBuilder::MergeVariables(protoDefs, tagVars2);
                 Check("14-12: 标签同名键覆盖 (UnitID=7)", merged2.at("UnitID") == 7);
                 Check("14-13: 标签覆盖后 StartAddress=1", merged2.at("StartAddress") == 1);
-                // 空协议层 default 鈫?鏍囩鍏ㄤ繚鐣?
+                // 空协议层 default → 标签全保留
                 std::unordered_map<std::string, uint32_t> empty;
                 auto merged3 = MyProt::Engine::RequestBuilder::MergeVariables(empty, tagVars);
                 Check("14-14: 空协议 default 时 merged 大小 = 标签大小", merged3.size() == tagVars.size());
@@ -1966,7 +1966,7 @@ int RunE2E() {
                                             merged, {}, vauto);
                 Check("14-15: 协议 default 合并后 Build 成功", reqV.has_value());
                 if (reqV.has_value() && reqV.value().size() >= 6) {
-                    // 模板 UnitID 涓虹‖缂栫爜瀛楅潰閲?"01" (浣嶄簬瑙ｆ瀽鍚?byte 6), 闈?{UnitID} 鍗犱綅绗?
+                    // 模板 UnitID 为硬编码字面量 "01" (位于解析后 byte 6), 非 {UnitID} 占位符
                     // (v1.17 方案B 璧?TokenId 鐢?inputs 声明驱动, 鍘?byte-5 断言 index 有误)
                     Check("14-16: 单位地址字节 0x01 注入到 byte 6", reqV.value()[6] == 0x01);
                 }
