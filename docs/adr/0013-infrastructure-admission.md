@@ -21,6 +21,7 @@
 | ↳ 依赖获取错 | `find_package(asio REQUIRED)` —— 本仓库 asio 采用 vendoring（`third_party/`），无 config 包可 find | 同上 L20 |
 | ↳ 工具集条件已失效 | `cmake_minimum_required(VERSION 3.10)`，而 CMake 3.12+ **已移除** "Visual Studio 14 2015" 生成器 → ADR-0010 §5 "仅当生成器仍支持 VS2015 时保留" 的前提**不成立** | 同上 L4 |
 | ↳ 与文档矛盾 | 文档写"vcpkg 清单模式与 CMake **均已废止**"，仓库内文件仍在 | [05 §13.1](../architecture/05_Observability_Config_Build.md) L118 |
+| **改名残留工程** | `src/Transport/Transport.vcxproj`：未被 sln / 脚本 / 文档任何位置引用；其源文件清单是现行工程的真子集（缺 `TlsChannel` / `SerialChannel`）→ 构建它只会产出一个残废的 `Transport.lib` | sln 仅含 `MyProt.Transport.vcxproj`；全仓引用 0 处；`/utf-8` 0 处 |
 | **空壳测试** | `Engine.Tests` 三个测试文件各 10-11 行，仅一个 `SUCCEED()` 占位 → 项目**存在即通过**，工程名给出虚假保证 | `tests/Engine.Tests/*.cpp`（2026-09-14 前） |
 | **无 CI 门禁** | 5 个可执行的回归靠人工手跑；"全绿"只在**当次、本机**成立，无法阻止红提交进入主干 | 仓库无任何流水线配置 |
 | **外部依赖准入** | `third_party/gtest` 的 `lib/*/gtest.lib` 为 8 字节空归档（`!<arch>`）→ 测试长期无法链接；已由自研 `MiniTest.hpp` 取代 | `tests/MiniTest.hpp` L3-L5 |
@@ -36,7 +37,7 @@
 ### 2.1 单一构建系统：仓库根 `MyProt.sln`
 
 - 构建系统**唯一**为 `MyProt.sln`（MSBuild / VS2015 v140，Win32 + x64）。源码交付即开即编译，零网络依赖。
-- **移除**上述 9 个失效 CMakeLists，不再保留"可选辅助"承诺。ADR-0010 §5 中"CMake 降为可选辅助"一句，**由本 ADR 取代**。
+- **移除**上述 9 个失效 CMakeLists **与 1 个改名残留工程文件**（`src/Transport/Transport.vcxproj`），不再保留"可选辅助"承诺。ADR-0010 §5 中"CMake 降为可选辅助"一句，**由本 ADR 取代**。
 - **恢复条件**（若将来要脱离 VS2015）：先补齐顶层 `CMakeLists.txt`、修正各级相对路径、明确 asio 获取方式，并在**能真正执行 cmake 的环境**完成一次构建验证，再以新 ADR 重新引入。
 - **未经验证的构建配置不得入库** —— 这是本条的核心，而非"不许用 CMake"。
 
@@ -64,7 +65,7 @@
 
 | 类别 | 变化 |
 |------|------|
-| 删除 | 9 个失效 CMakeLists |
+| 删除 | 9 个失效 CMakeLists + 1 个改名残留工程（`src/Transport/Transport.vcxproj`） |
 | 新增 | `scripts/ci.ps1`（CI 门禁）、本 ADR |
 | 测试 | `Engine.Tests`：3 个空占位 → 3 个文件 13 个真用例 |
 | 文档 | architecture/01 §构建系统行、architecture/05 §13.1、ADR-0010 §5 与本 ADR 对齐 |
