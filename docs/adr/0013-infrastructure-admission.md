@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |----|------|
-| 状态 | **提议（PROPOSED）** · 2026-09-14（四条规则已落地并经 `scripts/ci.ps1` 验证 5/5 全绿；待评审确认后转 ACCEPTED） |
+| 状态 | **已接受（ACCEPTED）** · 2026-09-14（评审通过；四条规则均已落地并经 `scripts/ci.ps1` 验证 5/5 全绿） |
 | 日期 | 2026-09-14 |
 | 相关文档 | [ADR-0010](./0010-vs2015-cpp11-toolchain.md)（VS2015/C++11 工具链，§5 构建系统）· [docs/architecture/05](../architecture/05_Observability_Config_Build.md) §13.1（构建产物）· [tests/MiniTest.hpp](../../tests/MiniTest.hpp) |
 | 提案来源 | 构建与测试基础设施审计（2026-09-14）：文档声称"CMake 已废止"，仓库内却存在 9 个 CMakeLists；`Engine.Tests` 三个文件为空占位；回归全靠人工手跑 |
