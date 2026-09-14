@@ -378,7 +378,7 @@ void WebApiServer::RespondAndClose(
         int status, const std::string& contentType, const std::string& body) {
     std::ostringstream oss;
     oss << "HTTP/1.1 " << status << " " << ReasonPhrase(status)
-        << "\r\nContent-Type: " << contentType
+        << "\r\nContent-Type: " << WithUtf8Charset(contentType)
         << "\r\nContent-Length: " << body.size()
         << "\r\nX-Content-Type-Options: nosniff"
         << "\r\nConnection: close\r\n\r\n" << body;
@@ -521,12 +521,14 @@ WebApiServer::Response WebApiServer::Route(const std::string& method,
         return Response(401, "application/json", "{\"error\":\"unauthorized\"}");
     }
 
-    // ── /api/sim/*、/api/data/* → 扩展路由 (App 层注入的业务 handler) ──
-    if (seg.size() >= 2 && seg[0] == "api" &&
-        (seg[1] == "sim" || seg[1] == "data")) {
+    // ── 扩展路由 (App 层注入的业务 handler): 非内置域的 /api/* ──
+    //   内置域只有 "config" (下列各分支) 与更上方的 /health、/metrics;
+    //   其余 (sim / data / validate / 未来新增) 一律交扩展路由 —
+    //   新增端点只需在 App 层实现 handler + main.cpp 注册一行, 不必改本文件。
+    if (seg.size() >= 2 && seg[0] == "api" && seg[1] != "config") {
         if (!_ext) {
             return Response(404, "application/json",
-                            "{\"error\":\"sim api not available\"}");
+                            "{\"error\":\"ext api not available\"}");
         }
         try {
             const std::pair<int, std::string> r = _ext(method, path, body);
