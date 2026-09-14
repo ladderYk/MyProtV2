@@ -1,14 +1,14 @@
 <script setup>
 // 配置工作台 v3 — 顶部 tabs (protocols) / 单页直出 (tags) + 工具栏 (表单/JSON 切换、备份回滚)
 // scope=protocols: 可新建/删除; scope=tags: 固定单文件 tags.json (不提供删除)
-import { ref, computed, onMounted, watch, h } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
 import JsonEditor from './JsonEditor.vue'
 import ProtocolForm from './ProtocolForm.vue'
 import TagsForm from './TagsForm.vue'
 import {
   listConfigs, getConfig, saveConfig, deleteConfig,
-  listBackups, restoreBackup
+  listBackups, restoreBackup, validateConfig
 } from '../api'
 
 const props = defineProps({
@@ -32,6 +32,12 @@ const messageKind = ref('ok')
 const newName = ref('')
 const newTemplate = ref('modbus')   // 新建协议模板: 'modbus' | 'blank'
 const itemKw = ref('')              // 协议列表搜索关键字
+
+// ── 方案 2: 结构化校验问题 (自检 / 保存被拒) ──
+const issues = ref([])              // [{severity,ruleId,subject,field,message}]
+const issueHead = ref('')           // 面板标题 (含计数)
+const formRef = ref(null)           // 当前表单组件实例 (focusIssue 跳转用)
+const issueErrors = computed(() => issues.value.filter(i => i.severity === 'error').length)
 
 /// 左侧协议列表过滤 (空关键字 = 全部)
 const filteredItems = computed(() => {
@@ -137,17 +143,58 @@ async function onSave() {
     flash('ok', '已保存并触发热重载')
     backups.value = await listBackups(props.scope, selected.value)
   } catch (e) {
-    flash('err', e.message)                // 服务端深度校验失败信息
-    // v4.12: 校验拒绝必须让作者看见 — 顶部横幅易被忽略, 表现为"改了就弹回"。
-    //   模态弹窗展示完整编号清单 (后端 e.message 含 \n 编号项, 等宽排版)。
-    ElMessageBox.alert(
-      h('pre', {
-        style: 'white-space:pre-wrap;word-break:break-all;font-family:Consolas,monospace;font-size:12px;line-height:1.7;max-height:320px;overflow:auto;margin:0;color:#7f1d1d'
-      }, e.message),
-      '保存被校验拒绝, 已回滚为原内容',
-      { confirmButtonText: '知道了', type: 'error' }
-    ).catch(() => {})
+    flash('err', e.message)                // 服务端深度校验失败信息 (纯文本兜底)
+    await explainSaveFailure()             // 方案 2: 取结构化原因 → 可点击清单
   }
+}
+
+// ── 方案 2: 结构化校验 (只读 /api/validate) ─────────────────────────
+//   两个入口共用同一面板: 工具栏「自检」与「保存被拒后解释原因」;
+//   条目可点击 → 表单 focusIssue() 跳到对应区块/操作/设备/标签。
+
+/// 保存被拒 → 用同一套只读校验取结构化原因 (幂等; 绝不写盘)
+async function explainSaveFailure() {
+  try {
+    const rep = await validateConfig(props.scope, selected.value, rawText.value)
+    setIssues(rep, '保存被校验拒绝 (已回滚为原内容)')
+  } catch (_) {
+    // /api/validate 不可用时保留顶部横幅的纯文本原因 — 降级不阻断
+  }
+}
+
+/// 工具栏「自检」: 保存前先看问题 (不改磁盘)
+async function onSelfCheck() {
+  try {
+    JSON.parse(rawText.value)
+  } catch (e) {
+    flash('err', 'JSON 格式错误，无法自检: ' + e.message)
+    return
+  }
+  try {
+    const rep = await validateConfig(props.scope, selected.value, rawText.value)
+    setIssues(rep, '自检结果')
+    if (!rep.issues || !rep.issues.length) flash('ok', '自检通过: 无阻断项')
+  } catch (e) {
+    flash('err', '自检失败: ' + e.message)
+  }
+}
+
+function setIssues(rep, title) {
+  issues.value = rep.issues || []
+  const count = `${rep.errorCount || 0} 项错误 / ${rep.warningCount || 0} 项警告`
+  issueHead.value = `${title}: ${count}` + (issues.value.length ? ' — 点击条目跳转' : '')
+}
+
+/// 点击条目 → 表单定位 (协议: 区块/操作; 标签: 设备/标签)
+async function onIssueClick(it) {
+  if (activeTab.value !== 'form') {       // JSON 模式下表单未挂载 → 先切回表单
+    if (!doc.value) { flash('err', '请先修正 JSON 语法错误再定位'); return }
+    showForm()
+    await nextTick()
+  }
+  const f = formRef.value
+  const hint = (f && typeof f.focusIssue === 'function') ? f.focusIssue(it) : ''
+  flash('ok', hint || ('无法自动定位; 请按关键词搜索: ' + (it.subject || it.field || it.ruleId)))
 }
 
 async function onDelete(name) {
@@ -376,7 +423,25 @@ watch(() => props.scope, () => {
             <button :class="{ active: activeTab === 'json' }" @click="showJson">JSON</button>
           </div>
           <button v-if="isProtocols" class="btn danger small" @click="() => onDelete()">删除</button>
+          <!-- 方案 2: 只读自检 (不落盘) — 保存前先看问题 -->
+          <button class="btn small" :disabled="!selected" @click="onSelfCheck">自检</button>
           <button class="btn primary small" :disabled="!dirty" @click="onSave">保存</button>
+        </div>
+
+        <!-- 方案 2: 结构化校验问题清单 (点击条目 → 表单跳转定位) -->
+        <div v-if="issues.length" class="issue-panel" :class="{ 'has-err': issueErrors > 0 }">
+          <div class="issue-head">
+            <span>{{ issueHead }}</span>
+            <button class="msg-close" title="关闭" @click="issues = []">×</button>
+          </div>
+          <ul class="issue-list">
+            <li v-for="(it, i) in issues" :key="i" @click="onIssueClick(it)">
+              <span class="issue-sev" :class="it.severity">{{ it.severity === 'error' ? '错误' : '警告' }}</span>
+              <code class="issue-rule">{{ it.ruleId }}</code>
+              <b v-if="it.subject" class="issue-subj">{{ it.subject }}</b>
+              <span class="issue-msg">{{ it.message }}</span>
+            </li>
+          </ul>
         </div>
 
         <div v-if="backups.length" class="backup-bar">
@@ -391,6 +456,7 @@ watch(() => props.scope, () => {
           <!-- v1.23.1: 须等 doc 就绪再挂载表单 (open() 先设 selected 后异步取内容, 否则以 null 挂载抛 TypeError) -->
           <div v-if="activeTab === 'form' && doc" class="form-fill">
             <component
+              ref="formRef"
               :is="formComponent"
               :key="selected + '#' + revision"
               :model-value="doc"
@@ -660,6 +726,57 @@ watch(() => props.scope, () => {
   justify-content: center;
   color: #94a3b8;
 }
+
+/* 方案 2: 校验问题清单 (条目可点击定位) */
+.issue-panel {
+  border: 1px solid #fca5a5;
+  background: #fef2f2;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+}
+.issue-panel.has-err { border-color: #f87171; }
+.issue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: #b91c1c;
+  margin-bottom: 6px;
+}
+.issue-list { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow: auto; }
+.issue-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.issue-list li:hover { background: #fee2e2; }
+.issue-sev {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #fff;
+  background: #dc2626;
+}
+.issue-sev.warning { background: #d97706; }
+.issue-rule {
+  flex: none;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: #7c2d12;
+  background: #ffedd5;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.issue-subj { flex: none; color: #1e293b; }
+.issue-msg { color: #7f1d1d; word-break: break-all; }
 
 /* 窄屏降级: 协议列表转为顶部横排 */
 @media (max-width: 720px) {

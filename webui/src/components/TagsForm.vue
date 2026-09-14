@@ -54,6 +54,26 @@ function toggleDev(i) { openDevs[i] = !isOpen(i) }
 function selectDevice(i) { if (i < 0) return; selMode.value = 'dev'; selDev.value = i }
 function selectTag(i) { if (i < 0) return; selMode.value = 'tag'; selTag.value = i }
 
+// ── 方案 2: 校验问题 → 定位设备/标签 ─────────────────────────────
+//   field 优先 (devices.<id>.* / tags.<name>.*), ruleId=ref.tag* 视为标签侧;
+//   按 subject 在列表里查找并切换选中。返回提示文案 (供上层 flash)。
+function focusIssue(issue) {
+  const field = (issue && issue.field) || ''
+  const subject = (issue && issue.subject) || ''
+  const rule = (issue && issue.ruleId) || ''
+  const tagSide = field.indexOf('tags.') === 0 || rule.indexOf('ref.tag') === 0
+  if (tagSide) {
+    const i = (local.tags || []).findIndex(t => t && t.name === subject)
+    if (i >= 0) { selectTag(i); return `已定位到标签「${subject}」` }
+    return subject ? `未找到标签「${subject}」(可能已删除或改名)` : '无法定位: 该条目无标签名'
+  }
+  const d = (local.devices || []).findIndex(x => x && x.id === subject)
+  if (d >= 0) { selectDevice(d); return `已定位到设备「${subject}」` }
+  return subject ? `未找到设备「${subject}」(可能已删除或改名)` : '无法定位: 该条目无设备 ID'
+}
+
+defineExpose({ focusIssue })
+
 /// 某设备下的标签索引 (带搜索过滤)
 function tagsOfDev(devId) {
   const kw = treeKw.value.trim().toLowerCase()

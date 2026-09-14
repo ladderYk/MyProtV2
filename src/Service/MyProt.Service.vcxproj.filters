@@ -33,6 +33,9 @@
     <ClInclude Include="include\MyProt\Service\DeviceLifecycle.hpp">
       <Filter>Header Files\include_MyProt_Service</Filter>
     </ClInclude>
+    <ClInclude Include="include\MyProt\Service\ValidationIssue.hpp">
+      <Filter>Header Files\include_MyProt_Service</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\ConfigStore.cpp">
@@ -51,6 +54,9 @@
       <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="src\SessionContext.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ValidationIssue.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
   </ItemGroup>

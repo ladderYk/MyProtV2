@@ -294,6 +294,11 @@ int RunProduction(const std::string& configDir, uint16_t apiPort) {
         [](const AppContext& c, const HttpRequest& r) {
             return HandleSimApi(r, *c.sims);
         });
+    // 只读校验 (webui 保存前自检 / 保存被拒后取结构化原因)
+    extRoutes.Add("/api/validate",
+        [](const AppContext& c, const HttpRequest& r) {
+            return HandleValidateApi(*c.store, r);
+        });
     server.SetExtHandler([&ctx, &extRoutes](
                 const std::string& m, const std::string& p,
                 const std::string& b) {

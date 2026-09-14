@@ -39,6 +39,11 @@ std::pair<int, std::string> HandleDataApi(
 std::pair<int, std::string> HandleWriteApi(const AppContext& ctx,
                                            const HttpRequest& req);
 
+/// GET/POST /api/validate?scope=&name= 只读校验 (不落盘/不重载), 返回结构化问题清单。
+/// 实现见 ValidateApi.cpp; scope: protocols|tags。
+std::pair<int, std::string> HandleValidateApi(const Service::ConfigStore& store,
+                                              const HttpRequest& req);
+
 // ── reload 运行时联动 — 首次装配与热重载唯一代码路径 ──
 // 重新加载配置目录 → 全停重建仿真器 → 清空实时快照 → post 到 io 线程
 // 重装配引擎。新配置非法时保持旧运行态并返回错误 (配合 ConfigStore 自动回滚)。

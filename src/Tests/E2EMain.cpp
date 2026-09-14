@@ -74,7 +74,7 @@ private:
                 if (!ec) {
                     ReadRequest(socket);
                 }
-                AcceptLoop();  // 缁х画鎺ュ彈涓嬩竴涓繛鎺?
+                AcceptLoop();  // 继续接受下一个连接
             });
     }
 
@@ -345,7 +345,7 @@ int RunE2E() {
             R"({"PDULength":{"strategy":"expr","params":{"value":"RegisterCount + 7"}}})";
         Check("DeclareJson(expr) 成功", autoProvider.DeclareJson(ac2));
         // 整段重声明清除旧规则 (v1.9 设计): TransactionID 已不在 rules 内
-        Check("閲嶅０鏄庢竻鏃ц鍒",
+        Check("整段重声明清除旧规则",
          !autoProvider.IsDeclared("TransactionID"));
         Check("PDULength 已声明",
         autoProvider.IsDeclared("PDULength"));
@@ -1703,15 +1703,15 @@ int RunE2E() {
             "01", "06", "{StartAddress:X4}", "{Value:X4}"
         };
         writeOp.responseParser.validCondition = "resp[7]==0x06";
-        writeOp.responseParser.dataStartIndex = 12;   // FC06 鎼存梻鐡?= 閸ョ偞妯夌拠閿嬬湴鐢?
+        writeOp.responseParser.dataStartIndex = 12;   // FC06 回显请求: 数据区自第 12 字节起
         proto.operations["WriteSingleRegister"] = writeOp;
 
-        // v1.1: simulation 已从 ProtocolConfig 移至 ServerConfig 鈥?娴嬭瘯涓?
-        //       浣跨敤鐙珛鐨?SimulationConfig 实例喂给 SimulationServer.
+        // v1.1: simulation 已从 ProtocolConfig 移至 ServerConfig — 测试中
+        //       使用独立的 SimulationConfig 实例喂给 SimulationServer.
         MyProt::Core::SimulationConfig sim;
-        sim.listenPort = 11526;   // 独占测试端口: 避开 configs/server.json 鐨?11520
-                                  // (App 瀹炰緥甯搁┗鏃?reuse_address 鍏辩粦瀹氫細鎶婅繛鎺?
-                                  //  导向 App 的仿真器 鈫?涓叉暟鎹?鏃犲簲绛旀寕璧?
+        sim.listenPort = 11526;   // 独占测试端口: 避开 configs/server.json 的 11520
+                                  // (App 实例常驻时 reuse_address 共绑定会把连接
+                                  //  导向 App 的仿真器 → 串数据 / 无应答挂起
         sim.registerCount = 100;
         sim.initialValues["0"] = 100;    // 00 64
         sim.initialValues["1"] = 101;    // 00 65
@@ -1736,10 +1736,10 @@ int RunE2E() {
         proto.operations["WriteTplAck"] = tplOp;
         { MyProt::Core::SimOperationConfig so; so.kind = "write";
           so.addressVar = "StartAddress"; so.dataOffset = 10;
-          so.responseTemplate.push_back("{req:0:2}");   // TID 閸ョ偞妯?
-          so.responseTemplate.push_back("00 00");       // PID 鐢悂鍣?
-          so.responseTemplate.push_back("00 06");       // LEN 閸楃姳缍?(framing 重算覆盖)
-          so.responseTemplate.push_back("{req:6:1}");   // UID 閸ョ偞妯?
+          so.responseTemplate.push_back("{req:0:2}");   // TID 回填
+          so.responseTemplate.push_back("00 00");       // PID 固定 0
+          so.responseTemplate.push_back("00 06");       // LEN 占位 (framing 重算覆盖)
+          so.responseTemplate.push_back("{req:6:1}");   // UID 回填
           so.responseTemplate.push_back("10");
           // FC 鍥哄畾鍊?
           so.responseTemplate.push_back("{req:8:4}");   // Addr+Value 閸ョ偞妯?
@@ -1796,7 +1796,7 @@ int RunE2E() {
             // 閹鏆?8 閳?LEN = 8 - header(6) = 2, 婢堆咁伂閸愭瑥鍙嗛崑蹇曅?4..5
             bool okB = ok1 && out.size() == 8
                 && out[0] == 0x11 && out[1] == 0x22      // req 閸ョ偞妯?
-                && out[2] == 0xAA && out[3] == 0xBB      // 瀛楅潰閲?
+                && out[2] == 0xAA && out[3] == 0xBB      // 字面量 (0xAA 0xBB)
                 && out[4] == 0x00 && out[5] == 0x02      // LEN 闁插秶鐣?
                 && out[6] == 0x01 && out[7] == 0x02;     // {data} 鐏炴洖绱?
             Check("14-3: 模板合成 (回显 + 字面量 + 数据区)", okB);
@@ -1918,7 +1918,7 @@ int RunE2E() {
                 const std::vector<uint8_t>& rq = reqT.value();
                 bool okT = respT.size() == 14;
                 okT = okT && respT[0] == rq[0] && respT[1] == rq[1];   // TID 閸ョ偞妯?
-                okT = okT && respT[2] == 0x00 && respT[3] == 0x00;     // PID 鐢悂鍣?
+                okT = okT && respT[2] == 0x00 && respT[3] == 0x00;     // PID 固定 0
                 okT = okT && respT[4] == 0x00 && respT[5] == 0x08;     // LEN 闁插秶鐣?(14-6)
                 okT = okT && respT[6] == rq[6];                        // UID 閸ョ偞妯?                okT = okT && respT[7] == 0x10;
                          // FC 閸ュ搫鐣?
@@ -2095,7 +2095,7 @@ int RunE2E() {
         store.Update(batch);
 
         std::vector<MyProt::Core::TagValue> over;
-        t1.typedValue.d = 37.25;                    // 同名覆盖 閳?鏂板€肩敓鏁?
+        t1.typedValue.d = 37.25;                    // 同名覆盖 → 新值生效
         t1.valueChanged = true;
         over.push_back(t1);
         store.Update(over);
@@ -2168,6 +2168,149 @@ int RunE2E() {
 
         dApi.Stop();
         dThread.join();
+        std::cout << std::endl;
+    }
+
+    // ── (HTTP) /api/validate: 只读校验端点 (方案 2: 结构化问题清单) ──
+    std::cout << "--- Test 13c: /api/validate ---" << std::endl;
+    {
+        // 用随仓库发布的**真实配置**作正例 (configs/protocols/modbus-tcp.json): 既覆盖端点,
+        // 也顺带断言"发布配置通过保存期同一套校验"; 若该文件缺失则退化为断言 404,
+        // 不产生环境相关的假失败 (E2E 其它用例同样以相对路径访问工作目录)。
+        const std::string kValProto = "modbus-tcp";
+        const char* kValProtoPath = "configs\\protocols\\modbus-tcp.json";
+        const bool valHasCfg =
+            ::GetFileAttributesA(kValProtoPath) != INVALID_FILE_ATTRIBUTES;
+
+        MyProt::Service::ConfigStoreOptions vOpts;
+        vOpts.configDir = "configs";
+        MyProt::Service::ConfigStore vStore(vOpts);
+
+        MyProt::Core::WebApiConfig vCfg;
+        vCfg.bindAddress = "127.0.0.1:18086";
+        vCfg.requireAuth = false;
+        MyProt::WebApi::WebApiServer vApi(vCfg, vStore);
+        vApi.SetExtHandler([&vStore](const std::string& m, const std::string& p,
+                                     const std::string& b) {
+            HttpRequest req;
+            req.method = m;
+            req.path = p;
+            req.body = b;
+            return HandleValidateApi(vStore, req);
+        });
+        std::thread vThread([&vApi]() { vApi.Start(); });
+
+        asio::io_context vIo;
+        SyncTcpClient vClient(vIo);
+        auto VReq = [&vClient](const std::string& req) -> std::string {
+            if (!vClient.Connect("127.0.0.1", 18086)) return std::string();
+            const std::vector<uint8_t> raw = vClient.SendReceiveAll(
+                std::vector<uint8_t>(req.begin(), req.end()));
+            vClient.Close();
+            return std::string(raw.begin(), raw.end());
+        };
+        auto VPost = [&VReq](const std::string& path, const std::string& body) -> std::string {
+            const std::string req = "POST " + path + " HTTP/1.1\r\nHost: t\r\n"
+                "Content-Type: application/json\r\nContent-Length: "
+                + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+            return VReq(req);
+        };
+
+        // 只读性基线: 先记磁盘字节
+        std::string valFileBefore;
+        {
+            std::ifstream f(kValProtoPath);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            valFileBefore = ss.str();
+        }
+
+        // GET = 校验磁盘现值 (就绪等待 ~2s)
+        std::string vResp;
+        for (int i = 0; i < 20 && vResp.empty(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            vResp = VReq("GET /api/validate?scope=protocols&name=" + kValProto + " HTTP/1.1\r\n"
+                         "Host: t\r\nConnection: close\r\n\r\n");
+        }
+        Check("GET /api/validate 发布配置 → 200 + 结构化报告 (ok:true + issues 数组)",
+              valHasCfg
+                  ? (vResp.find("200") != std::string::npos &&
+                     vResp.find("\"ok\":true") != std::string::npos &&
+                     vResp.find("\"issues\":[") != std::string::npos)
+                  : (vResp.find("404") != std::string::npos));
+
+        // POST = 校验候选内容 (不落盘)
+        const std::string badJson = VPost("/api/validate?scope=protocols&name=" + kValProto,
+                                          "{ not json");
+        // JSON 语法错误由校验器作为一条 issue 报出 (非 ConfigStore 层错误),
+        // 故断言"结构化失败报告"而非特定 ruleId (parse.error 分支仍未触发, 保留为防御)。
+        Check("POST 无效 JSON → 200 + ok:false + issues 数组",
+              badJson.find("200") != std::string::npos &&
+              badJson.find("\"ok\":false") != std::string::npos &&
+              badJson.find("\"issues\":[") != std::string::npos);
+
+        // POST 篡改 headerLength (+1) → 帧长一致性必然失配: 验证协议域规则的分类与可定位字段
+        //   (与 UI 手工篡改同一手法; 该断言正是"分类域归一"缺陷的回归网 —
+        //    若 App 层把 API 的 "protocols" 直接交给按 "protocol" 限定域的规则表, 这里会得到 unclassified)
+        std::string tampered = valFileBefore;
+        {
+            const std::string k = "headerLength";
+            const std::size_t p = tampered.find(k);
+            if (p != std::string::npos) {
+                const std::size_t d = tampered.find_first_of("0123456789", p + k.size());
+                if (d != std::string::npos) {
+                    const std::size_t e = tampered.find_first_not_of("0123456789", d);
+                    const int n = std::atoi(tampered.substr(d, e - d).c_str());
+                    tampered.replace(d, e - d, std::to_string(n + 1));
+                }
+            }
+        }
+        const std::string tamperResp = VPost(
+            "/api/validate?scope=protocols&name=" + kValProto, tampered);
+        Check("POST 篡改 headerLength → frame.length_consistency + subject + field 可定位",
+              valHasCfg &&
+              tamperResp.find("frame.length_consistency") != std::string::npos &&
+              tamperResp.find("\"subject\":\"WriteMultipleRegisters\"") != std::string::npos &&
+              tamperResp.find("\"field\":\"operations.WriteMultipleRegisters.requestTemplate\"")
+                  != std::string::npos);
+
+        // POST tags: 引用不存在的协议 → 结构化 ref.device_protocol + subject + field
+        const std::string badTags = VPost("/api/validate?scope=tags&name=tags",
+            "{\"schemaVersion\":2,\"devices\":[{\"id\":\"VDEV\",\"protocol\":\"nope\"}],"
+            "\"tags\":[]}");
+        Check("POST tags 引用不存在协议 → ref.device_protocol / subject=VDEV / field 可定位",
+              badTags.find("ref.device_protocol") != std::string::npos &&
+              badTags.find("\"subject\":\"VDEV\"") != std::string::npos &&
+              badTags.find("\"field\":\"devices.VDEV.protocol\"") != std::string::npos);
+
+        // 只读性: 多次 POST 之后磁盘文件字节未变
+        std::string valFileAfter;
+        {
+            std::ifstream f(kValProtoPath);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            valFileAfter = ss.str();
+        }
+        Check("只读: 多次 POST 后配置文件字节未变",
+              valFileBefore == valFileAfter &&
+              (valHasCfg ? !valFileBefore.empty() : true));
+
+        // 参数校验
+        const std::string badScopeV = VReq(
+            "GET /api/validate?scope=bogus&name=valp HTTP/1.1\r\n"
+            "Host: t\r\nConnection: close\r\n\r\n");
+        Check("scope 非法 → 400", badScopeV.find("400") != std::string::npos);
+        const std::string noNameV = VReq(
+            "GET /api/validate?scope=protocols HTTP/1.1\r\n"
+            "Host: t\r\nConnection: close\r\n\r\n");
+        Check("缺 name → 400", noNameV.find("400") != std::string::npos);
+        const std::string notFoundV = VReq(
+            "GET /api/validate?scope=protocols&name=nope HTTP/1.1\r\n"
+            "Host: t\r\nConnection: close\r\n\r\n");
+        Check("GET 目标不存在 → 404", notFoundV.find("404") != std::string::npos);
+
+        vApi.Stop();
+        vThread.join();
         std::cout << std::endl;
     }
 
@@ -2683,7 +2826,7 @@ int RunE2E() {
     std::cout << "--- Test 18: SSE Data Stream ---" << std::endl;
     {
         MyProt::Polling::LatestValueStore store;
-        std::vector<MyProt::Core::TagValue> batch;    // 娑?Test 11 閸氬本鐎惃鍕⒈閺嶅洨顒?
+        std::vector<MyProt::Core::TagValue> batch;    // 批量: Test 11 同批测试的标签
         MyProt::Core::TagValue t1;
         t1.tagName = "Temperature"; t1.deviceId = "PLC-001";
         t1.typedValue.type = MyProt::Core::ValueType::Double;

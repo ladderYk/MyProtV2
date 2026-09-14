@@ -147,6 +147,7 @@
     <ClCompile Include="..\App\CrashDiagnostics.cpp" />
     <ClCompile Include="..\App\SimApi.cpp" />
     <ClCompile Include="..\App\DataApi.cpp" />
+    <ClCompile Include="..\App\ValidateApi.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\App\RuntimeGlue.hpp" />

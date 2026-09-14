@@ -367,6 +367,30 @@ function renameOperation(oldName, newName) {
   emitDoc()
 }
 
+// ── 方案 2: 校验问题 → 表单定位 ──────────────────────────────────
+//   field 前缀决定区块 (operations.* → 操作 / outputs|variables → 变量);
+//   subject 命中操作名时同时切到该操作 tab。返回提示文案 (供上层 flash)。
+function focusIssue(issue) {
+  const field = (issue && issue.field) || ''
+  const subject = (issue && issue.subject) || ''
+  if (field.indexOf('operations.') === 0) {
+    activeSection.value = 'ops'
+    if (subject && opNames.value.indexOf(subject) >= 0) {
+      selOp.value = subject
+      return `已跳到「操作」段 → ${subject}`
+    }
+    return subject ? `已切到「操作」段 (未找到操作「${subject}」)` : '已切到「操作」段'
+  }
+  if (field.indexOf('outputs') === 0 || field.indexOf('variables') === 0) {
+    activeSection.value = 'vars'
+    return subject ? `已切到「变量」段 (${subject})` : '已切到「变量」段'
+  }
+  activeSection.value = 'basic'
+  return '已切到「基础信息」段'
+}
+
+defineExpose({ focusIssue })
+
 // 一键套用 Modbus MBAP 帧预设 (LengthField)
 function applyMbap() {
   local.framing.lengthFieldOffset = 4

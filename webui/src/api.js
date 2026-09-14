@@ -45,6 +45,19 @@ export async function getConfig(scope, name) {
 export async function saveConfig(scope, name, rawText) {
   return request('PUT', `/api/config/${scope}/${encodeURIComponent(name)}`, rawText)
 }
+
+// ── 只读校验 (/api/validate): 不落盘 / 不重载, 返回结构化问题清单 ──
+//   payload 省略 → 校验磁盘现值 (GET); 传入 → 校验候选内容 (POST)
+//   返回 {ok, scope, name, errorCount, warningCount,
+//         issues:[{severity,ruleId,subject,field,message}]}
+//   severity: "error"(阻断保存) | "warning"; 未归类条目 ruleId="unclassified"
+export async function validateConfig(scope, name, payload) {
+  const q = new URLSearchParams({ scope, name })
+  if (payload === undefined) {
+    return JSON.parse(await request('GET', `/api/validate?${q}`))
+  }
+  return JSON.parse(await request('POST', `/api/validate?${q}`, payload))
+}
 export async function deleteConfig(scope, name) {
   return request('DELETE', `/api/config/${scope}/${encodeURIComponent(name)}`)
 }
