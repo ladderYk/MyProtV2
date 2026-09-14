@@ -18,7 +18,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "MyProt/Engine/MiniExpression.hpp"   // v1.16 语法校验: 与运行时同一解析器
+#include "MyProt/Engine/MiniExpression.hpp"   // 语法校验: 与运行时同一解析器
 
 namespace MyProt { namespace Service {
 
@@ -55,7 +55,7 @@ bool IsIdentChar(char c) {
 
 // ──────────────────── 模板占位符 (§3.2) ────────────────────
 // 文法: {Name:Xn} (定宽十六进制) | {Name:raw} (变长字节注入).
-// 三段校验和文法 {Name:algo:Xn} 已移除 — 校验和走声明式
+// 校验和走声明式 (inputs.source=auto strategy=crc); 不允许 {Name:algo:Xn} 这类模板内联文法
 // inputs.source=auto strategy=crc + params.algo (crc16-modbus/crc16-ccitt/crc32),
 // 派生长度走 outputs 的 derivedLength。
 
@@ -318,7 +318,7 @@ bool ParseTemplateArray(const json& j, std::vector<std::string>& out, std::strin
     return true;
 }
 
-// ──────────────────── 长度偏移自检 (v1.13) ────────────────────
+// ──────────────────── 长度偏移自检 ────────────────────
 // 变长派生长度若落点为成帧长度字段槽位 (offset/length 与 framing.lengthField 一致),
 // 其相对 payload 的常量偏移必须与模板固定字节布局一致, 防止改写模板后静默错帧.
 namespace {
@@ -350,7 +350,7 @@ bool TemplateElementName(const std::string& el, std::string& name) {
     return true;
 }
 // 尝试把 expr 归约为 "{<载荷名>:len}" / "{<载荷名>:len} ± C" 的常量偏移; 其它形式返回 false (跳过自检).
-// v1.22: 载荷名 = 模板 {Name:raw} 占位符名; expr 以 {name:len} 引用.
+// 载荷名 = 模板 {Name:raw} 占位符名; expr 以 {name:len} 引用.
 bool TryPayloadOffset(const std::string& expr, const std::string& payloadVarName,
                       long& off) {
     std::string s = expr;
@@ -381,10 +381,10 @@ bool TryPayloadOffset(const std::string& expr, const std::string& payloadVarName
 }
 } // namespace
 
-/// v1.11/v1.13: strategy=derivedLength 的 expr 语法可行性检查
-///   v1.16: 仅做与运行时同一 MiniExpression 解析器的真实语法解析, 堵住
+/// strategy=derivedLength 的 expr 语法可行性检查
+///   与运行时同一 MiniExpression 解析器做真实语法解析, 堵住
 ///         语法错误 (如 "payload)" / "payload +* 7"), 防启动期静默放行错帧.
-///   v1.17 (方案B): expr 不再限制基准变量名 (改由 outputs 支持引用 inputs);
+///   expr 不限制基准变量名 (outputs 可引用 inputs);
 ///         引用名合法性 (标识符 ∈ inputs 已声明名, {name:len} 取字节长度) 交由解析后的
 ///         ValidateDerivedLengthExprDomain 校验 (此时输入名集合已知).
 bool IsDerivedLengthExprValid(const std::string& expr) {
@@ -397,10 +397,10 @@ bool IsDerivedLengthExprValid(const std::string& expr) {
     return true;
 }
 
-/// 收集 expr 中引用的标识符集 — v1.25 已由 ValidateDerivedLengthExprDomain 内部
+/// 收集 expr 中引用的标识符集 — 由 ValidateDerivedLengthExprDomain 内部
 /// prop 感知扫描取代 (需区分 {Frame:fixed}/{name:offset}/{name:len}/裸名), 原函数删除。
 
-/// v1.22: 模板 {Name:raw} 占位符名集合 — 变长写载荷由模板自动识别, 无需 inputs 特殊声明.
+/// 模板 {Name:raw} 占位符名集合 — 变长写载荷由模板自动识别, 无需 inputs 特殊声明.
 std::set<std::string> CollectRawPlaceholderNames(
     const std::vector<std::string>& requestTemplate) {
     std::set<std::string> names;
@@ -416,7 +416,7 @@ std::set<std::string> CollectRawPlaceholderNames(
     return names;
 }
 
-/// v1.25 (ADR-0012 §1.1): 模板全部占位符名集合 (任意格式) —
+/// 模板全部占位符名集合 (ADR-0012 §1.1, 任意格式) —
 /// {name:offset} 原语的合法引用域 (offset 引用模板占位符的首现偏移).
 std::set<std::string> CollectTemplatePlaceholderNames(
     const std::vector<std::string>& requestTemplate) {
@@ -430,7 +430,7 @@ std::set<std::string> CollectTemplatePlaceholderNames(
     return names;
 }
 
-/// v1.17 (方案B): outputs(derivedLength) 的 expr 引用域校验 (prop 感知, v1.25 重写).
+/// outputs(derivedLength) 的 expr 引用域校验 (prop 感知).
 ///   {Frame:fixed}   → 保留原语, 恒合法 (ADR-0012 §1.1);
 ///   {Name:offset}   → Name 须为模板占位符名 (placeholderNames);
 ///   {Name:len}/裸名 → 旧行为: 同一作用域 inputs 已声明名 ∪ 模板 {Name:raw} 载荷名.
@@ -471,7 +471,7 @@ bool ValidateDerivedLengthExprDomain(
                 }
                 const size_t close = expr.find('}', k);
                 if (close == std::string::npos) { i = n; break; }
-                // v1.27 增: prop 合法性校验 — 仅 len/offset/fixed 三种属性
+                                // prop 合法性校验 — 仅 len/offset/fixed 三种属性
                 if (prop != Core::kPropLength && prop != Core::kPropOffset
                         && prop != Core::kPropFixed) {
                     err = prefix + ".outputs." + kv.first
@@ -506,7 +506,7 @@ bool ValidateDerivedLengthExprDomain(
                 while (j < n && (std::isalnum(static_cast<unsigned char>(expr[j]))
                                  || expr[j] == '_')) ++j;
                 const std::string id = expr.substr(i, j - i);
-                // v1.27 增: 浮点检测 — expr 中含 "." 提示浮点常量
+                                // 浮点检测 — expr 中含 "." 提示浮点常量
                 bool hasDot = false;
                 for (size_t d = i; d < j; ++d) {
                     if (expr[d] == '.') { hasDot = true; break; }
@@ -535,7 +535,7 @@ bool ValidateDerivedLengthExprDomain(
     return true;
 }
 
-/// v1.17 (方案B): 同一作用域内 inputs 与 outputs 不得同名 — 防"一个名字串场".
+/// 同一作用域内 inputs 与 outputs 不得同名 — 防"一个名字串场".
 bool CheckNoInputOutputNameConflict(
         const std::string& prefix,
         const std::unordered_map<std::string, Core::VariableConfig>& inputs,
@@ -552,7 +552,7 @@ bool CheckNoInputOutputNameConflict(
     return true;
 }
 
-/// v1.17 (方案B): 输入现声明于协议 inputs 段 (旧 protocol.variables 拆分为 inputs/outputs).
+/// 输入声明于协议 inputs 段 (配置形态: inputs / outputs 两组).
 /// 规则 14 判定"模板变量能否由协议供给": 协议 inputs 中 source=static 且有值 (运行时注入
 /// 变量池) 或 source=auto (经 AutoComputeProvider 求值) 的名字均视为可在运行时解析,
 /// 放行模板占位符; 仅静态无值 (原 hint / 纯 UI 展示) 不算供给, 模板引用即报未定义.
@@ -587,11 +587,11 @@ bool ParseOneVariableDoc(const std::string& prefix,
         err = prefix + "." + vname + " source 须为 static / auto (实际: \"" + src + "\")";
         return false;
     }
-    // v1.27 增: 保留名冲突校验 — 用户变量名不可与引擎保留名撞名
+        // 保留名冲突校验 — 用户变量名不可与引擎保留名撞名
     //   模板原语: {Frame:fixed} (Frame 为保留名)
     //   expr 魔法变量: __frameLen, __frameEnd
     //   属性名: len/offset/fixed (仅作 prop 名, 但变量名同名语义混淆)
-    // v1.30: 保留名清单收敛为 Core 单一真源 (原此处与下方别名检查各写一份同一集合)
+        // 保留名清单唯一来源在 Core (禁止此处与下方别名检查各写一份同一集合)
     if (Core::IsFrameReservedName(vname)) {
         err = prefix + "." + vname
               + " 变量名与引擎保留名冲突 ("
@@ -639,10 +639,10 @@ bool ParseOneVariableDoc(const std::string& prefix,
             return false;
         }
         if (out.strategy == "derivedLength") {
-            // 派生长度 (v1.16): 唯一表达 = expr (载荷字节数的算术表达式). 求值时机在
+                        // 派生长度: 唯一表达 = expr (载荷字节数的算术表达式). 求值时机在
             //   WriteBytes (依赖载荷字节数) → 不进 autoComputeJson; 由 TagReader
             //   参数层预解析注入.
-            //   kind 字段 (payload/registers/payloadPlus4/...) 已移除 → 报错引导改 expr.
+                        //   不使用 kind 字段 (payload/registers/payloadPlus4/...) — 出现即报错引导改 expr.
             if (v.contains("kind")) {
                 err = prefix + "." + vname + " strategy=derivedLength 的 kind 字段已移除 (v1.16); "
                     "请直接写 expr (e.g. kind:payload → expr:\"Payload\" / kind:registers → expr:\"Payload / 2\")";
@@ -665,7 +665,7 @@ bool ParseOneVariableDoc(const std::string& prefix,
                 err = prefix + "." + vname + ".params 须为对象";
                 return false;
             }
-            // v1.29 增: strategy=crc 的 params.algo 必填且须为受支持算法.
+                        // strategy=crc 的 params.algo 必填且须为受支持算法.
             //   引擎侧 ExecCrc 已不再提供缺省算法 (原缺省 crc16-modbus 把协议选择
             //   烘焙进 Engine); 校验在此兜住, 避免等到运行期才失败.
             if (out.strategy == "crc") {
@@ -688,7 +688,7 @@ bool ParseOneVariableDoc(const std::string& prefix,
             autoComputeOutJson += "\"" + vname + "\":{" + v.at("strategy").dump() + ",";
             autoComputeOutJson += "\"params\":" + pms.dump() + "}";
         } else {
-            // v1.29: strategy=crc 不带 params 同样非法 (algo 无从取得)
+                        // strategy=crc 不带 params 非法 (algo 无从取得)
             if (out.strategy == "crc") {
                 err = prefix + "." + vname + " strategy=crc 须提供 params.algo "
                       "(crc16-modbus / crc16-ccitt / crc32)";
@@ -699,7 +699,7 @@ bool ParseOneVariableDoc(const std::string& prefix,
             autoComputeOutJson += "\"" + vname + "\":{" + v.at("strategy").dump() + "}";
         }
     }
-    // 展示元信息 (任意 source 都允许; 无值 static 即原 hint, v1.15 并入, 仅在此有意义)
+        // 展示元信息 (任意 source 都允许; 无值 static 仅在此有意义)
     if (v.contains("label"))        out.label        = v.at("label").get<std::string>();
     if (v.contains("unit"))         out.unit         = v.at("unit").get<std::string>();
     if (v.contains("placeholder"))  out.placeholder  = v.at("placeholder").get<std::string>();
@@ -759,7 +759,7 @@ bool ParseOneVariableDoc(const std::string& prefix,
     return true;
 }
 
-/// v1.17 (方案B): 通用 inputs 段解析 — 只允许 source=static / source=auto(非 derivedLength);
+/// 通用 inputs 段解析 — 只允许 source=static / source=auto(非 derivedLength);
 ///   派生输出 (derivedLength) 属 outputs 段, 出现在 inputs 即报错.
 bool ParseInputsDoc(const std::string& prefix, const json& doc,
                     std::unordered_map<std::string, Core::VariableConfig>& inputs,
@@ -784,7 +784,7 @@ bool ParseInputsDoc(const std::string& prefix, const json& doc,
     return true;
 }
 
-/// v1.17 (方案B): 通用 outputs 段解析 — 只允许 source=auto strategy=derivedLength.
+/// 通用 outputs 段解析 — 只允许 source=auto strategy=derivedLength.
 bool ParseOutputsDoc(const std::string& prefix, const json& doc,
                      std::unordered_map<std::string, Core::VariableConfig>& outputs,
                      std::string& err) {
@@ -824,9 +824,9 @@ bool ParseOperationDoc(const json& j, Core::OperationConfig& op, std::string& er
             return false;
         }
     }
-    // v1.7 增: 操作语义标注 (可选; 空 = 未标注, "read" | "write" 由校验器核对)
+        // 操作语义标注 (可选; 空 = 未标注, "read" | "write" 由校验器核对)
     if (!OptStr(j, "kind", op.kind, err)) return false;
-    // v1.17 (方案B): 操作级 inputs / outputs 覆盖 (操作级声明覆盖协议级同名条目).
+        // 操作级 inputs / outputs 覆盖 (操作级声明覆盖协议级同名条目).
     //   输入/输出同域同名冲突在此校验; 输出引用域 (需协议级 inputs) 由 ParseProtocolDocImpl
     //   在 operations 全量解析后统一校验.
     if (!ParseInputsDoc(op.name, j, op.inputs, err)) return false;
@@ -869,11 +869,11 @@ bool ParseProtocolDocImpl(const json& doc, int defaultVer,
         p.dataByteOrder = bo;
     }
 
-    // v1.6 增: 写路径操作名 (可选; 缺省取 Modbus 约定默认值, 见 ProtocolConfig 构造)
-    //   v1.22: 载荷变量由模板 {Name:raw} 占位符自动识别 (v1.21 的 inputs payloadLength 声明已移除).
-    // v1.32 删: 协议级 writeOperation / writeBytesOperation — 写声明点收敛于标签层
+        // 写路径操作名 (可选; 缺省取 Modbus 约定默认值, 见 ProtocolConfig 构造)
+        //   载荷变量由模板 {Name:raw} 占位符自动识别 (不存在 inputs payloadLength 声明).
+        // 协议级 writeOperation / writeBytesOperation 不属于 Schema — 写声明点唯一位于标签层
 
-    // v1.29 增: 标签按地址邻近合并的最大字节跨度 (TagGrouper::CoalesceAdjacent 消费).
+        // 标签按地址邻近合并的最大字节跨度 (TagGrouper::CoalesceAdjacent 消费).
     //   协议族"单次读取上限"的通用表达; 缺省值见 Core::kDefaultMaxSpanBytes.
     if (!OptInt(doc, "maxSpanBytes", p.maxSpanBytes, err)) return false;
     if (p.maxSpanBytes <= 0) {
@@ -882,8 +882,8 @@ bool ParseProtocolDocImpl(const json& doc, int defaultVer,
         return false;
     }
 
-    // v1.27 增 / v1.28 改: 变量别名映射 (alias → internal name).
-    //   v1.28: 可映射的契约名由 6 个收敛为 2 个 — 只保留引擎真正查表读取的跨协议字节单位.
+        // 变量别名映射 (alias → internal name).
+        //   可映射的契约名仅 2 个 — 只保留引擎真正查表读取的跨协议字节单位.
     //     其余旧名不再作为契约:
     //       StartAddress / RegisterCount — 协议 JSON outputs 自行声明的派生名 (引擎不读);
     //       WriteValue                   — 写路径默认值常量 (标签 writeVariable 可覆盖);
@@ -921,8 +921,8 @@ bool ParseProtocolDocImpl(const json& doc, int defaultVer,
                 err = "variableAliases 中别名与内部名相同无意义: " + alias;
                 return false;
             }
-            // v1.27 增: 别名不可与引擎保留名冲突 (Frame/{Frame:fixed}、__frameLen/__frameEnd expr 魔法变量)
-            // v1.30: 保留名清单收敛为 Core 单一真源
+                        // 别名不可与引擎保留名冲突 (Frame/{Frame:fixed}、__frameLen/__frameEnd expr 魔法变量)
+                        // 保留名清单唯一来源在 Core
             if (Core::IsFrameReservedName(alias)) {
                 err = "variableAliases 别名 \"" + alias
                       + "\" 与引擎保留名冲突 ("
@@ -941,14 +941,14 @@ bool ParseProtocolDocImpl(const json& doc, int defaultVer,
         }
     }
 
-    // v1.17 (方案B): 协议级 inputs / outputs 段 (可选), 取代旧 protocol.variables.
+        // 协议级 inputs / outputs 段 (可选); 配置中不存在单段 protocol.variables.
     //   inputs : static 值/UI 提示 + auto{autoIncrement,frameSlice,expr,crc}
     //   outputs: source=auto strategy=derivedLength 的派生输出 (引用 inputs 名或模板 raw 载荷名, {name:len} 取字节长度)
-    //   metadata.placeholderHints 段在 v1.10 移除 (破坏性升级)。
+        //   metadata.placeholderHints 不属于当前 Schema。
     if (!ParseInputsDoc("protocol", doc, p.inputs, err)) return false;
     if (!ParseOutputsDoc("protocol", doc, p.outputs, err)) return false;
     if (!CheckNoInputOutputNameConflict("protocol", p.inputs, p.outputs, err)) return false;
-    // 协议级 outputs 引用域 — 移至操作解析后执行 (v1.25: {name:offset} 的合法引用域
+        // 协议级 outputs 引用域 — 在操作解析后执行 ({name:offset} 的合法引用域
     // 是全部操作的模板占位符名集, 须等操作就绪); 无 operations 时占位符集为空,
     // 检查仍然执行 (与旧行为一致)
     std::set<std::string> allPlaceholderNames;
@@ -963,8 +963,8 @@ bool ParseProtocolDocImpl(const json& doc, int defaultVer,
             if (!ParseOperationDoc(it.value(), op, err)) return false;
             p.operations.insert(std::make_pair(it.key(), op));
         }
-        // v1.17 (方案B): 各操作的 outputs 引用域校验 (需协议级 inputs 全量就绪) —
-        //   v1.25: {name:offset} 的合法引用域扩展为该操作模板占位符名集
+                // 各操作的 outputs 引用域校验 (需协议级 inputs 全量就绪) —
+                //   {name:offset} 的合法引用域 = 该操作模板占位符名集
         for (std::unordered_map<std::string, Core::OperationConfig>::iterator oi =
                 p.operations.begin(); oi != p.operations.end(); ++oi) {
             if (!ValidateDerivedLengthExprDomain(
@@ -1010,7 +1010,7 @@ bool ParseProtocolDocImpl(const json& doc, int defaultVer,
         }
     }
 
-    // 注: 协议级 simulation 段已删除 (v1.1 移至 server.json — ServerConfig.simulation)
+        // 注: 协议级无 simulation 段 (位于 server.json — ServerConfig.simulation)
     return true;
 }
 
@@ -1111,20 +1111,20 @@ bool ParseRootDocImpl(const json& doc, int defaultVer,
                     || !OptStr(tj, "operation", tag.operation, err)
                     || !OptStr(tj, "finalType", tag.finalType, err)
                     || !OptInt(tj, "scanRateMs", tag.scanRateMs, err)
-                    // v1.25 删: registerCount 顶层字段; 改走 variables.ByteCount (协议族字节单位)
-                    // v1.32 删: reportMode / deadband 顶层字段 — 消费侧无落点 (见 ROADMAP 上报过滤)
-                    // v1.6 写标签: direction/writeVariable/readBackTag (缺省走 TagDefinition 构造默认)
+                                        // registerCount 顶层字段不存在; 走 variables.ByteCount (协议族字节单位)
+                                        // reportMode / deadband 顶层字段不存在 — 消费侧无落点 (见 ROADMAP 上报过滤)
+                                        // 写标签: direction/writeVariable/readBackTag (缺省走 TagDefinition 构造默认)
                     || !OptStr(tj, "direction", tag.direction, err)
                     || !OptStr(tj, "writeVariable", tag.writeVariable, err)
                     || !OptStr(tj, "readBackTag", tag.readBackTag, err)
-                    // v1.7/v1.32 标签级写能力: writeOperation + writeVariables (缺省 = 只读)
+                                        // 标签级写能力: writeOperation + writeVariables (缺省 = 只读)
                     || !OptStr(tj, "writeOperation", tag.writeOperation, err)
                     || !OptStr(tj, "writeBytesOperation", tag.writeBytesOperation, err)
-                    // v1.28: 位偏移升格为标签一等字段 (缺省 -1 = 未声明)
+                                        // 位偏移为标签一等字段 (缺省 -1 = 未声明)
                     || !OptInt(tj, "bitOffset", tag.bitOffset, err)) {
                 return false;
             }
-            // v1.32 删: tag.address — 无任何消费方 (引擎不解析、Schema/API 未登记), 已移除
+                        // tag.address 不存在 — 无任何消费方 (引擎不解析、Schema/API 未登记)
             // 注: 请求-应答超时不在此解析, 统一由 device.requestTimeoutMs 决定 (2026-08-24 收敛)
             if (tj.contains("variables")) {
                 const json& vj = tj.at("variables");
@@ -1135,7 +1135,7 @@ bool ParseRootDocImpl(const json& doc, int defaultVer,
                     tag.variables.insert(std::make_pair(it.key(), val));
                 }
             }
-            // v1.7 标签级写能力: 写请求专用变量覆盖 (可选 map<变量名, 整数>)
+                        // 标签级写能力: 写请求专用变量覆盖 (可选 map<变量名, 整数>)
             if (tj.contains("writeVariables")) {
                 const json& wv = tj.at("writeVariables");
                 if (!wv.is_object()) { err = "标签 " + tag.name + " writeVariables 须为对象"; return false; }
@@ -1209,7 +1209,7 @@ ValidationResult ConfigValidator::validateProtocol(const Core::ProtocolConfig& p
     validateFraming(proto.framing, proto.transport, r);
 
     // 模板文法已收缩为 {Name:Xn} / {Name:raw} 两段:
-    //   - builtInFunctions (v1.19) 与三段校验和文法 均已移除;
+        //   - builtInFunctions 与三段校验和文法均不支持;
     //   - 校验和改走声明式 inputs.source=auto strategy=crc + params.algo
     //     (crc16-modbus/crc16-ccitt/crc32), 派生长度走 outputs 的 derivedLength;
     //   - :auto:/:calc: 令牌移除后, 自动计算职责由 variables.source=auto 声明承担.
@@ -1228,20 +1228,20 @@ ValidationResult ConfigValidator::validateProtocol(const Core::ProtocolConfig& p
             for (size_t i = 0; i < op.requestTemplate.size(); ++i) {
                 validateTemplate(it->first, op.requestTemplate[i], r);
             }
-            // v1.7: kind 语义标注值域 (空 = 未标注, 允许)
+                        // kind 语义标注值域 (空 = 未标注, 允许)
             if (!op.kind.empty() && op.kind != "read" && op.kind != "write") {
                 r.addError("操作 " + it->first + " kind 取值非法: \"" + op.kind
                            + "\" (仅 read/write) (规则6)");
             }
-            // v1.13: 长度偏移自检 (成帧长度槽位派生变量 ↔ 模板固定字节布局)
+                        // 长度偏移自检 (成帧长度槽位派生变量 ↔ 模板固定字节布局)
             ValidateDerivedLengthOffsets(proto, op, it->first, r);
-            // 注: 操作级 timeoutMs 已移除 — 超时统一由 device.requestTimeoutMs 配置
+                        // 注: 操作级无 timeoutMs — 超时统一由 device.requestTimeoutMs 配置
         }
     }
 
     validateHandshake(proto.handshake, proto.transport, r);
 
-    // v1.27 增: outputs(derivedLength) expr 整数除法截断警告
+        // outputs(derivedLength) expr 整数除法截断警告
     //   除数非 2 的幂时, 整数除法将截断小数部分, 可能导致地址偏移.
     //   例: StartByteAddress / 3 → 地址 5 → 1 (丢失 0.666), 实际访问地址 2.
     //   仅扫描协议级 + 各操作级 outputs 段.
@@ -1282,7 +1282,7 @@ ValidationResult ConfigValidator::validateProtocol(const Core::ProtocolConfig& p
         checkDivWarning(proto.protocolName + ".operations." + kv.first, kv.second.outputs);
     }
 
-    // v1.27 增: 读路径 {WriteValue:len} 警告 — 读操作 totalBytes=0, 该属性返回 0
+        // 读路径 {WriteValue:len} 警告 — 读操作 totalBytes=0, 该属性返回 0
     //   例: 读操作 outputs 中 expr 含 {WriteValue:len} → 运行时恒为 0, 派生值无意义.
     //   写操作不受影响 (WriteBytes 路径 totalBytes 为实际载荷字节数).
     for (auto& kv : proto.operations) {
