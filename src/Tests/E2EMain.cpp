@@ -316,7 +316,7 @@ int RunE2E() {
     }
     std::cout << std::endl;
 
-    // ──v1.9 autoCompute 娈?鈥?autoIncrement / expr 策略 ──
+    // ── autoCompute 段 — autoIncrement / expr 策略 ──
     //   验证协议级 autoCompute JSON 声明被 AutoComputeProvider 正确解析, 且
     //   模板中的 {Name:auto:Xn} 通过 Resolve() 走策略而非 v1.8 隐式 Next()。
     std::cout << "--- Test 3: AutoComputeProvider (autoIncrement + expr) ---" << std::endl;
@@ -533,10 +533,10 @@ int RunE2E() {
     std::cout << std::endl;
 
     // ───Bit Granularity (v1.26) ───
-    // 绾洿璋?(鏃犵綉缁?: 线圈位寻址派生 + Bool 浣嶆彁鍙?+ 鏃ц涔夊吋瀹?+ 防御路径
+    // 纯直连 (无网络): 线圈位寻址派生 + Bool 位提取 + 整寄存器真假兼容 + 防御路径
     std::cout << "--- Test 5: Bit Granularity (v1.26) ---" << std::endl;
     {
-        // FC01 璇荤嚎鍦? StartAddress = StartByteAddress*8, RegisterCount = ByteCount*8
+        // FC01 读线圈: StartAddress = StartByteAddress*8, RegisterCount = ByteCount*8
         MyProt::Core::OperationConfig readCoil;
         readCoil.name = "ReadCoil";
         readCoil.kind = "read";
@@ -572,7 +572,7 @@ int RunE2E() {
         autoProvider.DeclareJson(
             "{\"TransactionID\":{\"strategy\":\"autoIncrement\",\"params\":{\"seed\":1}}}");
 
-        // 1) 璇昏姹傛淳鐢? ByteCount=1 鈫?RegisterCount=0x0008
+        // 1) 读请求派生: ByteCount=1 → RegisterCount=0x0008
         {
             MyProt::Core::TagDefinition tag;
             tag.name = "Coil0"; tag.deviceId = "PLC-001";
@@ -599,7 +599,7 @@ int RunE2E() {
             }
         }
 
-        // 2) 鍚堝苟鎵硅法搴? ByteCount=2 鈫?RegisterCount=0x0010
+        // 2) 合并批跨度: ByteCount=2 → RegisterCount=0x0010
         {
             std::unordered_map<std::string, uint32_t> vars;
             vars["StartByteAddress"] = 0;
@@ -644,7 +644,7 @@ int RunE2E() {
             }
         }
 
-        // 4-7) 鍝嶅簲浣嶈В鏋?(FC01 式响应帧: TID PID LEN=4 UID FC BC=1 DATA)
+        // 4-7) 响应位解析 (FC01 式响应帧: TID PID LEN=4 UID FC BC=1 DATA)
         std::vector<uint8_t> respFrame;
         respFrame.insert(respFrame.end(),
                          {0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x01, 0x01, 0x01, 0x08});
@@ -663,7 +663,7 @@ int RunE2E() {
         };
 
         {
-            // 4) 鏄惧紡澹版槑鍗冲惎鐢? 数据 0x08, bit=0 鈫?false; bit=3 鈫?true
+            // 4) 显式声明即启用: 数据 0x08, bit=0 → false; bit=3 → true
             auto tv0 = parser.Parse(respView, readCoil.responseParser,
                                     MakeBoolTag(true, 0, 1),
                                     MyProt::Core::ByteOrder::BigEndian);
@@ -692,7 +692,7 @@ int RunE2E() {
                   tv3b.has_value() && tv3b.value().typedValue.b == false);
         }
         {
-            // 6) 遗留兼容: 鏈０鏄?BitOffset 鈫?raw[0]!=0 鏃ц涔?(0x08 鈫?true)
+            // 6) 兼容: 未声明 BitOffset → raw[0]!=0 (整寄存器真假; 0x08 → true)
             auto tvOld = parser.Parse(respView, readCoil.responseParser,
                                       MakeBoolTag(false, 0, 1),
                                       MyProt::Core::ByteOrder::BigEndian);
@@ -712,11 +712,11 @@ int RunE2E() {
     std::cout << std::endl;
 
     // ───S7 字节单位地址接线 (v1.27) ───
-    // 绾洿璋?(鏃犵綉缁?: StartByteAddress/ByteCount/BitOffset 鈫?S7 三字节地址 (字节地址<<3)
-    // 拆分派生 + 鎸夊搴︽媶鍒嗙殑璇?op (Bit/Word/DWord/Real) Length 派生 + 写路径位寻址
+    // 纯直连 (无网络): StartByteAddress/ByteCount/BitOffset → S7 三字节地址 (字节地址<<3)
+    // 拆分派生 + 按宽度拆分的读 op (Bit/Word/DWord/Real) Length 派生 + 写路径位寻址
     std::cout << "--- Test 6: S7 Byte-Unit Address Wiring (v1.27) ---" << std::endl;
     {
-        // 璇?op 构造器 鈥?涓?configs/protocols/s7-1200.json 同步 (浼犺緭澶у皬纭紪鐮佹ā鏉?
+        // 读 op 构造器 — 与 configs/protocols/s7-1200.json 同步 (传输大小硬编码模板)
         auto MakeS7ReadOp = [](const char* name, const char* tsByte,
                                const char* lengthExpr) {
             MyProt::Core::OperationConfig op;
@@ -750,8 +750,8 @@ int RunE2E() {
         MyProt::Core::OperationConfig readDWord = MakeS7ReadOp("ReadVarDWord", "06", "ByteCount / 4");
         MyProt::Core::OperationConfig readReal  = MakeS7ReadOp("ReadVarReal",  "08", "ByteCount / 4");
 
-        // 鍐?op 鈥?涓?configs/protocols/s7-1200.json 同步 (v1.28 鎸夊搴︽媶鍒?
-        // item 长度=鍏冪礌鏁? 鏁版嵁鍖?TS 鐢?TS_Res 码表 03/04/07, 位写 DataBits 纭紪鐮?1)
+        // 写 op — 与 configs/protocols/s7-1200.json 同步 (按宽度拆分)
+        // item 长度=元素数, 数据区 TS 取 TS_Res 码表 03/04/07, 位写 DataBits 硬编码 1)
         MyProt::Core::OperationConfig writeReal;
         writeReal.name = "WriteVarReal";
         writeReal.kind = "write";
@@ -841,7 +841,7 @@ int RunE2E() {
             }
         }
 
-        // 2) Real 璺ㄥ瓧鑺? StartByteAddress=1000 鈫?S7 地址 8000 鈫?Mid=0x1F, Lo=0x40
+        // 2) Real 跨字节: StartByteAddress=1000 → S7 地址 8000 → Mid=0x1F, Lo=0x40
         {
             std::unordered_map<std::string, uint32_t> vars;
             vars["StartByteAddress"] = 1000;
@@ -890,8 +890,8 @@ int RunE2E() {
             }
         }
 
-        // 4) Bit 璇? BYTE 宽度 (TS=03) 鈥?仿真器对 BIT 璇诲拷鐣?Amount 鍙洖鍗曠偣鍊?
-        //    瀛楄妭璇昏繑鍥炲畬鏁村瓧鑺?鈫?解析端位提取同时兼容仿真器与真实 CPU; Length=ByteCount
+        // 4) Bit 读: BYTE 宽度 (TS=03) — 仿真器对 BIT 读忽略 Amount, 只回单点值
+        //    字节读返回完整字节 → 解析端位提取同时兼容仿真器与真实 CPU; Length=ByteCount
         {
             std::unordered_map<std::string, uint32_t> vars;
             vars["StartByteAddress"] = 0;
@@ -954,7 +954,7 @@ int RunE2E() {
             }
         }
 
-        // 6) WriteVarBit: 浣嶅鍧€鍚?BitOffset; item 鍏冪礌鏁?鏁版嵁鍖?TS_Res=03/DataBits=1 纭紪鐮?
+        // 6) WriteVarBit: 位寻址含 BitOffset; item 元素数, 数据区 TS_Res=03/DataBits=1 硬编码
         {
             std::unordered_map<std::string, uint32_t> vars;
             vars["StartByteAddress"] = 0;
@@ -990,8 +990,8 @@ int RunE2E() {
     // ───LengthFieldFrameParser 甯ф娴?───
     std::cout << "--- Test 7: LengthFieldFrameParser ---" << std::endl;
     {
-        // Modbus TCP 鐢? transId(2)+protoId(2)+length(2)+unitId(1)+FC(1)+byteCount(1)+data(6) = 15
-        // length 瀛楁鍊?= 9 (unitId+FC+byteCount+data)
+        // Modbus TCP 由 transId(2)+protoId(2)+length(2)+unitId(1)+FC(1)+byteCount(1)+data(6) = 15
+        // length 字段值 = 9 (unitId+FC+byteCount+data)
         // lengthIncludesHeader=false:
         //   totalFrameLen = headerLength(6) + parsedLen(9) + adjustment(0) = 15 閴?
         MyProt::Core::LengthFieldConfig config;
@@ -1068,7 +1068,7 @@ int RunE2E() {
             Check("会话变量读写", val.has_value() && val.value() == "01");
         }
 
-        // 娴嬭瘯鏈敞鍐岃澶?
+        // 测试未注册设备
         auto noSession = mgr.GetSession("NONEXISTENT");
         Check("未注册设备返回 null", noSession == nullptr);
 
