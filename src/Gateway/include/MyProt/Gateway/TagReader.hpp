@@ -22,7 +22,7 @@
 
 namespace MyProt { namespace Gateway {
 
-/// v1.6 写后读回校验参数 — 由调用方 (App 装配层) 解析组装:
+/// 写后读回校验参数 — 由调用方 (App 装配层) 解析组装:
 ///   readOp/readVars  构建读回请求的操作模板与变量表 (含地址/长度语义)
 ///   expectedBytes    期望数据字节 (标量按 finalType 编码; 变长 = 写入字节)
 ///   tagLabel         诊断上下文 (Error.context)
@@ -32,15 +32,15 @@ struct WriteBackCheck {
     std::unordered_map<std::string, std::uint32_t> readVars;
     std::vector<std::uint8_t> expectedBytes;
     std::string tagLabel;
-    // v1.9 增: 读回 Build 同步 autoCompute 规则用 (空 = 不动).
+        // 读回 Build 同步 autoCompute 规则用 (空 = 不动).
     //   RuntimeGlue::BuildWriteBackCheck 快照协议 autoCompute 段 (经 MergeOpAutoComputeJson) 传入.
-    //   v1.10 改: 该字段已合并操作 inputs 中 source=auto 的覆盖项 (BuildWriteBackCheck 在
+        //   该字段已合并操作 inputs 中 source=auto 的覆盖项 (BuildWriteBackCheck 在
     //   装入 readOp 之后调用 MergeOpAutoComputeJson 处理, 不再只是 protocol 快照).
     std::string autoComputeJson;
 };
 
-/// v1.10 增: 协议级 + op 级 autoCompute 合并 (公开给 App 层 RuntimeGlue 用).
-///   v1.17 (方案B): 协议级由 RequestBuilder::CollectAutoComputeJson 重建 (运行时从 inputs 提取,
+/// 协议级 + op 级 autoCompute 合并 (公开给 App 层 RuntimeGlue 用).
+///   协议级由 RequestBuilder::CollectAutoComputeJson 重建 (运行时从 inputs 提取,
 ///   排除了 outputs 派生输出 — 那由 WriteBytes 阶段特判注入).
 ///   op 级覆盖从 op.inputs 中 source=auto 的条目累加 (字段级覆盖同名变量).
 ///   协议级同名键被 op 级覆盖 (后键覆盖前键).
@@ -64,12 +64,12 @@ public:
                    int requestTimeoutMs,
                    BatchHandler handler);
 
-    /// 单寄存器写 (v1.5 /write): 按协议写操作模板构建请求 → 发送 →
+        /// 单寄存器写 (/write): 按协议写操作模板构建请求 → 发送 →
     /// 校验 echo (validCondition), 不解析数据区。
     /// 写操作名约定 "WriteSingleRegister"; 变量表 = tag.variables +
-    /// StartAddress + {valueVariable}=value (v1.6: 变量名由调用方指定,
+        /// StartAddress + {valueVariable}=value (变量名由调用方指定,
     /// 写标签用 tag.writeVariable, legacy 固定 "WriteValue")。
-    /// backCheck 非空 (v1.6 泛化 P1 B): 写 echo 校验通过后立即按
+        /// backCheck 非空: 写 echo 校验通过后立即按
     /// backCheck->readOp/readVars 构建读请求, 以
     /// readOp.responseParser.dataStartIndex 为数据区起点,
     /// 逐字节比较 expectedBytes; 不一致回调 ReadBackMismatch。
@@ -90,8 +90,8 @@ public:
     /// {Name:raw} 占位符 (如 Modbus FC16 多寄存器写、S7 ANY 指针)。
     /// 写操作名由调用方指定 (如 "WriteMultipleRegisters");
     /// 变量表 = tag.variables + StartAddress + variableBytesHex 内容。
-    /// backCheck 语义同 WriteOnce (v1.6: 读回不再复用写 op 模板 —
-    /// 由调用方显式给读 op + 期望字节, 修复 v1.5 复用写模板的缺陷)。
+        /// backCheck 语义同 WriteOnce (读回不复用写 op 模板 —
+        /// 由调用方显式给读 op + 期望字节 — 复用写模板会发出错误请求)。
     void WriteBytes(const Core::TagDefinition& tag,
                     Core::ProtocolConfig protocol,
                     const std::string& writeOperation,
@@ -102,7 +102,7 @@ public:
                     WriteHandler handler);
 
 private:
-    /// v1.6 写后读回统一执行体: 构建 check->readOp 读请求 → 发送 →
+        /// 写后读回统一执行体: 构建 check->readOp 读请求 → 发送 →
     /// 以 readOp.responseParser.dataStartIndex 为数据区起点,
     /// 逐字节比较 check->expectedBytes。终态恰好回调 done 一次。
     void RunReadBack(Transport::IChannel& channel,
