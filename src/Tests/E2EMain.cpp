@@ -231,7 +231,7 @@ int RunE2E() {
         std::vector<MyProt::Core::TagDefinition> tags(5);
         tags[0].name = "Temperature"; tags[0].deviceId = "PLC-001";
         tags[0].operation = "ReadHR"; tags[0].scanRateMs = 1000;
-        // v1.25: StartByteAddress (字节) + ByteCount (字节)
+                // StartByteAddress (字节) + ByteCount (字节)
         tags[0].variables["StartByteAddress"] = 0; tags[0].variables["ByteCount"] = 4;
 
         tags[1].name = "Pressure"; tags[1].deviceId = "PLC-001";
@@ -318,13 +318,13 @@ int RunE2E() {
 
     // ── autoCompute 段 — autoIncrement / expr 策略 ──
     //   验证协议级 autoCompute JSON 声明被 AutoComputeProvider 正确解析, 且
-    //   模板中的 {Name:auto:Xn} 通过 Resolve() 走策略而非 v1.8 隐式 Next()。
+        //   模板中的 {Name:Xn} 通过 Resolve() 走声明策略, 而非隐式的 Next() 自增。
     std::cout << "--- Test 3: AutoComputeProvider (autoIncrement + expr) ---" << std::endl;
     {
         MyProt::Engine::AutoComputeProvider autoProvider;
 
         // 1. autoIncrement 策略: 显式声明 TransactionID, seed=1 鈫?首包 = 0x0001
-        //   v1.9.1 改: params 归一 — seed 收归 params 子对象
+                //   params 归一 — seed 位于 params 子对象
         const std::string ac1 =
             R"({"TransactionID":{"strategy":"autoIncrement","params":{"seed":1}}})";
         Check("DeclareJson(autoIncrement) 成功", autoProvider.DeclareJson(ac1));
@@ -344,7 +344,7 @@ int RunE2E() {
         const std::string ac2 =
             R"({"PDULength":{"strategy":"expr","params":{"value":"RegisterCount + 7"}}})";
         Check("DeclareJson(expr) 成功", autoProvider.DeclareJson(ac2));
-        // 整段重声明清除旧规则 (v1.9 设计): TransactionID 已不在 rules 内
+                // 整段重声明会清除旧规则: TransactionID 已不在 rules 内
         Check("整段重声明清除旧规则",
          !autoProvider.IsDeclared("TransactionID"));
         Check("PDULength 已声明",
@@ -362,7 +362,7 @@ int RunE2E() {
         uint64_t pdu2 = autoProvider.Resolve("PDULength", 2, ctx2);
         Check("expr #2: RegisterCount=5 鈫?PDULength=12",  pdu2 == 12);
 
-        // 3. 端到端: 模拟 modbus-tcp 写多寄存器请求, 验证整包字节与 v1.8 一致
+                // 3. 端到端: 模拟 modbus-tcp 写多寄存器请求, 验证整包字节
         //   模板: {TransactionID:X4} {ProtocolID:X4} {PDULength:auto:X4}
         //         {UnitID:X2} 10 {StartAddress:X4} {RegisterCount:X4}
         //         {ByteCount:X2} {Payload:raw}
@@ -370,7 +370,7 @@ int RunE2E() {
         //   (TransactionID=1, PDULength=10=3+7, payload=6字节)
         MyProt::Core::ProtocolConfig proto;
         proto.protocolName = "ModbusTCP";
-        // v1.17 (方案B): 统一 inputs 段声明输入 (剔除旧 proto.variables 单段);
+                // 统一 inputs 段声明输入 (配置中无 proto.variables 单段);
         //   自动类输入经 RequestBuilder::CollectAutoComputeJson 重建喂 AutoComputeProvider.
         proto.inputs["TransactionID"].source = "auto";
         proto.inputs["TransactionID"].strategy = "autoIncrement";
@@ -446,7 +446,7 @@ int RunE2E() {
             "00", "00", "00", "06", "01", "03",
             "{StartAddress:X4}", "{RegisterCount:X4}"
         };
-        // v1.25: 协议族单位由 outputs 派生 (引擎零协议族假设)
+                // 协议族单位由 outputs 派生 (引擎零协议族假设)
         { MyProt::Core::VariableConfig va; va.source = "auto";
           va.strategy = "derivedLength"; va.expr = "StartByteAddress / 2";
           op.outputs["StartAddress"] = va; }
@@ -470,7 +470,7 @@ int RunE2E() {
         MyProt::Engine::AutoComputeProvider autoProvider;
         autoProvider.DeclareJson(
             "{\"TransactionID\":{\"strategy\":\"autoIncrement\",\"params\":{\"seed\":1}}}");
-        // v1.25: Build 前派生注入 (StartAddress/RegisterCount → StartByteAddress/ByteCount)
+                // Build 前派生注入 (StartAddress/RegisterCount → StartByteAddress/ByteCount)
         std::unordered_map<std::string, uint32_t> vars = tag.variables;
         {
             const MyProt::Engine::TemplateLayout layout =
@@ -532,7 +532,7 @@ int RunE2E() {
     }
     std::cout << std::endl;
 
-    // ───Bit Granularity (v1.26) ───
+        // ───Bit Granularity ───
     // 纯直连 (无网络): 线圈位寻址派生 + Bool 位提取 + 整寄存器真假兼容 + 防御路径
     std::cout << "--- Test 5: Bit Granularity (v1.26) ---" << std::endl;
     {
@@ -579,7 +579,7 @@ int RunE2E() {
             tag.operation = "ReadCoil"; tag.finalType = "Bool";
             tag.variables["StartByteAddress"] = 0;
             tag.variables["ByteCount"] = 1;
-            tag.bitOffset = 0;   // v1.28: 位偏移为标签一等字段
+                        tag.bitOffset = 0;   // 位偏移为标签一等字段
             std::unordered_map<std::string, uint32_t> vars = tag.variables;
             {
                 const MyProt::Engine::TemplateLayout layout =
@@ -658,7 +658,7 @@ int RunE2E() {
             t.operation = "ReadCoil"; t.finalType = "Bool";
             t.variables["StartByteAddress"] = 0;
             t.variables["ByteCount"] = byteCount;
-            if (declareBit) t.bitOffset = static_cast<int>(bit);   // v1.28: 标签一等字段
+                        if (declareBit) t.bitOffset = static_cast<int>(bit);   // 标签一等字段
             return t;
         };
 
@@ -711,7 +711,7 @@ int RunE2E() {
     }
     std::cout << std::endl;
 
-    // ───S7 字节单位地址接线 (v1.27) ───
+        // ───S7 字节单位地址接线 ───
     // 纯直连 (无网络): StartByteAddress/ByteCount/BitOffset → S7 三字节地址 (字节地址<<3)
     // 拆分派生 + 按宽度拆分的读 op (Bit/Word/DWord/Real) Length 派生 + 写路径位寻址
     std::cout << "--- Test 6: S7 Byte-Unit Address Wiring (v1.27) ---" << std::endl;
@@ -1303,7 +1303,7 @@ int RunE2E() {
         }
 
         // 8e: 未声明函数 {L:calc:X4} → 规则6
-        //     (三段文法已移除 — :auto: / :calc: / 内联校验和均非法,
+                //     (三段文法不受支持 — :auto: / :calc: / 内联校验和均非法,
         //      calc 不是合法函数关键字 → 占位符文法不合法, 由规则6 拒绝)
         {
             const std::string bad = Patch(kValidProto,
@@ -1328,7 +1328,7 @@ int RunE2E() {
                   && VrHas::Error(res.value(), "规则12"));
         }
 
-        // 11-14/15/16: enum 候选形态 (Config_Schema §3.2 契约, v1.32 实现补齐) —
+                // 11-14/15/16: enum 候选形态 (Config_Schema §3.2 契约) —
         //   裸数字简写 + {value,label} 对象混合合法; 值重复 / 非法元素 → 加载期拒绝
         //   注: 枚举元素检查在解析阶段, 失败经 validateProtocolJson 包装为
         //   Unexpected("协议配置结构错误: ..."), 故断言错误消息而非 ValidationResult.
@@ -1651,7 +1651,7 @@ int RunE2E() {
             "Connection: close\r\n\r\n" + badBody;
         const std::string putResp = HttpGet(putReq, 18080);
         Check("PUT 非法配置 → 400", putResp.find("400") != std::string::npos);
-        // v1.32: 保存失败回传**全部**阻断项 (编号换行清单), 管理面按行渲染 —
+                // 保存失败回传**全部**阻断项 (编号换行清单), 管理面按行渲染 —
         //   原实现只回第一条, 作者需"改一条存一次"。此处锁住清单格式。
         Check("PUT 非法配置 → 回传编号清单 (共 N 项)",
               putResp.find("共 ") != std::string::npos
@@ -1706,7 +1706,7 @@ int RunE2E() {
         writeOp.responseParser.dataStartIndex = 12;   // FC06 回显请求: 数据区自第 12 字节起
         proto.operations["WriteSingleRegister"] = writeOp;
 
-        // v1.1: simulation 已从 ProtocolConfig 移至 ServerConfig — 测试中
+                // simulation 位于 ServerConfig (不在 ProtocolConfig) — 测试中
         //       使用独立的 SimulationConfig 实例喂给 SimulationServer.
         MyProt::Core::SimulationConfig sim;
         sim.listenPort = 11526;   // 独占测试端口: 避开 configs/server.json 的 11520
@@ -2377,7 +2377,7 @@ int RunE2E() {
         };
         const std::string protoPath = pDir + "\\simmodbus.json";
         { std::ofstream f(protoPath.c_str()); f << ProtoJson(11531); }
-        // server.json: 仿真段归属服务端配置 (v1.1 起从协议 JSON 迁出);
+                // server.json: 仿真段归属服务端配置 (不在协议 JSON);
         //   操作描述符 (kind/addressVar/countVar) 由协议 JSON 推导,
         //   故此处只需 listenPort + initialValues.
         auto WriteSimServerJson = [&](uint16_t port, int initVal) {
@@ -2548,7 +2548,7 @@ int RunE2E() {
         std::cout << std::endl;
     }
 
-    // ──閸愭瑦鎼锋担?/write (v1.5 閸忋劑鎽肩捄顖炴４閻?
+        // ── 写端点 /write (单寄存器写) ── (原文乱码, 按上下文重建)
     //      POST /api/data/write 閳?WriteOnce(FC06) 閳?娴犺法婀￠崳銊ュ敶鐎?
     //      閳?轮询回读 R.W 閺傛澘鈧? ──
     std::cout << "--- Test 17: Write via /api/data/write ---" << std::endl;
@@ -3143,7 +3143,7 @@ int RunE2E() {
             std::string("Content-Length: ") +
             std::to_string(bytesBody.size()) + "\r\n"
             "Connection: close\r\n\r\n" + bytesBody;
-        // v1.24: 仿真器未建立 (E2E 不写 server.json) → 连接层 503;
+                // 仿真器未建立 (E2E 不写 server.json) → 连接层 503;
         //   断言本意是 "bytes 写链路被拒且不崩" — 放宽为非 2xx 即可.
         const std::string v15eResp = VHttpReq(bytesReq);
         Check("19-5: bytes path rejected (non-2xx, mutex released)",
@@ -3173,7 +3173,7 @@ int RunE2E() {
                 const std::string wresp = VHttpReq(wreq);
                 if (wresp.empty()) continue;
                 ++t15fResp;
-                // v1.32: R.W15 无 tag.writeOperation (仅声明 writeBytesOperation)
+                                // R.W15 无 tag.writeOperation (仅声明 writeBytesOperation)
                 //   → 标量写 fail-fast, 非 2xx (标签未声明写能力, 配置错误).
                 //   断言本意: 写被拒 + 互斥位释放 → 非 2xx 即可.
                 if (wresp.find("HTTP/1.1 2") == std::string::npos) {
