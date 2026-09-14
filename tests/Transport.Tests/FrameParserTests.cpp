@@ -2,7 +2,7 @@
 // v1 撤回 FixedFrameParser (A5) — TcpChannel 走内联 f.fixed.fixedLength, 不再独立类
 
 #include "MyProt/Transport/LengthFieldFrameParser.hpp"
-#include <gtest/gtest.h>
+#include "MiniTest.hpp"
 
 using namespace MyProt::Transport;
 using namespace MyProt::Core;

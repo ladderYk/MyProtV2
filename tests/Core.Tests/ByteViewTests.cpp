@@ -1,7 +1,7 @@
 // tests/Core.Tests/ByteViewTests.cpp — ByteView 单元测试占位
 
 #include "MyProt/Core/ByteView.hpp"
-#include <gtest/gtest.h>
+#include "MiniTest.hpp"
 
 using namespace MyProt::Core;
 

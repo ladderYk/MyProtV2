@@ -2,7 +2,7 @@
 // 测试框架: GoogleTest 1.8.x (VS2015 兼容, ADR-0010 §4)
 
 #include "MyProt/Core/Expected.hpp"
-#include <gtest/gtest.h>
+#include "MiniTest.hpp"
 
 using namespace MyProt::Core;
 
