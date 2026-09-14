@@ -26,7 +26,7 @@ class SchemaRegistry {
 public:
     /// tags.json 根层字段 (schemaVersion/resilience/webApi/devices/tags)
     static const std::vector<FieldDescriptor>& RootFields();
-    /// 协议 JSON 根层字段 (transport/framing/operations/handshake...; builtInFunctions 已移除 v1.19)
+    /// 协议 JSON 根层字段 (transport/framing/operations/handshake...; 不含 builtInFunctions)
     static const std::vector<FieldDescriptor>& ProtocolFields();
     /// devices[] 条目字段
     static const std::vector<FieldDescriptor>& DeviceFields();
