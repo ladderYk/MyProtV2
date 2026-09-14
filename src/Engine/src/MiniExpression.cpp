@@ -175,9 +175,9 @@ std::unique_ptr<Node> Parser::ParseIdent() {
     return MakeVar(name);
 }
 
-// v1.21: {name:len} — 引用 inputs 变量的字节长度 (载荷变量=实际字节数, 其余=模板渲染宽度)
+// {name:len} — 引用 inputs 变量的字节长度 (载荷变量=实际字节数, 其余=模板渲染宽度)
 //   Var 节点文本保留 "{name:prop}" 原样, 求值端按 prop 分发查表.
-// v1.25 (ADR-0012 §1.1): 属性扩展 — offset (占位符首现偏移) / fixed (Frame: 模板固定段总宽);
+// 属性集合 (ADR-0012 §1.1): len / offset (占位符首现偏移) / fixed (Frame: 模板固定段总宽);
 //   分发在求值端 (ResolveDerivedLength lookup), 词法只负责接受属性名集合.
 std::unique_ptr<Node> Parser::ParseLenToken() {
     SkipWs();

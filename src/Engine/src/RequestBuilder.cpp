@@ -60,12 +60,12 @@ Core::Expected<Core::Bytes> RenderTemplate(
         if (part.empty()) continue;
 
         if (part.size() >= 2 && part[0] == '{' && part[part.size() - 1] == '}') {
-            // {Name:Xn} 或 {Name:raw}; auto 行为由 variables.source=auto 声明驱动 (v1.16 去 :auto: 令牌)
+            // {Name:Xn} 或 {Name:raw}; 是否 auto 由 autoCompute 声明驱动 — 不接受 :auto: 令牌
             std::string inner = part.substr(1, part.size() - 2);
             std::vector<std::string> segs = SplitSegments(inner);
 
             std::string name = segs[0];
-            // v1.27: 变量别名解析 — 用户自定义名 → 引擎内部名
+            // 变量别名解析 — 用户自定义名 → 引擎内部名
             auto ait = varAliasMap.find(name);
             if (ait != varAliasMap.end()) name = ait->second;
 
@@ -88,7 +88,7 @@ Core::Expected<Core::Bytes> RenderTemplate(
                 continue;
             }
 
-            // v1.16: 模板函数令牌收敛为 CRC/LRC/XOR; :auto: 已移除, auto 行为由声明驱动
+            // 模板函数令牌仅 CRC/LRC/XOR; auto 行为由 autoCompute 声明驱动
             std::string widthSpec;
             if (segs.size() == 2) {
                 widthSpec = segs[1];
@@ -112,7 +112,7 @@ Core::Expected<Core::Bytes> RenderTemplate(
             std::unordered_map<std::string, uint32_t>::const_iterator it = variables.find(name);
             if (it != variables.end()) {
                 value = it->second;                                  // 静态值 / 标签值优先
-            } else if (autoProvider.IsDeclared(name)) {              // v1.16: 按声明路由到 auto 策略
+            } else if (autoProvider.IsDeclared(name)) {              // 按声明路由到 auto 策略
                 BuildContext ctx;
                 ctx.variables = &variables;
                 ctx.frameSoFar = &out;
@@ -122,8 +122,8 @@ Core::Expected<Core::Bytes> RenderTemplate(
                                         "模板变量未提供 (须在 variables 声明 static/auto)", name);
             }
 
-            // v1.25 (ADR-0012 附录A 追加): 溢出拦截 — 派生值超出格式宽度时高位原被
-            // 静默截断 (如 {PDULength:X4} 上限 65535, 大载荷下帧长溢出), 现显式失败
+            // 溢出拦截 (ADR-0012 附录A): 派生值超出格式宽度时显式失败 —
+            // 不允许高位静默截断 (如 {PDULength:X4} 超 65535 会让帧长字段偏小, 设备侧解析错位)
             const uint64_t maxVal = (byteWidth >= 8)
                 ? ~0ULL
                 : ((1ULL << (8 * byteWidth)) - 1ULL);
@@ -188,7 +188,7 @@ Core::Expected<Core::Bytes> RequestBuilder::BuildBytes(
     return RenderTemplate(op, variables, &variableBytesHex, varAliasMap, autoProvider);
 }
 
-// v1.1 增: 合并协议级 defaultVariables + 标签级 variables
+// 合并协议级 defaultVariables + 标签级 variables
 // 协议 default 为基, 标签同名键覆盖, 未覆盖键继承协议默认
 std::unordered_map<std::string, uint32_t> RequestBuilder::MergeVariables(
     const std::unordered_map<std::string, uint32_t>& protocolDefaults,
@@ -200,7 +200,7 @@ std::unordered_map<std::string, uint32_t> RequestBuilder::MergeVariables(
     return merged;
 }
 
-// v1.10 增: 协议级 + op 级 + 标签级 三段合并. 优先级 标签 > op > 协议.
+// 协议级 + op 级 + 标签级 三段合并. 优先级 标签 > op > 协议.
 std::unordered_map<std::string, uint32_t> RequestBuilder::MergeVariables(
     const std::unordered_map<std::string, uint32_t>& protocolDefaults,
     const std::unordered_map<std::string, uint32_t>& opStaticVariables,
@@ -215,7 +215,7 @@ std::unordered_map<std::string, uint32_t> RequestBuilder::MergeVariables(
     return merged;
 }
 
-// v1.11: 从协议 inputs 段提取 source=static 条目 (旧 protocol.defaultVariables / v1.16 protocol.variables 语义)
+// 从协议 inputs 段提取 source=static 条目 (协议级变量基准; 配置形态无单段 variables — 见 ADR-0005)
 std::unordered_map<std::string, uint32_t> RequestBuilder::CollectStaticVariables(
     const Core::ProtocolConfig& protocol) {
     std::unordered_map<std::string, uint32_t> out;
@@ -227,7 +227,7 @@ std::unordered_map<std::string, uint32_t> RequestBuilder::CollectStaticVariables
     return out;
 }
 
-// v1.11: 从协议 inputs 段重建 autoComputeJson (旧 protocol.autoComputeJson 语义);
+// 从协议 inputs 段重建 autoComputeJson (auto 声明的唯一来源是 inputs.source=auto);
 //   outputs(derivedLength) 由参数层预解析特判注入, 不入此段 (求值时机依赖载荷字节数).
 std::string RequestBuilder::CollectAutoComputeJson(const Core::ProtocolConfig& protocol) {
     std::string out;
@@ -273,7 +273,7 @@ std::string RequestBuilder::MergeOpAutoComputeJson(
     return "{" + opPart + "}";
 }
 
-// ── v1.25 (ADR-0012): 模板布局与派生长度注入 ──────────────────────────────
+// ── 模板布局与派生长度注入 (ADR-0012) ──────────────────────────────
 
 // 扫描 requestTemplate 产出布局表. 元素二分法与 RenderTemplate 一致:
 // 整元素占位符 ({...}) 或 hex 字面量; 未知格式记 hasUnknown (宽度按 0).
@@ -324,7 +324,7 @@ TemplateLayout RequestBuilder::BuildTemplateLayout(
     return out;
 }
 
-// 派生长度变量注入 (原 Gateway::TagReader 匿名实现上移, v1.11 语义不变):
+// 派生长度变量注入 (唯一实现在 Engine, Gateway/Service 共用同一份语义):
 // protocolOutputs ∪ opOutputs 中 derivedLength 声明按 expr 求值注入;
 // {name:len} 宽度表来自 layout (raw 标记位替换为实际载荷字节数).
 void RequestBuilder::InjectDerivedLengthVariables(
@@ -356,8 +356,8 @@ void RequestBuilder::InjectDerivedLengthVariables(
                 v.expr, &variables, &varLen, &layout, val, &derr)) {
             variables[kv.first] = val;
         } else {
-            // v1.27: 派生值求值失败 — 模板渲染期将报 "模板变量未提供", 此处记录原因供诊断
-            // (静默跳过, 不在构建期打断请求; 渲染期错误更直观)
+            // 派生值求值失败 — 模板渲染期将报 "模板变量未提供", 此处记录原因供诊断
+            // (不在构建期打断请求; 渲染期错误更直观)
             (void)derr; // 未用, 保留供调试
         }
     }

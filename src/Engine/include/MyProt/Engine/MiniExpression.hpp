@@ -1,5 +1,5 @@
 // src/Engine/include/MyProt/Engine/MiniExpression.hpp
-// 极简算术表达式求值器 (v1.9, 零依赖)
+// 极简算术表达式求值器 (零依赖)
 //   支持: 数字 (10/0x1F), 变量名, + - * / % & | ^ ~ ( ), 一元负号
 //   不支持: 函数调用, 字符串, 条件分支 (这些用 autoCompute 策略代替)
 //
@@ -73,7 +73,7 @@ private:
     std::unique_ptr<Node> ParsePrimary(); // 数字/变量/{name:len}/(expr)
     std::unique_ptr<Node> ParseNumber();
     std::unique_ptr<Node> ParseIdent();
-    std::unique_ptr<Node> ParseLenToken(); // v1.21: {name:len} 字节长度引用
+    std::unique_ptr<Node> ParseLenToken(); // {name:len} 字节长度引用
 
     // 求值
     uint64_t EvalNode(const Node& n, const VarLookup& lookup) const;

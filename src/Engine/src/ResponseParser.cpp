@@ -35,8 +35,8 @@ bool CheckValidCondition(const Core::ByteView& resp, const std::string& cond) {
 }
 
 /// 依 finalType 填充 TypedValue; 成功 true / 类型不支持或数据不足 false
-/// v1.26: bitOffset >= 0 时 Bool 走位提取 (raw[0]>>bit)&1;
-///        -1 = 未声明 BitOffset, 保持 raw[0]!=0 旧语义 (Bool-from-寄存器兼容).
+/// Bool 两种读法: 声明了 BitOffset(>=0) → 位提取 (raw[0]>>bit)&1;
+///        未声明(-1) → raw[0]!=0 (整寄存器真假判断, 兼容按寄存器读的标签).
 bool FillTypedValue(const uint8_t* raw, size_t rawLen,
                     const std::string& finalType, Core::ByteOrder bo,
                     int bitOffset,
@@ -55,9 +55,9 @@ bool FillTypedValue(const uint8_t* raw, size_t rawLen,
         if (rawLen < 1) return false;
         out.type = Core::ValueType::Bool;
         if (bitOffset >= 0) {
-            out.b = ((raw[0] >> bitOffset) & 1) != 0;   // v1.26 位提取
+            out.b = ((raw[0] >> bitOffset) & 1) != 0;   // 位提取
         } else {
-            out.b = raw[0] != 0;                        // v1.25 前旧语义
+            out.b = raw[0] != 0;                        // 整寄存器真假
         }
         return true;
     }
@@ -155,10 +155,9 @@ Core::Expected<Core::TagValue> ResponseParser::Parse(const Core::ByteView& respo
                                 "dataStartIndex 越界");
     }
 
-    // v1.25 改: 数据区字节数 = tag.variables["ByteCount"] (协议 JSON derivedLength 派生后填入).
-    //   跨协议统一字节单位, 引擎零"寄存器=2字节"硬编码; Modbus tag ByteCount=N×2, S7 tag ByteCount=N.
-    //   v1.27 改: 未声明 ByteCount 时不再假定 2 字节 (16-bit 寄存器知识泄漏),
-    //            直接走下方 rawLen==0 回退 → 取剩余全量 (数据区起点至帧尾).
+    // 数据区字节数 = tag.variables["ByteCount"] (由协议 outputs.derivedLength 派生后注入).
+    //   跨协议统一字节单位: 引擎不假定"寄存器=2 字节" — Modbus tag 声明 ByteCount=N×2, S7 声明 N.
+    //   未声明 ByteCount 时不假定任何宽度, 走下方 rawLen==0 回退 → 取剩余全量 (数据区起点至帧尾).
     size_t offset = static_cast<size_t>(start);
     size_t rawLen = 0;  // 0 = 未声明 ByteCount, 于下方回退为剩余全量
     {
@@ -166,8 +165,8 @@ Core::Expected<Core::TagValue> ResponseParser::Parse(const Core::ByteView& respo
         if (vit != tag.variables.end()) rawLen = static_cast<size_t>(vit->second);
     }
 
-    // v1.28: Bool 位提取偏移 — 直接读标签一等字段 tag.bitOffset (0-7, -1 = 未声明);
-    //   未声明走 raw[0]!=0 旧语义. 防御: >7 视为配置错误
+    // Bool 位提取偏移 — 直接读标签一等字段 tag.bitOffset (0-7, -1 = 未声明);
+    //   未声明走 raw[0]!=0 整寄存器真假. 防御: >7 视为配置错误
     //   (正常应由 ConfigDeepValidator 规则13 拦截).
     int bitOffset = tag.bitOffset;
     if (bitOffset > 7) {

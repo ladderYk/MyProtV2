@@ -283,8 +283,8 @@ struct CrcTable {
     }
 };
 
-// v1.29: 只认三个受支持算法名 — 与 ConfigDeepValidator 的 params.algo 白名单一致.
-//   原额外接受 "crc16-mbus" / "modbus" / "ccitt" 三个未文档化别名, 已移除:
+// 只认三个受支持算法名 — 与 ConfigDeepValidator 的 params.algo 白名单一致.
+//   不再接受 "crc16-mbus" / "modbus" / "ccitt" 之类的未文档化别名:
 //   协议名 (modbus) 不应作为 CRC 算法别名出现在 Engine 层.
 CrcTable GetCrcTable(const std::string& algo) {
     CrcTable t{};
@@ -434,11 +434,11 @@ uint64_t AutoComputeProvider::Resolve(const std::string& name, int byteWidth, co
         return Next(name, byteWidth);
     }
     const Impl::DeclRule& dr = *drHold;
-    // ⚠ 已知风险 (v1.31 审计登记, 未修): 下方 catch (...) 会把**任何**策略异常静默吞掉
+    // ⚠ 已知风险 (已登记, 未修): 下方 catch (...) 会把**任何**策略异常静默吞掉
     //   并退化为自增计数值 —— 即产出一个"构建成功但内容错误"的请求
     //   (例: algo 拼错、frameSlice 缺 frameSoFar)。
     //   为何暂不算活跃缺陷:
-    //     1) crc 的 algo 已由 ConfigDeepValidator 强制校验 (v1.30), 拼错在保存期即被拒;
+    //     1) crc 的 algo 已由 ConfigDeepValidator 强制校验, 拼错在保存期即被拒;
     //     2) frameSlice 的 frameSoFar 由 RenderTemplate 恒设 (见该处 ctx.frameSoFar = &out);
     //     3) autoIncrement 策略本身不抛。
     //   为何不直接 rethrow: Resolve 的两条调用链 (RequestBuilder::RenderTemplate /
@@ -512,7 +512,7 @@ uint64_t AutoComputeProvider::ExecExpr(const std::string& name, int byteWidth, c
     }
     auto lookup = [ctx](const std::string& varName, bool& found) -> uint64_t {
         found = false;
-        // v1.9 增: expr 内置两个 magic 变量
+        // expr 内置两个 magic 变量
         //   __frameLen = frameSoFar 当前长度 (字节数, 不含本段自身)
         //   __frameEnd = 同 __frameLen, 语义更清晰
         if (varName == Core::kExprMagicFrameLen || varName == Core::kExprMagicFrameEnd) {
@@ -549,7 +549,7 @@ uint64_t AutoComputeProvider::ExecCrc(const std::string& name, int byteWidth, co
     (void)name; (void)byteWidth;
     if (!ctx.frameSoFar) throw std::runtime_error("crc: missing frameSoFar");
     const auto& frame = *ctx.frameSoFar;
-    // v1.29: algo 必填 — 原缺省 "crc16-modbus" 把协议选择烘焙进 Engine.
+    // algo 必填 — 不设缺省值: 任何缺省都等于把某协议的选择烘焙进 Engine.
     //   校验器 (ConfigDeepValidator) 已强制 params.algo 存在且为受支持算法;
     //   此处仅兜底, 避免无 algo 时静默套用某个协议的算法.
     std::string algo = params.Str("algo", "");
@@ -588,9 +588,9 @@ bool AutoComputeProvider::ResolveDerivedLength(
         uint32_t& out,
         std::string* errMsg) {
     if (errMsg) errMsg->clear();
-    // v1.21: {name:len} 引用 inputs 变量的字节长度 (载荷变量=实际字节数, 其余=模板渲染宽度);
+    // {name:len} 引用 inputs 变量的字节长度 (载荷变量=实际字节数, 其余=模板渲染宽度);
     //        普通名引用查 inputs 值池. 无 payload/count 保留名.
-    // v1.25 (ADR-0012 §1.1): {Frame:fixed} 查 layout->fixedTotal;
+    // 模板结构原语 (ADR-0012 §1.1): {Frame:fixed} 查 layout->fixedTotal;
     //        {name:offset} 查 layout->offsets (首现偏移). layout 缺失 → 两原语不可解析.
     try {
         MiniExpression::Parser p(expr);

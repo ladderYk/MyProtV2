@@ -39,7 +39,7 @@ struct BuildContext {
     const std::vector<uint8_t>* frameSoFar = nullptr;
 };
 
-/// v1.25 (ADR-0012 §1.2): 模板布局 — 由 requestTemplate 一次扫描得出,
+/// 模板布局 (ADR-0012 §1.2) — 由 requestTemplate 一次扫描得出,
 /// 供 {Frame:fixed} / {Name:offset} 派生长度求值与保存期试算校验共用.
 ///   widths     : 占位符名 → 渲染宽度 ({N:raw} = kRawMarker; 未知格式记 0 + hasUnknown)
 ///   offsets    : 占位符名 → 首次出现前累计字节偏移 (raw 载荷占位也记录)
@@ -80,18 +80,18 @@ public:
     /// 检查: 某变量是否被 autoCompute 段声明 (调试/验证用)
     bool IsDeclared(const std::string& name) const;
 
-    /// v1.16 增: 某声明变量是否为 autoIncrement (参数层预解析判定).
+    /// 判定某声明变量是否为 autoIncrement (参数层预解析用).
     ///   参数分层: autoIncrement/derivedLength 属"参数层"(渲染前预解析进参数表);
     ///   frameSlice/expr(引用 __frameLen)/crc 属"帧感知"(渲染期按帧求值, 无法下沉).
     bool IsAutoIncrement(const std::string& name) const;
 
-    /// v1.11: strategy=derivedLength 派生长度求值 (参数层预解析阶段消费)
-    ///   v1.16: 消除 kind, 唯一表达为 expr (e.g. "{Payload:len} + 7" / "{Payload:len} * 8").
-    ///   v1.17 (方案B): inputs 为已合并的扁平输入参数池 (可为空指针) — expr 可引用其中任意已就绪输入名
+    /// strategy=derivedLength 派生长度求值 (参数层预解析阶段消费)
+    ///   表达形态唯一: 用 expr (如 "{Payload:len} + 7" / "{Payload:len} * 8"), 不再有 kind 字段.
+    ///   inputs 为已合并的扁平输入参数池 (可为空指针) — expr 可引用其中任意已就绪输入名
     ///         (validator 已保证引用域).
-    ///   v1.21: {name:len} 引用 inputs 变量的字节长度 — 载荷变量=实际字节数(由调用方注入 varLen),
+    ///   {name:len} 引用 inputs 变量的字节长度 — 载荷变量=实际字节数(由调用方注入 varLen),
     ///         其余=模板渲染宽度; 普通名引用查 inputs 值池. 无 payload/count 保留名.
-    ///   v1.25 (ADR-0012 §1.1): 新增模板结构原语 — {Frame:fixed} (模板非 raw 元素宽度合计,
+    ///   模板结构原语 (ADR-0012 §1.1) — {Frame:fixed} (模板非 raw 元素宽度合计,
     ///         查 layout->fixedTotal) 与 {name:offset} (占位符首现前累计偏移, 查 layout->offsets);
     ///         layout 为 nullptr 时两原语不可解析 (求值失败), {name:len} 与普通名引用不受影响.
     ///   成功返回 true 并写 out; 表达式求值失败返回 false (errMsg 非空时填充原因).
