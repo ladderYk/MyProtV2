@@ -1300,7 +1300,7 @@ ValidationResult ConfigValidator::validateProtocol(const Core::ProtocolConfig& p
         }
     }
 
-    // 注: 协议级 simulation 文法校验已删除 (v1.1 simulation 移至 server.json,
+        // 注: 协议级无 simulation 文法校验 (simulation 位于 server.json,
     // responseTemplate 文法校验在 ConfigDirectoryLoader::ParseServerJson 完成)
     return r;
 }
@@ -1364,7 +1364,7 @@ void ConfigValidator::validateFraming(const Core::FramingConfig& f,
             break;
         case Core::FramingType::Silence:
             // 规则 5
-            // v1.27 改: frameGapUs 必须 >= 1 — 引擎已移除 3.5×charTimeUs 默认 (Modbus RTU 约定),
+                        // frameGapUs 必须 >= 1 — 引擎不内置 Modbus RTU 的 charTimeUs 折算默认值,
             //   静默阈值须显式配置, 0 表示未配置, 运行期通道将拒发.
             if (f.silence.charTimeUs < 0 || f.silence.frameGapUs <= 0) {
                 r.addError("Silence frameGapUs 必须 ≥ 1 (静态静默阈值须显式配置; "
@@ -1444,7 +1444,7 @@ static bool SplitTemplateTokens(const std::string& s, std::vector<std::string>& 
     return true;
 }
 
-// v1.13 长度偏移自检: 见上方 namespace 辅助; 对 protocol.outputs(可被 op 覆盖) 中
+// 长度偏移自检: 见上方 namespace 辅助; 对 protocol.outputs(可被 op 覆盖) 中
 //   位于成帧长度槽位的派生变量, 校验其相对 payload 的常量偏移与模板固定字节布局一致.
 void ConfigValidator::ValidateDerivedLengthOffsets(
         const Core::ProtocolConfig& proto, const Core::OperationConfig& op,
@@ -1467,7 +1467,7 @@ void ConfigValidator::ValidateDerivedLengthOffsets(
     const int total = cursor;
 
     // raw 变长载荷占位 (该操作无 raw → 不涉及帧长派生, 跳过)
-    // v1.22: 载荷名 = 模板 {Name:raw} 占位符名 (无需 inputs 特殊声明)
+        // 载荷名 = 模板 {Name:raw} 占位符名 (无需 inputs 特殊声明)
     const std::set<std::string> rawNames = CollectRawPlaceholderNames(op.requestTemplate);
     std::string rawName = rawNames.empty() ? std::string() : *rawNames.begin();
     int Ppayload = -1;
@@ -1480,7 +1480,7 @@ void ConfigValidator::ValidateDerivedLengthOffsets(
     for (size_t i = 0; i < slots.size(); ++i) {
         const Slot& sl = slots[i];
         if (sl.off != lf.lengthFieldOffset || sl.width != lf.lengthFieldLength) continue;
-        // 槽位变量: op 级 outputs 覆盖优先, 否则协议级 outputs (v1.17 方案B: 派生输出在 outputs 段)
+                // 槽位变量: op 级 outputs 覆盖优先, 否则协议级 outputs (派生输出在 outputs 段)
         const Core::VariableConfig* v = 0;
         std::unordered_map<std::string, Core::VariableConfig>::const_iterator vit =
             op.outputs.find(sl.name);
@@ -1492,7 +1492,7 @@ void ConfigValidator::ValidateDerivedLengthOffsets(
         }
         if (!v || !v->isDerivedLength()) continue;
         long K = 0; bool known = false;
-        if (!v->expr.empty()) {                       // v1.16: 仅 expr (kind 已移除)
+                if (!v->expr.empty()) {                       // 仅 expr (kind 不属于本层契约)
             if (TryPayloadOffset(v->expr, rawName, K)) known = true;
         }
         if (!known) continue;
@@ -1510,7 +1510,7 @@ void ConfigValidator::ValidateDerivedLengthOffsets(
     }
 }
 
-/// 已移除的三段文法 {Name:seg2:Xn} → 定向报错并指引迁移路径 (否则会退化成
+/// 三段文法 {Name:seg2:Xn} 不受支持 → 定向报错并指引迁移路径 (否则会退化成
 /// 泛化的"既非十六进制字面量也非合法占位符", 用户无从知道该改什么)
 static bool RejectRemovedThreeSegmentSyntax(const std::string& opName,
                                             const std::string& line,
@@ -1633,7 +1633,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     const std::string ctx = tag.name.empty() ? std::string("(匿名标签)") : tag.name;
 
     // 规则 13
-    // v1.6 写标签 (direction=write): 不参与轮询, scanRateMs 不作要求;
+        // 写标签 (direction=write): 不参与轮询, scanRateMs 不作要求;
     //       readBackTag 仅写标签可配; writeVariable 不可为空.
     const bool isWriteTag = (tag.direction == "write");
     if (tag.direction != "read" && !isWriteTag) {
@@ -1649,7 +1649,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     if (!isWriteTag && !tag.readBackTag.empty()) {
         r.addError("标签 " + ctx + " readBackTag 仅写标签 (direction=write) 可配置 (规则13)");
     }
-    // v1.7/v1.32 标签级写能力: writeOperation/writeBytesOperation/writeVariables
+        // 标签级写能力: writeOperation/writeBytesOperation/writeVariables
     //      仅 direction=read 标签有意义; 非空 = 读写标签, 全空 = 只读 (写 API 明确拒绝).
     if (isWriteTag && !tag.writeOperation.empty()) {
         r.addWarning("标签 " + ctx + " 写标签 (direction=write) 无需 writeOperation, 将被忽略 (规则13)");
@@ -1665,14 +1665,14 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
                    + "\" (规则13, 见 Config_Schema §6)");
     }
 
-    // v1.26 位粒度: BitOffset 约定键校验 (语义 = 字节内位偏移 0-7).
+        // 位粒度: BitOffset 约定键校验 (语义 = 字节内位偏移 0-7).
     //   Error: 超范围 (运行时 ResponseParser 亦有防御);
     //   Warning: 声明 BitOffset 但 finalType 非 Bool (当前无消费方);
     //            Bool 未声明 BitOffset (位寻址 op 需显式声明, 否则解析走
     //            raw[0]!=0 旧语义, 线圈场景会误报同字节其他位);
     //            Bool + BitOffset + ByteCount > 1 (合法但疑似笔误, 位标签跨度应为 1).
     {
-        // v1.28: 位偏移改读标签一等字段 tag.bitOffset (-1 = 未声明), 不再查 variables 魔法键
+                // 位偏移读标签一等字段 tag.bitOffset (-1 = 未声明); 不查 variables 魔法键
         const bool hasBit = (tag.bitOffset >= 0);
         const bool isBool = (tag.finalType == "Bool");
         if (hasBit && tag.bitOffset > 7) {
@@ -1697,7 +1697,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
         }
     }
 
-    // 规则 15 Warning — v1.25 改: 跨协议字节单位 "ByteCount" (约定键).
+        // 规则 15 Warning — 跨协议字节单位 "ByteCount" (约定键).
     //   与 tags.json 中读取标签声明的 {ByteCount:N} 与协议 JSON 协议族单位 {RegisterCount:M} (Modbus)
 //     一致性由协议 JSON derivedLength 自身保证, 此处不再做跨字段核对 (避免把协议族知识渗入校验).
     //   仍保留 {StartByteAddress} > 0 的合理性警告 (按字节地址线性推断).
@@ -1734,7 +1734,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
                    + "\" (协议 " + dev->protocol + ") (规则12)");
         return;
     }
-    // v1.7: 操作 kind 语义一致性 (kind 未标注 = 跳过检查)
+        // 操作 kind 语义一致性 (kind 未标注 = 跳过检查)
     //   读标签 operation 应为 read 类; 写标签 operation 应为 write 类;
     //   读写标签的 writeOperation 应为 write 类 (下方校验).
     if (!oit->second.kind.empty()) {
@@ -1748,7 +1748,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
                        + tag.operation + " (kind=" + oit->second.kind + ") (规则12)");
         }
     }
-    // v1.7: writeOperation 引用存在 + kind 一致性 (规则12)
+        // writeOperation 引用存在 + kind 一致性 (规则12)
     if (!isWriteTag && !tag.writeOperation.empty()) {
         std::unordered_map<std::string, Core::OperationConfig>::const_iterator wIt =
             proto->operations.find(tag.writeOperation);
@@ -1760,7 +1760,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
                        + tag.writeOperation + " (kind=" + wIt->second.kind + ") (规则12)");
         }
     }
-    // v1.32: writeBytesOperation 引用存在 + kind 一致性 (规则12)
+        // writeBytesOperation 引用存在 + kind 一致性 (规则12)
     if (!isWriteTag && !tag.writeBytesOperation.empty()) {
         std::unordered_map<std::string, Core::OperationConfig>::const_iterator wbIt =
             proto->operations.find(tag.writeBytesOperation);
@@ -1774,12 +1774,12 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     }
 
     const std::vector<std::string>& tpl = oit->second.requestTemplate;
-    // v1.6/v1.7: 运行时注入的变量加入解析域白名单 —
-    //   writeVariable (数值/字节注入) + 起始地址(固定 "StartAddress", v1.19 移除 addressVariable 配置)
+        // 运行时注入的变量加入解析域白名单 —
+        //   writeVariable (数值/字节注入) + 起始地址 (固定 "StartAddress"; addressVariable 配置不存在)
     //   + WriteBytes 派生长度族 (PDULength/DataLength/DataBits/DataLen/RegisterCount/ByteCount)
     //   适用对象: 写标签 (direction=write) 与声明了写能力的读写标签
     //   (writeOperation / writeBytesOperation 任一非空)
-    // v1.25: 读标签同样放行 outputs(derivedLength) 派生名 — 协议族变量
+        // 读标签同样放行 outputs(derivedLength) 派生名 — 协议族变量
     //   (如 Modbus StartAddress/RegisterCount) 现由协议 JSON outputs 派生供给,
     //   tag.variables 只声明跨协议字节单位 (StartByteAddress/ByteCount).
     std::set<std::string> runtimeVars;
@@ -1795,12 +1795,12 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     if (isWriteTag || !tag.writeOperation.empty()
             || !tag.writeBytesOperation.empty()) {
         if (!tag.writeVariable.empty()) runtimeVars.insert(tag.writeVariable);
-        // v1.28 删: 原此处无条件插入 "StartAddress" 已移除 —
+                // 此处不再无条件插入 "StartAddress" —
         //   协议族地址名 (StartAddress/RegisterCount/...) 一律由上方 protocol.outputs /
         //   op.outputs 的 derivedLength 声明动态收集, 不再假定任何具体名 (契约名收敛为 2 个).
-        // v1.11: 派生长度改由 JSON 声明 (source=auto strategy=derivedLength) — 收集声明名放行.
-        //   v1.12: 旧 PDULengthRegistry 兜底已移除; PDULength 仅当其声明为 derivedLength 才放行.
-        //   v1.17 方案B: derivedLength 只存在于 outputs 段 (inputs 不允许 derivedLength 已校验).
+                // 派生长度由 JSON 声明 (source=auto strategy=derivedLength) — 收集声明名放行.
+                //   PDULength 仅当声明为 derivedLength 才放行 (无注册表兜底).
+                //   derivedLength 只存在于 outputs 段 (inputs 使用 derivedLength 会被校验拒绝).
         if (!isWriteTag && !tag.writeOperation.empty()) {
             std::unordered_map<std::string, Core::OperationConfig>::const_iterator wit2 =
                 proto->operations.find(tag.writeOperation);
@@ -1809,7 +1809,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
                         wit2->second.outputs.begin(); it != wit2->second.outputs.end(); ++it)
                     if (it->second.isDerivedLength()) runtimeVars.insert(it->first);
         }
-        // v1.32: 变长写模板的派生名同样放行 (如 RegisterCount = {WriteValue:len} / 2)
+                // 变长写模板的派生名同样放行 (如 RegisterCount = {WriteValue:len} / 2)
         if (!isWriteTag && !tag.writeBytesOperation.empty()) {
             std::unordered_map<std::string, Core::OperationConfig>::const_iterator wbit2 =
                 proto->operations.find(tag.writeBytesOperation);
@@ -1819,7 +1819,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
                     if (it->second.isDerivedLength()) runtimeVars.insert(it->first);
         }
     }
-    // v1.27 增: 标签级 variables 若声明了 outputs 派生名, 警告将覆盖派生值
+        // 标签级 variables 若声明了 outputs 派生名, 警告将覆盖派生值
     //   例: 标签声明 StartAddress=10, 但协议 outputs.StartAddress = StartByteAddress/2 派生.
     //   标签显式值覆盖派生值, 用户可能不理解地址来源.
     for (std::unordered_map<std::string, uint32_t>::const_iterator it =
@@ -1845,7 +1845,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
             if (isRaw) {
                 // {Name:raw} 变长载荷: 唯一合法来源是运行时注入的写值变量
                 //   (WriteViaGateway 把 payload 以 writeVariable 为键注入 rawVars;
-                //   v1.32 删: tag/device 级 variableBytesHex — 声明值从不进入帧)
+                                //   tag/device 级 variableBytesHex 不存在 — 声明值从不进入帧)
                 if (runtimeVars.find(varName) == runtimeVars.end()) {
                     r.addError("标签 " + ctx + " 变长模板变量未定义: " + varName
                                + " (须为写值变量 writeVariable, 默认 "
@@ -1864,7 +1864,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
         }
     };
     checkPlaceholders(tpl, tag.variables);
-    // v1.7/v1.32: 写模板占位符校验 — 变量域 = variables ∪ writeVariables (同名键覆盖);
+        // 写模板占位符校验 — 变量域 = variables ∪ writeVariables (同名键覆盖);
     //   标量写 (writeOperation) 与变长写 (writeBytesOperation) 模板均纳入.
     if (!isWriteTag) {
         for (int wsel = 0; wsel < 2; ++wsel) {
@@ -1943,7 +1943,7 @@ ValidationResult ConfigValidator::validateConfigRoot(
             validateTag(tg, deviceMap, protoMap, r);
         }
     }
-    // v1.6 写标签 readBackTag 引用校验: 须指向存在的读标签
+        // 写标签 readBackTag 引用校验: 须指向存在的读标签
     for (size_t i = 0; i < root.tags.size(); ++i) {
         const Core::TagDefinition& tg = root.tags[i];
         if (tg.direction != "write" || tg.readBackTag.empty()) continue;
@@ -2025,7 +2025,7 @@ bool ConfigValidator::isValidPlaceholder(const std::string& s) {
     std::vector<std::string> parts;
     if (!SplitPlaceholder(s, parts)) return false;
     // {Name:Xn} | {Name:raw} (P1 A 变长字节注入); 其余段数一律非法
-    // (三段校验和文法已移除, 定向报错见 validateTemplate)
+        // (三段校验和文法不支持, 定向报错见 validateTemplate)
     if (parts.size() != 2) return false;
     return IsFormatSpec(parts[1]) || IsRawSpec(parts[1]);
 }
