@@ -1,12 +1,12 @@
 // src/Service/src/FrameConsistencyCheck.cpp
 // 保存期试算校验 (ADR-0012 §2) — 对含 {Name:raw} 载荷的写操作以真实管线试渲染一帧:
 //   1) 派生长度 expr 可解性: 求值失败/引用未知变量 → 错误 (封堵运行时静默 0 值路径,
-//      即 v1.13 自检 known=false → continue 的缺口 A);
+//      即自检 known=false → continue 的缺口 A);
 //   2) 帧长一致性: 渲染帧按 framing 语义反推长度槽位期望值, 与槽位实际字节比对 —
 //      同时捕获 "模板改了固定段、outputs 魔数没跟" 与 "framing 误配" 两类错误;
 //   3) {Frame:fixed} 保留名校验: 模板占位符不得命名 Frame.
 // 装配管线与 Gateway::TagReader::WriteBytes 完全一致 (InjectDerivedLengthVariables
-// 已上移 Engine, 两处共用同一实现, 无双实现漂移)。
+// 实现在 Engine, 两处共用同一实现, 无双实现漂移)。
 // 挂接点: 保存期 ConfigStore::Validate + 加载期 validateConfigRootJson /
 //   validateAndParseConfigRootJson (两条入口同一实现, 手工编辑或外部生成的配置
 //   不再绕过门禁)。
@@ -75,7 +75,7 @@ std::vector<std::string> ConfigValidator::CheckFrameConsistency(
 
         // 1. 变量表 = 协议 static ∪ op static(有值) ∪ StartByteAddress=0
         //    (与 TagReader::WriteBytes 装配链一致, 仅无标签级覆盖 — 试算无标签上下文;
-        //     v1.25: 注入跨协议字节单位, 协议族地址由 outputs 派生)
+                //     注入跨协议字节单位, 协议族地址由 outputs 派生)
         std::unordered_map<std::string, uint32_t> variables =
             Engine::RequestBuilder::CollectStaticVariables(proto);
         for (auto vit = op.inputs.begin(); vit != op.inputs.end(); ++vit) {

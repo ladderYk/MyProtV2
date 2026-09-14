@@ -14,7 +14,7 @@ namespace MyProt { namespace Transport {
 
 namespace {
 
-/// 计算帧间静默阈值 — v1.27 改: 不再默认 3.5×单字符时间 (Modbus RTU 约定).
+/// 计算帧间静默阈值 — 不默认任何折算 (引擎不内置 Modbus RTU 的 3.5×单字符时间约定).
 /// 引擎零协议知识: frameGapUs 必须显式配置, 未配置由 SendReceive 前置检查报错.
 std::chrono::microseconds SilenceGapUs(const Core::SilenceConfig& sc) {
     return std::chrono::microseconds(sc.frameGapUs);
@@ -121,7 +121,7 @@ void SerialChannel::SendReceive(const Bytes& request,
     if (framingConfig && framingConfig->type == Core::FramingType::Silence) {
         sc = framingConfig->silence;
     }
-    // v1.27 改: 静默阈值须显式配置 — 引擎不再默认 3.5×单字符时间 (Modbus RTU 约定).
+        // 静默阈值须显式配置 — 引擎不默认 3.5×单字符时间 (Modbus RTU 约定).
     //   未配置 Silence 成帧或 frameGapUs<=0 时直接报 ConfigError, 避免通用串口
     //   通道静默继承 RTU 行为 (协议知识泄漏进引擎).
     if (sc.frameGapUs <= 0) {

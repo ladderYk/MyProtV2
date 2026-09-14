@@ -55,7 +55,7 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
     }
 
     // 按 scanRateMs 分组 (TagGrouper::GroupByScanRate)
-    // v1.6: 写标签 (direction=write) 不参与轮询 — 它们只作为 /api/data/write
+        // 写标签 (direction=write) 不参与轮询 — 它们只作为 /api/data/write
     //   的定向目标, 无采集语义; 在引擎入口过滤, TagGrouper 无需感知.
     std::vector<Core::TagDefinition> pollTags;
     pollTags.reserve(tags.size());
@@ -79,8 +79,8 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
             pg->generation = _generation.load();
             pg->allTags = pollTags; // 保存完整原始数组 (tagIndices 引用此数组)
         }
-        // v1.29: 合并跨度改为协议级配置 (原为引擎内写死 125 — 语义是 Modbus 的
-        //   125 寄存器上限; v1.25 把地址单位由寄存器改为字节后该数值未同步,
+                // 合并跨度来自协议级配置 (不能写死 — 早期写死的 125 语义是 Modbus 的
+                //   寄存器上限, 且地址单位改为字节后该值未同步,
         //   实际只剩 125 字节 ≈ 62 寄存器, 合并能力静默缩水一半).
         //   协议查找失败时回退 Core::kDefaultMaxSpanBytes.
         int maxSpan = Core::kDefaultMaxSpanBytes;
@@ -278,7 +278,7 @@ void PollingEngine::PollBatchChain(
         int attempt) {
 
     // 终止: 停止 → 收尾; 越界/切换到下一设备 → 继续处理下一设备
-    // (修复: 原实现换设备即 FinishBatch, 第 2+ 台设备永不被轮询)
+        // (不得在换设备时 FinishBatch: 否则第 2+ 台设备永不被轮询)
     if (_stopping.load()) {
         FinishBatch(group, allResults);
         return;

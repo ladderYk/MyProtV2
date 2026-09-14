@@ -33,7 +33,7 @@ namespace MyProt { namespace Simulation {
 class SimulationServer {
 public:
     /// protocol 须在服务器生命周期内保持有效；simOverride 须来自 ServerConfig.simulation
-    /// (v1.1 起从 server.json 解析, 与 ProtocolConfig 解耦)。
+        /// (从 server.json 解析, 与 ProtocolConfig 解耦)。
     /// 注: 不再共享外部 io_context — 服务器自持独立 io_context 运行于专用线程,
     /// 保证 Stop() 跨线程 io.stop() 即刻生效 (修复热重载挂起, 见 KI 登记)。
     explicit SimulationServer(const Core::ProtocolConfig& protocol,
@@ -73,7 +73,7 @@ private:
                                 std::vector<std::uint8_t>& frame) const;
 
     const Core::ProtocolConfig& _protocol;
-    const Core::SimulationConfig& _sim;  // v1.1 增: 引用外部传入的 sim (server.json)
+        const Core::SimulationConfig& _sim;  // 引用外部传入的 sim (server.json)
     TemplateMatcher _matcher;
     SimulationDataStore _store;
     std::map<std::string, SimPlan> _plans;              ///< sim 声明操作的执行计划

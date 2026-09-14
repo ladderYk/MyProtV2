@@ -115,7 +115,7 @@ const Rule kRules[] = {
       "操作引用不存在|写操作引用不存在|变长写操作引用不存在|指向非写操作|指向非读操作|readBackTag",
       "标签 ", "tags.{subject}.operation" },
 
-    // ── 模板文法类 (规则 6 / v1.16 / v1.13 移除的三段文法) ──
+        // ── 模板文法类 (规则 6; 含三段文法被拒的报错) ──
     { "template.grammar", "protocol",
       "模板占位符|模板 token|空模板行|模板行全为空白|:auto: 令牌|须独占模板元素",
       "操作 ", "operations.{subject}.requestTemplate" },

@@ -4,7 +4,7 @@
 
 #include "MyProt/Service/SchemaRegistry.hpp"
 
-#include "MyProt/Core/Config.hpp"   // v1.28: 契约名/默认值常量单一真源 (避免 schema 与引擎漂移)
+#include "MyProt/Core/Config.hpp"   // 契约名/默认值常量单一真源 (避免 schema 与引擎漂移)
 
 #include <nlohmann/json.hpp>
 
@@ -186,15 +186,15 @@ const Fields& SchemaRegistry::ProtocolFields() {
         EnumF("dataByteOrder", false, "BigEndian",
               "协议级数据解码字节序; 标签未显式声明 byteOrder 时回退至此 (与 framing.byteOrder 解耦)",
               {"BigEndian", "LittleEndian", "WordBigByteLittle", "WordLittleByteBig"}),
-        // v1.32 删: 协议级 writeOperation / writeBytesOperation —
+                // 协议级 writeOperation / writeBytesOperation 不属于 Schema —
         //   写能力只在标签层声明 (标签 writeOperation / writeBytesOperation / direction=write).
         Plain("maxSpanBytes", "int", false, "250",
               "标签按地址邻近合并的最大字节跨度 (TagGrouper::CoalesceAdjacent); "
               "即协议族单次读取上限, 如 Modbus FC03 = 125 寄存器 = 250 字节"),
-        // v1.27 增 / v1.28 改: 变量别名映射 (alias → internal name).
+                // 变量别名映射 (alias → internal name).
         //   用户可在协议 JSON 的 variableAliases 段自定义变量名, 引擎内部仍用约定名;
         //   加载期由 ConfigDirectoryLoader 一次性归一化为内部名 (协议 / 设备 / 标签三侧).
-        //   v1.28: 可映射的契约名收敛为 2 个 — 引擎真正查表读取的跨协议字节单位.
+                //   可映射的契约名仅 2 个 — 引擎真正查表读取的跨协议字节单位.
         ObjF("variableAliases", false, "变量别名映射 (alias → internal name)",
         {
             Plain(Core::StartByteAddressVariableName(), "string", false, "",
@@ -260,7 +260,7 @@ const Fields& SchemaRegistry::TagFields() {
               "操作名, 须存在于所引协议的 operations"),
         Plain("variables", "map", false, "",
               "操作模板变量表 { 变量名: 无符号整数 } e.g. {\"StartAddress\":0}"),
-        // ── v1.7 / v1.32 标签级写能力 (唯一写声明点) ──
+                // ── 标签级写能力 (唯一写声明点) ──
         Plain("writeOperation", "string", false, "",
               "标量写 (POST value) 操作名 (须为所引协议的写类操作); 空 = 不可标量写, "
               "写 API 明确拒绝; 非空 = 读写标签, 读回校验用自身 operation"),
@@ -270,7 +270,7 @@ const Fields& SchemaRegistry::TagFields() {
         Plain("writeVariables", "map", false, "",
               "写请求专用变量覆盖 { 变量名: 无符号整数 }, 在 variables 之上合并 "
               "e.g. S7 写的 TransportSize/Length 与读不同"),
-        // ── v1.6 只写标签 ──
+                // ── 只写标签 ──
         EnumF("direction", false, "read",
               "read=参与轮询 (默认, 写能力由 writeOperation/writeBytesOperation 声明); "
               "write=只写标签 (operation 即写操作, 不参与轮询)",
@@ -280,7 +280,7 @@ const Fields& SchemaRegistry::TagFields() {
         Plain("readBackTag", "string", false, "",
               "仅写标签 (direction=write) 可配: 写后读回校验引用的读标签名"),
         Plain("scanRateMs", "int", false, "1000", "扫描周期(ms)"),
-        // v1.25 删: registerCount 顶层字段; 改走 variables.ByteCount (跨协议字节单位)
+                // registerCount 顶层字段不存在; 走 variables.ByteCount (跨协议字节单位)
         //   Modbus tag: variables.ByteCount = N×2 (寄存器数 × 2); 协议 JSON 通过 derivedLength 派生 RegisterCount 给 FC03 命令字用
         //   S7 tag:     variables.ByteCount = N (直接字节数)
         EnumF("finalType", false, "UInt16", "转换目标类型 (原始数据不足时 TypeConversionError)",

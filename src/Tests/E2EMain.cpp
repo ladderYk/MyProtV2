@@ -1652,7 +1652,7 @@ int RunE2E() {
         const std::string putResp = HttpGet(putReq, 18080);
         Check("PUT 非法配置 → 400", putResp.find("400") != std::string::npos);
                 // 保存失败回传**全部**阻断项 (编号换行清单), 管理面按行渲染 —
-        //   原实现只回第一条, 作者需"改一条存一次"。此处锁住清单格式。
+                //   不是只回第一条 — 否则作者需"改一条存一次"。此处锁住清单格式。
         Check("PUT 非法配置 → 回传编号清单 (共 N 项)",
               putResp.find("共 ") != std::string::npos
               && putResp.find("项:") != std::string::npos

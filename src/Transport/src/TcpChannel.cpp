@@ -111,7 +111,7 @@ void TcpChannel::Connect(const Core::ConnectionConfig& endpoint,
         });
         return;
     }
-    // port=0 的有效端口解析已上移 ChannelManager::PerformConnect (协议 defaultPort,
+        // port=0 的有效端口解析在 ChannelManager::PerformConnect (协议 defaultPort,
     // ADR-0012 附录A.1); 此处 502 仅为防御性兜底 (直用通道未经理由层的场景)。
     uint16_t port = endpoint.port != 0 ? endpoint.port : 502;
 

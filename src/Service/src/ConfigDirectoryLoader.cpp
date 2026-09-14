@@ -9,10 +9,10 @@
 #include <sstream>
 #include <iostream>
 #include <algorithm>
-#include <cctype>     // v1.28: 别名归一化的标识符扫描
+#include <cctype>     // 别名归一化的标识符扫描
 
 #include "MyProt/Service/ConfigValidator.hpp"
-#include "MyProt/Core/ServerConfig.hpp"  // v1.1 增: 解析 server.json
+#include "MyProt/Core/ServerConfig.hpp"  // 解析 server.json
 #include <nlohmann/json.hpp>
 
 namespace MyProt { namespace Service {
@@ -73,7 +73,7 @@ std::vector<std::string> ListJsonFiles(const std::string& dir) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// v1.28: 变量别名加载期归一化
+// 变量别名加载期归一化
 // ════════════════════════════════════════════════════════════════════
 // variableAliases 段把用户自定义名映射到引擎内部契约名 (alias → internal).
 // 归一化在此一次性完成, 而不是运行期到处查表 —— 因为最关键的消费点
@@ -298,7 +298,7 @@ Core::Expected<LoadedConfig> ConfigDirectoryLoader::Load(
     }
     out.root = vr.value().root;
 
-    // ── 3. v1.1 增: server.json (全局服务端配置, 仿真 + 未来 alertSink/webhook) ──
+        // ── 3. server.json (全局服务端配置, 仿真 + 未来 alertSink/webhook) ──
     // 可选缺失: 仿真 listenPort 默认 0 = 关闭, 对运行无副作用
     const std::string serverPath = configDir + ConfigLayout::kServerFilePath;
     std::string serverText, err3;
@@ -318,7 +318,7 @@ Core::Expected<LoadedConfig> ConfigDirectoryLoader::Load(
                         " 与配置根版本 " + std::to_string(supportedSchemaVersion) + " 不一致");
                 }
             }
-            // simulation 段 (v1.1 增; 可选)
+                        // simulation 段 (可选)
             if (svDoc.contains("simulation") && svDoc["simulation"].is_object()) {
                 const auto& sim = svDoc["simulation"];
                 if (sim.contains("listenPort") && sim["listenPort"].is_number_integer()) {
@@ -376,7 +376,7 @@ Core::Expected<LoadedConfig> ConfigDirectoryLoader::Load(
     }
     // server.json 缺失 = OK, 默认 server.simulation.listenPort=0 (关闭)
 
-    // ── 4. v1.28: 变量别名加载期归一化 (协议 + 设备 + 标签) ──
+        // ── 4. 变量别名加载期归一化 (协议 + 设备 + 标签) ──
     //   必须在协议与根配置都解析完之后执行 — 标签的别名表来自其所属设备的协议.
     ApplyVariableAliases(out);
 

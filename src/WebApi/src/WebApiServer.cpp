@@ -340,7 +340,7 @@ void WebApiServer::HandleConnection(
         });
 }
 
-/// v1.14 增: JSON 响应统一补 charset=utf-8。
+/// JSON 响应统一补 charset=utf-8。
 ///   无 charset 时部分客户端 (PowerShell 5.1、老脚本/第三方集成) 会按 Latin-1 解码中文,
 ///   再把结果写回 → 双重编码乱码 (2026-09-13 事故的机制)。浏览器不受影响, 但接口要自描述。
 static std::string WithUtf8Charset(const std::string& contentType) {

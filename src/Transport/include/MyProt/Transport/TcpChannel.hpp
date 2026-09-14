@@ -64,7 +64,7 @@ private:
 
     // 注: _lastEndpoint / _lastConnectTimeout 已撤回 (2026-08-31)。
     // 原 SendReceive 内部"借一次重发"会与 ChannelManager 端 GetOrCreateChannel
-    // 形成双重 Connect 风暴; 现重连职责上移, 缓存字段不再需要。
+        // 形成双重 Connect 风暴; 重连职责在 ChannelManager, 本类不缓存
 
     // 禁止拷贝
     TcpChannel(const TcpChannel&) = delete;

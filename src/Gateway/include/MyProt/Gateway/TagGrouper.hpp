@@ -44,12 +44,12 @@ public:
         int maxSpan = Core::kDefaultMaxSpanBytes);
 
     /// 从 tag.variables 中提取起始字节地址.
-    ///   v1.25 起为跨协议字节单位 "StartByteAddress" (协议族地址名如 Modbus 的寄存器号
-    ///   由协议 JSON outputs 的 derivedLength 派生); v1.19 已移除 addressVariable 配置.
+        ///   为跨协议字节单位 "StartByteAddress" (协议族地址名如 Modbus 的寄存器号
+        ///   由协议 JSON outputs 的 derivedLength 派生); 无 addressVariable 配置.
     ///   唯一定义处 — TagReader 等管线组件共用, 不再各自复制
     static uint32_t GetStartAddress(const Core::TagDefinition& tag);
 
-    /// v1.25: 从 tag.variables["ByteCount"] 提取字节跨度.
+        /// 从 tag.variables["ByteCount"] 提取字节跨度.
     ///   替代旧的 tag.registerCount × 2 (Modbus 协议族硬编码);
     ///   引擎零协议知识, 字节数完全由协议 JSON derivedLength 表达.
     ///   没声明 → 回退 2 (UInt16 最小跨度, 与早期 finalType 默认值兼容).

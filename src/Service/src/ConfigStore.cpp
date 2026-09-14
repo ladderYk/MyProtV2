@@ -246,7 +246,7 @@ Core::Expected<void> ConfigStore::Save(ConfigScope scope, const std::string& nam
     auto validation = Validate(scope, name, payload);
     if (!validation.has_value()) return Core::UnexpectedType{validation.error()};
     // 汇总**全部**阻断项一并回报 (编号换行分隔), 管理面按行渲染为清单.
-    //   原实现只回第一条 → 作者"改一条、存一次、看下一条"的串行试错体验.
+        //   不能只回第一条 → 否则作者陷入"改一条、存一次、看下一条"的串行试错.
     std::vector<std::string> blocking;
     {
         const std::vector<std::string>& items = validation.value();

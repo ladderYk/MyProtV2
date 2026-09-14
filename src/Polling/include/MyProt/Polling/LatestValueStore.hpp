@@ -21,7 +21,7 @@ public:
     std::vector<Core::TagValue> Snapshot(
         const std::string& deviceFilter = std::string()) const;
 
-    /// 单标签查询 (v1.1 补): 设备离线期间用上次值替代 Bad 输出
+        /// 单标签查询: 设备离线期间用上次值替代 Bad 输出
     /// @return true 且 out 填充 — 存在; false — 标签从未有值
     bool Lookup(const std::string& tagName, Core::TagValue& out) const;
 

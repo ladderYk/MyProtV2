@@ -259,7 +259,7 @@ void SimulationServer::HandleFrame(const SocketPtr& socket,
             m.variables.find(plan.cfg.countVar);
         if (cv == m.variables.end()) return;
         const std::uint32_t count32 = cv->second;
-        // v1.29: 原为写死的 Modbus 单读上限 125 (超出即静默不应答) — 非 Modbus 协议
+                // 不写死单读上限 (早期写死的 125 语义是 Modbus 寄存器上限, 超出即静默不应答) — 非 Modbus 协议
         //   读 >125 会一直无响应直到采集侧超时. 改为只做地址空间边界校验 (count 须能
         //   放进 16 位地址空间), 数据区越界统一由 _store 返回空处理 (见下方 data.empty()).
         if (count32 == 0 || count32 > 65535u) return;

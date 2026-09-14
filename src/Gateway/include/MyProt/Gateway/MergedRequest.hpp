@@ -9,9 +9,9 @@
 namespace MyProt { namespace Gateway {
 
 /// 合并请求 — 多个相邻标签合并为一次批量读取
-/// v1.25 改: startAddress/totalSpan → startByteAddress/byteCount.
+/// 字段: startByteAddress / byteCount (跨协议字节单位).
 ///   字节语义: 跨协议统一的地址单位; 协议族"寄存器 = 2 字节"换算由协议 JSON derivedLength 表达,
-///   引擎不再做隐式换算 (tagAddr * 2 这类硬编码已移除).
+///   引擎不做隐式换算 (禁止 tagAddr * 2 这类硬编码).
 struct MergedRequest {
     std::string deviceId;
     std::string operation;
