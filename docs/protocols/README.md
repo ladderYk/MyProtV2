@@ -8,8 +8,9 @@
 
 1. 已有 Modbus 基础 → 直接看 [modbus-tcp.md](./modbus-tcp.md)
 2. 接西门子 S7-1200/PLC → 看 [s7-1200.md](./s7-1200.md)
-3. 想加新协议 → 看本 README 的"如何新增一个协议"段
-4. 想理解配置 schema → 回 [Config_Schema.md](../Config_Schema.md)
+3. 接仙工（SEER）AGV 控制器 → 看 [seer.md](./seer.md)
+4. 想加新协议 → 看本 README 的"如何新增一个协议"段
+5. 想理解配置 schema → 回 [Config_Schema.md](../Config_Schema.md)
 
 ## 已支持协议
 
@@ -17,6 +18,7 @@
 |------|------|----------|:----:|
 | Modbus TCP | [configs/protocols/modbus-tcp.json](../../configs/protocols/modbus-tcp.json) | [modbus-tcp.md](./modbus-tcp.md) | ✅ v1 |
 | Siemens S7-1200 (S7comm/ISO-on-TCP) | [configs/protocols/s7-1200.json](../../configs/protocols/s7-1200.json) | [s7-1200.md](./s7-1200.md) | ✅ v1（仅 Read/Write Var；无内置仿真器）|
+| 仙工智能 SEER AGV（0x5A 01 + JSON 正文）| [configs/protocols/seer.json](../../configs/protocols/seer.json) | [seer.md](./seer.md) | ✅ v1（正文需 hex 编码；无内置仿真器）|
 
 ## 如何新增一个协议（指引）
 

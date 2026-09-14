@@ -27,6 +27,7 @@
 | 14 | 配置迁移工具（schema 升级） | P3 | 📋 | `scripts/migrate` | 当前不自动迁移 |
 | 15 | `TagValue.remoteTimestamp` / `unit` 字段 | P2 | 🔧 | `TagValue` | 需协议层时间戳抽象；当前仅「网关时间」 |
 | 16 | 上报过滤（变化上报 / 死区） | P2 | 📋 | `Polling` 发布层 | 原 `deadband` / `reportMode` 字段已删除（无消费落点，见 ADR-0003）；需先设计发布层：最新值缓存须保持真值，过滤只作用于对外发布通道 |
+| 17 | 模板**文本行原语**（`$"..."` 正文 + `$(Var)` 文本替换） | P2 | 📋 | `Engine` 文法 + `ConfigDeepValidator` | 面向文本/JSON 协议（如仙工 SEER：正文为 JSON，参数需文本替换）；当前以"JSON 的 hex 编码"绕过（见 [protocols/seer.md](./protocols/seer.md) §3.2/§6）；可顺带设计"响应文本 → 数值/字段"解码 |
 
 ---
 

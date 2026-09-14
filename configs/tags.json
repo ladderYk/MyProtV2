@@ -34,6 +34,16 @@
         "timeoutMs": 5000
       },
       "requestTimeoutMs": 2000
+    },
+    {
+      "id": "AGV1",
+      "protocol": "seer",
+      "connection": {
+        "host": "192.168.1.100",
+        "port": 11500,
+        "timeoutMs": 3000
+      },
+      "requestTimeoutMs": 3000
     }
   ],
   "tags": [
@@ -218,6 +228,40 @@
       "bitOffset": 1,
       "scanRateMs": 3000,
       "finalType": "Bool",
+      "coalesce": false
+    },
+    {
+      "name": "AGV1.RobotStatus",
+      "deviceId": "AGV1",
+      "operation": "GetRobotStatus",
+      "scanRateMs": 1000,
+      "finalType": "ByteArray",
+      "coalesce": false
+    },
+    {
+      "name": "AGV1.RobotPosition",
+      "deviceId": "AGV1",
+      "operation": "GetPosition",
+      "scanRateMs": 500,
+      "finalType": "ByteArray",
+      "coalesce": false
+    },
+    {
+      "name": "AGV1.BatteryLevel",
+      "deviceId": "AGV1",
+      "operation": "GetBattery",
+      "scanRateMs": 5000,
+      "finalType": "ByteArray",
+      "coalesce": false
+    },
+    {
+      "name": "AGV1.SendJson",
+      "deviceId": "AGV1",
+      "direction": "write",
+      "operation": "SendJson",
+      "writeVariable": "Body",
+      "scanRateMs": 60000,
+      "finalType": "ByteArray",
       "coalesce": false
     }
   ]

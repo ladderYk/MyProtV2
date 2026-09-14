@@ -22,6 +22,7 @@
 |------|------|----------|:----:|
 | Modbus TCP | [configs/protocols/modbus-tcp.json](../../configs/protocols/modbus-tcp.json) | [modbus-tcp.md](./protocols/modbus-tcp.md) | ✅ 已支持 |
 | Siemens S7-1200 | [configs/protocols/s7-1200.json](../../configs/protocols/s7-1200.json) | [s7-1200.md](./protocols/s7-1200.md) | ✅ 已支持（仅 Read/Write Var）|
+| 仙工智能 SEER AGV | [configs/protocols/seer.json](../../configs/protocols/seer.json) | [seer.md](./protocols/seer.md) | ✅ 已支持（JSON 正文需 hex 编码）|
 
 新增协议：见 [protocols/README.md §如何新增一个协议](./protocols/README.md#如何新增一个协议指引)。
 
@@ -100,6 +101,7 @@
   → protocols/README.md     // 通用教学指引
   → protocols/modbus-tcp.md // Modbus TCP 配置↔字节对照
   → protocols/s7-1200.md    // Siemens S7-1200 配置↔字节对照
+  → protocols/seer.md       // 仙工 SEER AGV 配置↔字节对照
 
 扩展查询:
   → ROADMAP.md              // 未实装扩展候选

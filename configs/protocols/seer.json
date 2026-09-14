@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 2,
+  "protocolName": "seer",
+  "transport": {
+    "type": "Tcp"
+  },
+  "framing": {
+    "type": "LengthField",
+    "lengthFieldOffset": 4,
+    "lengthFieldLength": 4,
+    "lengthIncludesHeader": false,
+    "byteOrder": "BigEndian",
+    "headerLength": 8,
+    "lengthAdjustment": 0,
+    "maxFrameSize": 4096
+  },
+  "dataByteOrder": "BigEndian",
+  "inputs": {
+    "Seq": {
+      "source": "auto",
+      "strategy": "autoIncrement",
+      "params": {
+        "seed": 1
+      },
+      "label": "请求序号 (2 字节)"
+    }
+  },
+  "operations": {
+    "GetRobotStatus": {
+      "kind": "read",
+      "requestTemplate": [
+        "5A 01",
+        "{Seq:X4}",
+        "00 00 00 18",
+        "07 D0",
+        "00 00 00 00 00 00",
+        "7B 22 63 6D 64 22 3A 22 73 74 61 74 75 73 22 7D"
+      ],
+      "responseParser": {
+        "validCondition": "resp[0] == 0x5A",
+        "dataStartIndex": 16,
+        "dataLengthExpr": ""
+      }
+    },
+    "GetPosition": {
+      "kind": "read",
+      "requestTemplate": [
+        "5A 01",
+        "{Seq:X4}",
+        "00 00 00 15",
+        "07 D1",
+        "00 00 00 00 00 00",
+        "7B 22 63 6D 64 22 3A 22 70 6F 73 22 7D"
+      ],
+      "responseParser": {
+        "validCondition": "resp[0] == 0x5A",
+        "dataStartIndex": 16,
+        "dataLengthExpr": ""
+      }
+    },
+    "GetBattery": {
+      "kind": "read",
+      "requestTemplate": [
+        "5A 01",
+        "{Seq:X4}",
+        "00 00 00 19",
+        "07 D3",
+        "00 00 00 00 00 00",
+        "7B 22 63 6D 64 22 3A 22 62 61 74 74 65 72 79 22 7D"
+      ],
+      "responseParser": {
+        "validCondition": "resp[0] == 0x5A",
+        "dataStartIndex": 16,
+        "dataLengthExpr": ""
+      }
+    },
+    "SendJson": {
+      "kind": "write",
+      "requestTemplate": [
+        "5A 01",
+        "{Seq:X4}",
+        "{Length:X8}",
+        "27 10",
+        "00 00 00 00 00 00",
+        "{Body:raw}"
+      ],
+      "inputs": {
+        "Body": {
+          "source": "static",
+          "label": "整包 JSON 正文 (hex, 由调用方编码)"
+        }
+      },
+      "outputs": {
+        "Length": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "{Body:len} + 8",
+          "label": "长度域值 = 正文 + ApiType(2) + 保留(6)",
+          "unit": "字节"
+        }
+      },
+      "responseParser": {
+        "validCondition": "resp[0] == 0x5A",
+        "dataStartIndex": 16,
+        "dataLengthExpr": ""
+      }
+    }
+  }
+}

@@ -3322,6 +3322,235 @@ int RunE2E() {
 
 
     // ── 濮瑰洦鈧?──
+    // ── Test 21: 仙工 SEER (0x5A 0x01 + 16B 头 + JSON 正文) 字节级验证 ──
+    //   A1 路线 (零代码适配): 全部断言直接基于随仓库发布的 configs/protocols/seer.json,
+    //   不以"测试内自造协议"自证 — 配置被改动即回归报警.
+    std::cout << "--- Test 21: SEER (Seer AGV) Byte-Level Wiring ---" << std::endl;
+    {
+        const char* kSeerPath = "configs\\protocols\\seer.json";
+        if (::GetFileAttributesA(kSeerPath) == INVALID_FILE_ATTRIBUTES) {
+            Check("21-0: configs/protocols/seer.json 存在", false);
+        } else {
+            std::ifstream seerFile(kSeerPath);
+            std::stringstream seerBuf;
+            seerBuf << seerFile.rdbuf();
+            const std::string seerJson = seerBuf.str();
+
+            // 与保存期同一套校验 (含 ADR-0012 试算: 长度槽位 ↔ 模板固定段)
+            const MyProt::Core::Expected<MyProt::Service::ValidationResult> seerVr =
+                MyProt::Service::ConfigValidator::validateProtocolJson(seerJson, 2);
+            Check("21-1: seer.json 通过深度校验 (保存期同一套)",
+                  seerVr.has_value() && !seerVr.value().hasErrors());
+
+            const MyProt::Core::Expected<MyProt::Core::ProtocolConfig> seerPoco =
+                MyProt::Service::ConfigValidator::parseProtocolJson(seerJson);
+            Check("21-2: seer.json 解析为 POCO", seerPoco.has_value());
+
+            if (seerPoco.has_value()) {
+                const MyProt::Core::ProtocolConfig& sp = seerPoco.value();
+                Check("21-3: framing = headerLength 8 / offset 4 / len 4 / 不含头"
+                      " (V2 语义: 总帧长 = 8 + 长度值)",
+                      sp.framing.lengthField.headerLength == 8 &&
+                      !sp.framing.lengthField.lengthIncludesHeader &&
+                      sp.framing.lengthField.lengthFieldOffset == 4 &&
+                      sp.framing.lengthField.lengthFieldLength == 4);
+
+                // ── 请求侧: 三个读操作逐字节核对 ──
+                //   (长度值 = 总帧长 - headerLength(8); ApiType 走模板 hex 字面量)
+                struct ReadCase {
+                    const char* op;
+                    const char* apiTypeHex;   // 偏移 8..9
+                    std::size_t frameLen;     // 16B 头 + 正文
+                    std::uint32_t lenVal;     // 偏移 4..7
+                    const char* bodyHex;      // 偏移 16 起 (JSON 正文的 ASCII)
+                };
+                const ReadCase cases[3] = {
+                    { "GetRobotStatus", "07D0", 32, 24, "7B22636D64223A22737461747573227D" },
+                    { "GetPosition",    "07D1", 29, 21, "7B22636D64223A22706F73227D" },
+                    { "GetBattery",     "07D3", 33, 25, "7B22636D64223A2262617474657279227D" }
+                };
+
+                for (int ci = 0; ci < 3; ++ci) {
+                    const auto oit = sp.operations.find(cases[ci].op);
+                    if (oit == sp.operations.end()) {
+                        Check((std::string("21-4/") + cases[ci].op + ": 操作存在").c_str(), false);
+                        continue;
+                    }
+                    const MyProt::Core::OperationConfig& op = oit->second;
+
+                    MyProt::Engine::AutoComputeProvider ac;
+                    const std::string acJson =
+                        MyProt::Engine::RequestBuilder::MergeOpAutoComputeJson(sp, op);
+                    if (!acJson.empty()) ac.DeclareJson(acJson);
+
+                    std::unordered_map<std::string, std::uint32_t> vars;
+                    const MyProt::Engine::TemplateLayout layout =
+                        MyProt::Engine::RequestBuilder::BuildTemplateLayout(op.requestTemplate);
+                    MyProt::Engine::RequestBuilder::InjectDerivedLengthVariables(
+                        vars, sp.outputs, op.outputs, /*totalBytes=*/0, layout);
+
+                    MyProt::Engine::RequestBuilder rb;
+                    const auto built =
+                        rb.Build(op, vars, std::unordered_map<std::string, std::string>(), ac);
+
+                    const std::string tag = std::string("21-4/") + cases[ci].op;
+                    Check((tag + ": Build 成功").c_str(), built.has_value());
+                    if (!built.has_value()) continue;
+                    const std::vector<std::uint8_t>& f = built.value();
+
+                    Check((tag + ": 帧长 = 16B 头 + 正文").c_str(),
+                          f.size() == cases[ci].frameLen);
+                    Check((tag + ": 魔数 5A 01 + Seq 自增=1").c_str(),
+                          f.size() >= 4 && f[0] == 0x5A && f[1] == 0x01 &&
+                          f[2] == 0x00 && f[3] == 0x01);
+                    std::uint32_t lenVal = 0;
+                    if (f.size() >= 8) {
+                        lenVal = (static_cast<std::uint32_t>(f[4]) << 24) |
+                                 (static_cast<std::uint32_t>(f[5]) << 16) |
+                                 (static_cast<std::uint32_t>(f[6]) << 8) |
+                                 static_cast<std::uint32_t>(f[7]);
+                    }
+                    Check((tag + ": 长度值 = 总帧长 - 8").c_str(),
+                          lenVal == cases[ci].lenVal);
+
+                    const char* kHex = "0123456789ABCDEF";
+                    std::string apiHex;
+                    for (std::size_t k = 8; k < 10 && k < f.size(); ++k) {
+                        apiHex.push_back(kHex[(f[k] >> 4) & 0xF]);
+                        apiHex.push_back(kHex[f[k] & 0xF]);
+                    }
+                    Check((tag + ": ApiType 正确").c_str(),
+                          apiHex == cases[ci].apiTypeHex);
+                    std::string bodyHex;
+                    for (std::size_t k = 16; k < f.size(); ++k) {
+                        bodyHex.push_back(kHex[(f[k] >> 4) & 0xF]);
+                        bodyHex.push_back(kHex[f[k] & 0xF]);
+                    }
+                    Check((tag + ": 正文 = UTF-8 JSON 的 hex").c_str(),
+                          bodyHex == cases[ci].bodyHex);
+                }
+
+                // ── 写侧: SendJson 整包下发 (载荷由调用方编码 hex) ──
+                {
+                    const auto wit = sp.operations.find("SendJson");
+                    Check("21-5: SendJson 操作存在", wit != sp.operations.end());
+                    if (wit != sp.operations.end()) {
+                        const MyProt::Core::OperationConfig& wop = wit->second;
+                        MyProt::Engine::AutoComputeProvider wac;
+                        const std::string wacJson =
+                            MyProt::Engine::RequestBuilder::MergeOpAutoComputeJson(sp, wop);
+                        if (!wacJson.empty()) wac.DeclareJson(wacJson);
+
+                        std::unordered_map<std::string, std::uint32_t> wvars;
+                        const MyProt::Engine::TemplateLayout wlayout =
+                            MyProt::Engine::RequestBuilder::BuildTemplateLayout(wop.requestTemplate);
+                        MyProt::Engine::RequestBuilder::InjectDerivedLengthVariables(
+                            wvars, sp.outputs, wop.outputs, /*totalBytes=*/7, wlayout);
+
+                        std::unordered_map<std::string, std::string> raw;
+                        raw["Body"] = "7B 22 78 22 3A 31 7D";     // {"x":1} → 7 字节
+                        MyProt::Engine::RequestBuilder wb;
+                        const auto wbuilt =
+                            wb.BuildBytes(wop, wvars, raw,
+                                          std::unordered_map<std::string, std::string>(), wac);
+                        Check("21-5: SendJson BuildBytes 成功", wbuilt.has_value());
+                        if (wbuilt.has_value()) {
+                            const std::vector<std::uint8_t>& wf = wbuilt.value();
+                            std::uint32_t wlen = 0;
+                            if (wf.size() >= 8) {
+                                wlen = (static_cast<std::uint32_t>(wf[4]) << 24) |
+                                       (static_cast<std::uint32_t>(wf[5]) << 16) |
+                                       (static_cast<std::uint32_t>(wf[6]) << 8) |
+                                       static_cast<std::uint32_t>(wf[7]);
+                            }
+                            Check("21-6: 整包写帧长 = 16 + 7 = 23", wf.size() == 23);
+                            Check("21-6: 长度值 = 载荷 7 + ApiType/保留 8 = 15", wlen == 15);
+                            const char* kHex2 = "0123456789ABCDEF";
+                            std::string payHex;
+                            for (std::size_t k = 16; k < wf.size(); ++k) {
+                                payHex.push_back(kHex2[(wf[k] >> 4) & 0xF]);
+                                payHex.push_back(kHex2[wf[k] & 0xF]);
+                            }
+                            Check("21-6: 载荷原样落在偏移 16 起", payHex == "7B2278223A317D");
+                        }
+                    }
+                }
+
+                // ── 成帧侧: 长度域语义 (总长 = 8 + 长度值) ──
+                std::vector<std::uint8_t> resp;
+                {
+                    const std::uint8_t hdr[16] = { 0x5A, 0x01, 0x00, 0x01,
+                                                   0x00, 0x00, 0x00, 0x18,   // 长度值 24
+                                                   0x07, 0xD0, 0, 0, 0, 0, 0, 0 };
+                    resp.assign(hdr, hdr + 16);
+                    const std::string body = "{\"cmd\":\"status\"}";
+                    resp.insert(resp.end(), body.begin(), body.end());
+                }
+                MyProt::Transport::LengthFieldFrameParser fp(sp.framing.lengthField);
+                const MyProt::Core::ByteView fullView(resp.empty() ? 0 : &resp[0], resp.size());
+                const auto fr = fp.Parse(fullView, 0);
+                Check("21-7: 32B 响应切成 1 整帧 (8 + 24)",
+                      fr.has_value() && !fr.value().needMoreData &&
+                      fr.value().frame.size() == 32);
+
+                const std::vector<std::uint8_t> partial(resp.begin(), resp.begin() + 31);
+                const MyProt::Core::ByteView partialView(
+                    partial.empty() ? 0 : &partial[0], partial.size());
+                const auto pr = fp.Parse(partialView, 0);
+                Check("21-7: 31B 响应判为不完整 (needMoreData)",
+                      pr.has_value() && pr.value().needMoreData);
+
+                // ── 解析侧: validCondition + dataStartIndex + 帧尾长度语义 ──
+                MyProt::Core::TagDefinition vtag;
+                vtag.name = "AGV1.RobotStatus";
+                vtag.deviceId = "AGV1";
+                vtag.operation = "GetRobotStatus";
+                vtag.finalType = "ByteArray";
+
+                MyProt::Engine::ResponseParser rp;
+                const auto parsed =
+                    rp.Parse(fullView, sp.operations.find("GetRobotStatus")->second.responseParser,
+                             vtag, MyProt::Core::ByteOrder::BigEndian);
+                Check("21-8: 合法响应 → quality=Good",
+                      parsed.has_value() &&
+                      parsed.value().quality == MyProt::Core::QualityCode::Good);
+
+                const char* kHex3 = "0123456789ABCDEF";
+                std::string parsedHex;
+                if (parsed.has_value()) {
+                    const std::vector<std::uint8_t>& pb = parsed.value().typedValue.bytes;
+                    for (std::size_t k = 0; k < pb.size(); ++k) {
+                        parsedHex.push_back(kHex3[(pb[k] >> 4) & 0xF]);
+                        parsedHex.push_back(kHex3[pb[k] & 0xF]);
+                    }
+                }
+                std::string bodyHexExpected;
+                for (std::size_t k = 16; k < resp.size(); ++k) {
+                    bodyHexExpected.push_back(kHex3[(resp[k] >> 4) & 0xF]);
+                    bodyHexExpected.push_back(kHex3[resp[k] & 0xF]);
+                }
+                Check("21-8: 载荷 = 帧尾正文 (dataStartIndex=16, dataLengthExpr 空)",
+                      parsed.has_value() && parsedHex == bodyHexExpected);
+
+                std::vector<std::uint8_t> badResp = resp;
+                badResp[0] = 0x00;                            // 破坏魔数
+                const MyProt::Core::ByteView badView(
+                    badResp.empty() ? 0 : &badResp[0], badResp.size());
+                const auto badParsed =
+                    rp.Parse(badView, sp.operations.find("GetRobotStatus")->second.responseParser,
+                             vtag, MyProt::Core::ByteOrder::BigEndian);
+                // validCondition 不通过的两种表现都算合格: 解析直接报错, 或给出非 Good 的 TagValue
+                std::cout << "  [SEER] 坏帧 (首字节 0x00): "
+                          << (badParsed.has_value() ? "TagValue(非 Good)" : "Expected-error")
+                          << std::endl;
+                Check("21-8: 首字节非 0x5A → 不被判定为 Good",
+                      !badParsed.has_value() ||
+                      badParsed.value().quality != MyProt::Core::QualityCode::Good);
+            }
+        }
+        std::cout << std::endl;
+    }
+
     std::cout << "========================================" << std::endl;
     std::cout << "  Results: " << g_passed << " passed, " << g_failed << " failed" << std::endl;
     std::cout << "========================================" << std::endl;
