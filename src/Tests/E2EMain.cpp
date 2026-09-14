@@ -1795,7 +1795,7 @@ int RunE2E() {
                 SynthesizeFromTemplate(t1, req, dat, fr, out);
             // 期望帧长 8 → LEN = 8 - header(6) = 2, 位于 out[4..5]
             bool okB = ok1 && out.size() == 8
-                && out[0] == 0x11 && out[1] == 0x22      // req 閸ョ偞妯?
+                && out[0] == 0x11 && out[1] == 0x22      // req 变体
                 && out[2] == 0xAA && out[3] == 0xBB      // 字面量 (0xAA 0xBB)
                 && out[4] == 0x00 && out[5] == 0x02      // LEN 校验
                 && out[6] == 0x01 && out[7] == 0x02;     // {data} 注入值
@@ -1917,13 +1917,13 @@ int RunE2E() {
                     client.SendReceive(reqT.value());
                 const std::vector<uint8_t>& rq = reqT.value();
                 bool okT = respT.size() == 14;
-                okT = okT && respT[0] == rq[0] && respT[1] == rq[1];   // TID 閸ョ偞妯?
+                okT = okT && respT[0] == rq[0] && respT[1] == rq[1];   // TID 变体
                 okT = okT && respT[2] == 0x00 && respT[3] == 0x00;     // PID 固定 0
                 okT = okT && respT[4] == 0x00 && respT[5] == 0x08;     // LEN 校验 (14-6)
-                okT = okT && respT[6] == rq[6];                        // UID 閸ョ偞妯?                okT = okT && respT[7] == 0x10;
+                okT = okT && respT[6] == rq[6]; okT = okT && respT[7] == 0x10;   // UID 变体(含固定 0x10, 语句结构与原文一致)
                          // FC 校验
                 for (int i = 0; okT && i < 4; ++i) {
-                    okT = respT[8 + i] == rq[8 + i];                   // Addr+Value 閸ョ偞妯?
+                    okT = respT[8 + i] == rq[8 + i];                   // Addr+Value 变体
                 }
                 okT = okT && respT[12] == 0xAA && respT[13] == 0xBB;   // 自定义尾缀
                 Check("14-7: 自定义模板应答逐字节精确匹配", okT);
