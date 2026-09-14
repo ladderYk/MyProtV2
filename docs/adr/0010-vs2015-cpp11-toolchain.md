@@ -115,6 +115,7 @@
 
 - **主产物：VS2015 解决方案**（`.sln` + 各模块 `.vcxproj`，PlatformToolset v140，Win32 + x64 双配置）。源码交付即开即编译。
 - CMake 降为**可选辅助**（仅当所用 CMake 版本仍支持"Visual Studio 14 2015"生成器时保留 `CMakeLists.txt`，不作交付承诺）。
+  > **2026-09-14 更新**：该保留条件已不成立 —— CMake 3.12+ 移除了 "Visual Studio 14 2015" 生成器；且原有配置缺顶层入口（`${CMAKE_SOURCE_DIR}` 错位）、`find_package(asio)` 与 vendoring 冲突、源文件相对路径不存在。9 个 `CMakeLists.txt` 已移除，本条由 [ADR-0013](./0013-infrastructure-admission.md) 取代。
 - vcpkg 清单模式**废止**（被 §4 vendoring 取代）。
 - 目录结构不变（architecture/02）：`src/Core`、`src/Engine`、`src/Transport`、`src/Service`、`src/Gateway`、`src/Polling`、`src/WebApi`、`src/App`、`tests/`、`third_party/`。
 

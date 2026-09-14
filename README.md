@@ -47,6 +47,10 @@ MyProt-master/
    - 无参数 = 使用默认 `configs/` 目录启动网关（WebApi 监听 8080）
    - `--config <目录>` 指定配置目录；`--port N` 指定 WebApi 端口
 3. 运行端到端测试：执行同目录下的 `MyProt.E2E.exe`
+4. 一键回归门禁（编译 Release x64 + 4 个单元测试 + E2E，任一失败即非零退出，见 [ADR-0013](docs/adr/0013-infrastructure-admission.md)）：
+   ```bat
+   powershell -ExecutionPolicy Bypass -File scripts\ci.ps1
+   ```
 
 ### 仿真测试
 
@@ -81,7 +85,7 @@ MyProt.App.exe --config configs_write_test
 |------|--------|--------|----------|
 | ModbusTCP | TCP | LengthField (2B) | `configs/protocols/modbus-tcp.json` |
 | S7 (Siemens) | TCP | 握手 COTP + LengthField | `configs/protocols/s7-1200.json` |
-| SEER（仙工 AGV） | TCP | LengthField (4B) + JSON 数据 | 暂无现成配置（旧语法遗留样本已归档至 `archive/protocols-legacy/SEER.json`，需迁移后放入 `configs/protocols/`） |
+| SEER（仙工 AGV） | TCP | LengthField (4B) + JSON 数据 | `configs/protocols/seer.json`（教学文档 [docs/protocols/seer.md](docs/protocols/seer.md)） |
 
 添加新协议只需在 `configs/protocols/` 新增 JSON 定义并在 `tags.json` 引用，重启即生效——无需改动代码。
 

@@ -35,7 +35,7 @@
 |------|------|----------|------|
 | 编译器 | MSVC（VS2015） | **v140，Update 3**（`_MSC_FULL_VER` ≥ 190024215） | 交付硬约束；Win32 + x64 |
 | 语言标准 | C++11 | 仅 C++11，禁用更高标准特性 | 缺口由 Core 自写设施补齐（Expected/Optional/ByteView） |
-| 构建系统 | VS2015 解决方案（主）+ CMake（可选辅助） | `.sln` + `.vcxproj`（PlatformToolset v140） | CMake 仅在生成器仍支持 VS2015 时保留，不作交付承诺 |
+| 构建系统 | VS2015 解决方案（**唯一**） | `.sln` + `.vcxproj`（PlatformToolset v140） | CMake 配置已按 [ADR-0013](../adr/0013-infrastructure-admission.md) 移除（生成器条件与依赖获取均不成立） |
 | 依赖管理 | **third_party vendoring** | 版本与来源记录于 `third_party/README.md` | 无 vcpkg；升级须重过 VS2015 编译验证 |
 | 异步 I/O | standalone asio | vendoring（已过 VS2015 编译验证） | 仅回调 API，不启用协程；`ASIO_STANDALONE`（per-bus strand 已撤，见 ADR-0002 §6） |
 | JSON | nlohmann/json | **3.7.3** | 最后支持 VS2015 的版本线；配置加载（热路径不涉及 JSON） |

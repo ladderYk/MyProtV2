@@ -115,7 +115,7 @@ GET /api/health/ready → 200 或 503 (初始化中)
 
 ### 13.1 构建产物（v1 实态：VS2015 解决方案）
 
-主产物为仓库根目录的 **`MyProt.sln`**（PlatformToolset **v140**，Win32 + x64 双配置），源码交付即开即编译，零网络依赖。vcpkg 清单模式与 CMake 均已废止（ADR-0010 §5）。
+主产物为仓库根目录的 **`MyProt.sln`**（PlatformToolset **v140**，Win32 + x64 双配置），源码交付即开即编译，零网络依赖。vcpkg 清单模式与 CMake 均已废止（ADR-0010 §5）；仓库内残留的 9 个失效 `CMakeLists.txt` 已按 [ADR-0013](../adr/0013-infrastructure-admission.md) 移除，构建系统唯一。
 
 | 工程 | 类型 | 依赖 |
 |------|------|------|

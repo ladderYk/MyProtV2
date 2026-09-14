@@ -69,6 +69,7 @@
 | [ADR-0010 VS2015/C++11 工具链降级](./adr/0010-vs2015-cpp11-toolchain.md) | 硬约束：VS2015(v140) 编译。协程→asio 回调、自研 Expected/ByteView、自研 `Core::Optional<T>`；依赖锁 VS2015 兼容版本（third_party 内置，仅 asio） |
 | [ADR-0011 显式写互斥](./adr/0011-p1cd-write-mutex-and-per-bus-strand.md) | 写互斥实装决策与并发语义 |
 | [ADR-0012 派生长度模板结构原语与保存期试算校验](./adr/0012-derivedlength-template-primitives-and-trial-render.md) | `{Frame:fixed}` / `{Name:offset}` 原语消除 outputs 手工魔数（如 S7 `+35`）；保存期真实渲染写帧并比对成帧长度槽位，封堵 expr 静默 0 值 |
+| [ADR-0013 构建与测试基础设施准入](./adr/0013-infrastructure-admission.md) | 单一构建系统（移除 9 个失效 CMakeLists）、空壳测试禁止、CI 门禁 `scripts/ci.ps1`（编译 + 全部可执行，退出码契约）、外部依赖须开箱可链接 |
 
 > ⚠️ 若 `modules/` 中的 POCO/示例与 [配置 Schema 定稿](./Config_Schema.md) 冲突时，以 Schema 定稿为准。
 
