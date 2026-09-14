@@ -284,7 +284,7 @@ struct CrcTable {
 };
 
 // 只认三个受支持算法名 — 与 ConfigDeepValidator 的 params.algo 白名单一致.
-//   不再接受 "crc16-mbus" / "modbus" / "ccitt" 之类的未文档化别名:
+//   不接受 "crc16-mbus" / "modbus" / "ccitt" 之类的未文档化别名:
 //   协议名 (modbus) 不应作为 CRC 算法别名出现在 Engine 层.
 CrcTable GetCrcTable(const std::string& algo) {
     CrcTable t{};

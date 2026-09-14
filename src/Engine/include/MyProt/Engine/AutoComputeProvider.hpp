@@ -86,7 +86,7 @@ public:
     bool IsAutoIncrement(const std::string& name) const;
 
     /// strategy=derivedLength 派生长度求值 (参数层预解析阶段消费)
-    ///   表达形态唯一: 用 expr (如 "{Payload:len} + 7" / "{Payload:len} * 8"), 不再有 kind 字段.
+    ///   表达形态唯一: 用 expr (如 "{Payload:len} + 7" / "{Payload:len} * 8"); kind 字段不属于本层契约.
     ///   inputs 为已合并的扁平输入参数池 (可为空指针) — expr 可引用其中任意已就绪输入名
     ///         (validator 已保证引用域).
     ///   {name:len} 引用 inputs 变量的字节长度 — 载荷变量=实际字节数(由调用方注入 varLen),
