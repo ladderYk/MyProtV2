@@ -1920,7 +1920,8 @@ int RunE2E() {
                 okT = okT && respT[0] == rq[0] && respT[1] == rq[1];   // TID 变体
                 okT = okT && respT[2] == 0x00 && respT[3] == 0x00;     // PID 固定 0
                 okT = okT && respT[4] == 0x00 && respT[5] == 0x08;     // LEN 校验 (14-6)
-                okT = okT && respT[6] == rq[6]; okT = okT && respT[7] == 0x10;   // UID 变体(含固定 0x10, 语句结构与原文一致)
+                okT = okT && respT[6] == rq[6];                        // UID 变体
+                okT = okT && respT[7] == 0x10;                         // 固定值
                          // FC 校验
                 for (int i = 0; okT && i < 4; ++i) {
                     okT = respT[8 + i] == rq[8 + i];                   // Addr+Value 变体
