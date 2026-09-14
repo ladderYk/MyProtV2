@@ -1,5 +1,6 @@
 // src/Engine/src/AutoComputeProvider.cpp
-// v1.9: :auto 占位符通用求值器 鈥?4 涓唴缃瓥鐣ュ疄鐜?//   PIMPL 模式: 头文件不引入 nlohmann, 内部用极简 JSON 解析 (autoCompute 娈垫牸寮忓浐瀹?
+// :auto 占位符通用求值器 — 4 个内置策略 (autoIncrement / frameSlice / expr / crc)
+//   PIMPL 模式: 头文件不引入 nlohmann, 内部用极简 JSON 解析 (autoCompute 段格式固定)
 #include "MyProt/Engine/AutoComputeProvider.hpp"
 #include "MyProt/Core/Config.hpp"   // kExprMagicFrameLen/End, kPropLength/Offset/Fixed
 #include "MyProt/Engine/MiniExpression.hpp"
@@ -10,7 +11,7 @@
 
 namespace MyProt { namespace Engine {
 
-// 鈹€鈹€ 极简 JSON 鍊肩被鍨?(本命名空间内, 仅在 cpp 内用, 头文件不暴露) 鈹€鈹€
+// ── 极简 JSON 值类型 (本命名空间内, 仅在 cpp 内用, 头文件不暴露) ──
 struct JVal {
     enum Kind { Null_, Bool_, Num_, Str_, Arr_, Obj_ };
     Kind kind = Null_;
@@ -178,7 +179,7 @@ struct JParser {
     }
 };
 
-// 鎶?JVal 鎻愬彇鎴?uint64 (鏁板瓧鐩存帴鍙? 字符串按 strtoull(str, nullptr, 0) 解析)
+// 把 JVal 提取成 uint64 (数字直接取, 字符串按 strtoull(str, nullptr, 0) 解析)
 inline uint64_t JToU64(const JVal& v, uint64_t def = 0) {
     if (v.kind == JVal::Num_) return (uint64_t)v.n;
     if (v.kind == JVal::Str_) {
@@ -188,7 +189,7 @@ inline uint64_t JToU64(const JVal& v, uint64_t def = 0) {
     return def;
 }
 
-// 鈹€鈹€ 工具: 解析 "from"/"to" 段说明符 鈹€鈹€
+// ── 工具: 解析 "from"/"to" 段说明符 ──
 struct SlicePos {
     enum Kind { Absolute, End, EndOffset };
     Kind kind = Absolute;
@@ -346,12 +347,12 @@ struct AutoComputeProvider::Impl {
     std::mutex exprCacheMutex;
 };
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ AutoComputeProvider 实现 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// ────────── AutoComputeProvider 实现 ──────────
 
 AutoComputeProvider::AutoComputeProvider() : _impl(new Impl()) {}
 AutoComputeProvider::~AutoComputeProvider() = default;
 
-// 鈹€鈹€ v1.8 兼容: 原子自增 鈹€鈹€
+// ── 原子自增 (未声明策略时的兜底路径) ──
 uint64_t AutoComputeProvider::Next(const std::string& name, int byteWidth) {
     if (byteWidth < 1) byteWidth = 1;
     if (byteWidth > 8) byteWidth = 8;
@@ -366,7 +367,7 @@ void AutoComputeProvider::Reset(const std::string& name) {
     _impl->counters.erase(name);
 }
 
-// 鈹€鈹€ v1.9 鏂? 加载 autoCompute 娈?(瀛楃涓?JSON) 鈹€鈹€
+// ── 加载 autoCompute 段 (字符串 JSON) ──
 bool AutoComputeProvider::DeclareJson(const std::string& autoComputeJson) {
     if (autoComputeJson.empty()) return false;
     // 快路径: 内容与最近一次声明相同 → 规则表已是同构内容, 免解析免重建.
@@ -417,7 +418,7 @@ bool AutoComputeProvider::IsAutoIncrement(const std::string& name) const {
     return it != _impl->rules.end() && it->second->strategy == "autoIncrement";
 }
 
-// 鈹€鈹€ v1.9 鏂? Resolve 璺敱 鈹€鈹€
+// ── Resolve 路由 ──
 uint64_t AutoComputeProvider::Resolve(const std::string& name, int byteWidth, const BuildContext& ctx) {
     if (byteWidth < 1) byteWidth = 1;
     if (byteWidth > 8) byteWidth = 8;
@@ -457,16 +458,16 @@ uint64_t AutoComputeProvider::Resolve(const std::string& name, int byteWidth, co
 }
 
 // 4 个策略在 Impl 内部
-//   autoIncrement 语义: seed = 鏈湇璇锋椂鐨勯鏉¤繑鍥?; 之后每次 +1.
-//   v1.8 不带 seed 鐨?Next(): 计数器默认从 0 璧? 绗竴娆¤繑鍥?1.
-//   甯?seed=1 鏃? 绗竴娆¤繑鍥?1, 然后 2, 3, ...
+//   autoIncrement 语义: 首次请求返回 seed 值; 之后每次 +1.
+//   不带 seed: 计数器从 0 起, 首次返回 1.
+//   带 seed=1: 首次返回 1, 然后 2, 3, ...
 uint64_t AutoComputeProvider::ExecAutoIncrement(const std::string& name, int byteWidth, const JVal& params) {
     bool first = false;
     {
         std::lock_guard<std::mutex> lk(_impl->countersMutex);
         auto it = _impl->counters.find(name);
         if (it == _impl->counters.end()) {
-            // 绗竴娆￠┗鍑? 根据 seed 鍒濆鍖?(seed=0/缺少 = v1.8 行为).
+            // 首次驻留: 按 seed 初始化 (缺少 seed 即 0).
             const JVal* s = params.Find("seed");
             uint64_t seedVal = s ? JToU64(*s, 0) : 0;
             _impl->counters[name] = seedVal;
@@ -474,7 +475,7 @@ uint64_t AutoComputeProvider::ExecAutoIncrement(const std::string& name, int byt
         }
     }
     if (first) {
-        // 第一次返回防止再 +1 (v1.8 Next() 涔嬪悗浼氳嚜澧?).
+        // 首次调用直接返回 seed 值, 不再 +1 (后续调用才走 Next 自增).
         std::lock_guard<std::mutex> lk(_impl->countersMutex);
         return _impl->counters[name];
     }
