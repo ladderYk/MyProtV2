@@ -143,9 +143,15 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="RuntimeGlue.cpp" />
+    <ClCompile Include="AppSignals.cpp" />
+    <ClCompile Include="CrashDiagnostics.cpp" />
+    <ClCompile Include="SimApi.cpp" />
+    <ClCompile Include="DataApi.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="RuntimeGlue.hpp" />
+    <ClInclude Include="AppSignals.hpp" />
+    <ClInclude Include="CrashDiagnostics.hpp" />
     <ClInclude Include="AppContext.hpp" />
     <ClInclude Include="HttpRouter.hpp" />
   </ItemGroup>
