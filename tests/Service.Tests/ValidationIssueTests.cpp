@@ -56,7 +56,7 @@ TEST(ValidationIssueTest, FrameDerivedExpr) {
     EXPECT_EQ(i.field, "operations.WriteRegisters.outputs");
 }
 
-// ── 规则 3: 派生长度偏移自检 (v1.13) ──
+// ── 规则 3: 派生长度偏移自检 ──
 TEST(ValidationIssueTest, FrameLengthOffsetSelfCheck) {
     const ValidationIssue i = One(
         "操作 WriteBytes 派生长度 \"ByteCount\" 偏移自检失败: 声明偏移 4 ≠ 模板期望 3 "

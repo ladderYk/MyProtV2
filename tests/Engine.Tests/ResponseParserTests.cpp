@@ -1,7 +1,7 @@
 // tests/Engine.Tests/ResponseParserTests.cpp
 // ResponseParser 单元测试 — 响应条件校验 ("resp[N]==V" 子集) 与字节序裁决链
 // (tag.byteOrder → protocol.dataByteOrder → 大端)。这两个是读/写路径共用的判定点,
-// 判错会静默产出错误的标签值 (v1.28 起写路径也走同一裁决链)。
+// 判错会静默产出错误的标签值 (写路径与读路径走同一裁决链)。
 
 #include "MyProt/Core/ByteOrder.hpp"
 #include "MyProt/Core/ByteView.hpp"

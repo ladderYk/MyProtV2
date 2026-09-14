@@ -1669,7 +1669,7 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     //   Error: 超范围 (运行时 ResponseParser 亦有防御);
     //   Warning: 声明 BitOffset 但 finalType 非 Bool (当前无消费方);
     //            Bool 未声明 BitOffset (位寻址 op 需显式声明, 否则解析走
-    //            raw[0]!=0 旧语义, 线圈场景会误报同字节其他位);
+    //            raw[0]!=0 整寄存器真假, 线圈场景会误报同字节其他位);
     //            Bool + BitOffset + ByteCount > 1 (合法但疑似笔误, 位标签跨度应为 1).
     {
                 // 位偏移读标签一等字段 tag.bitOffset (-1 = 未声明); 不查 variables 魔法键

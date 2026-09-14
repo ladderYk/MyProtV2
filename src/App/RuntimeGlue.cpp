@@ -32,17 +32,17 @@
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
-#include "MyProt/Core/ServerConfig.hpp"  // v1.1 增: LoadedConfig.server
+#include "MyProt/Core/ServerConfig.hpp"  // LoadedConfig.server
 #include "MyProt/Core/ByteView.hpp"
 #include "MyProt/Core/ByteOrder.hpp"
 #include "MyProt/Core/Value.hpp"
 #include "MyProt/Core/Metrics.hpp"
 #include "MyProt/Gateway/ProtocolGateway.hpp"
-#include "MyProt/Gateway/TagReader.hpp"     // v1.6: WriteBackCheck
-#include "MyProt/Gateway/TagGrouper.hpp"    // v1.6: GetStartAddress (读回变量表)
+#include "MyProt/Gateway/TagReader.hpp"     // WriteBackCheck
+#include "MyProt/Gateway/TagGrouper.hpp"    // GetStartAddress (读回变量表)
 #include "MyProt/Polling/PollingEngine.hpp"
 #include "MyProt/Polling/LatestValueStore.hpp"
-#include "MyProt/Engine/ResponseParser.hpp"   // v1.28: 写路径 byteOrder 裁决共用 (读写一致)
+#include "MyProt/Engine/ResponseParser.hpp"   // 写路径 byteOrder 裁决共用 (读写
 #include "MyProt/Service/ConfigDirectoryLoader.hpp"
 #include "MyProt/Simulation/SimulationServer.hpp"
 #include "RuntimeGlue.hpp"
@@ -111,7 +111,7 @@ std::string QueryParam(const std::string& path, const std::string& key) {
         sims.clear();
 
         // 2. 新配置落入调用方持有的容器, 再据此重建仿真器
-        // v1.1 改: simulation 段从 ProtocolConfig 移至 ServerConfig (server.json).
+        // simulation 段在 ServerConfig (server.json), 不在 ProtocolConfig.
         // 多协议共享同一 ServerConfig.simulation — listenPort 即"是否启用的开关".
         protoStore = fresh.value().protocols;
         const MyProt::Core::ServerConfig& svr = fresh.value().server;

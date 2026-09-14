@@ -251,9 +251,9 @@ const int kSupportedSchemaVersion = 2;
 
 /// 标签按地址邻近合并的最大字节跨度缺省值 (TagGrouper::CoalesceAdjacent 消费).
 ///   这是"协议族单次读取上限"的通用表达: Modbus FC03 上限 125 寄存器 = 250 字节.
-///   沿革: 引擎内原写死 125, 其语义是"125 个寄存器"; v1.25 把地址单位由寄存器改为
+///   语义: 早期写死的 125 指"125 个寄存器"; 地址单位改为字节后, 同一物理跨度必须
 ///   字节 (StartByteAddress / ByteCount) 后该数值未同步调整, 实际只剩 125 字节
-///   (≈62 寄存器), 批读合并能力静默缩水一半. v1.29 提取为协议级 maxSpanBytes
+///   (≈62 寄存器), 否则批读合并能力静默缩水一半. 现为协议级 maxSpanBytes
 ///   并修正缺省值 (250 = 125 寄存器 × 2 字节).
 const int kDefaultMaxSpanBytes = 250;
 

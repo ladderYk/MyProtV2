@@ -20,7 +20,7 @@
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
-#include "MyProt/Core/ServerConfig.hpp"  // v1.1 增: LoadedConfig.server
+#include "MyProt/Core/ServerConfig.hpp"  // LoadedConfig.server
 #include "MyProt/Core/Value.hpp"
 #include "MyProt/Core/Log.hpp"
 #include "MyProt/Transport/TcpChannel.hpp"
@@ -114,10 +114,10 @@ int RunProduction(const std::string& configDir, uint16_t apiPort) {
     LOG_INFO("Config", "已加载协议 %zu 个, 设备 %zu 个, 标签 %zu 个",
              protos.size(), root.devices.size(), root.tags.size());
 
-    // ── 1.5 协议插件注册 (v1.5+) ──
+    // ── 1.5 协议插件注册 ──
     // PDU 长度策略已迁移为配置驱动 (协议 JSON 中 PDULength 声明 source=auto
     // strategy=derivedLength, 经 AutoComputeProvider::ResolveDerivedLength 计算),
-    // 不再需要运行时注册表 (原 PDULengthRegistry 已于 v1.12 移除).
+    // 无运行时注册表 (PDULength 等派生名由协议 JSON outputs 声明驱动).
 
     asio::io_context io;
 
@@ -180,7 +180,7 @@ int RunProduction(const std::string& configDir, uint16_t apiPort) {
     MyProt::Polling::LatestValueStore latest;
 
     // 轮询结果分发: 写实时快照 + 日志输出
-    // v1.1 增: CircuitOpen 期间把 Bad 标转译为 Uncertain + 保留上次值 (避免 UI 出现 Bad 抖动)
+    // CircuitOpen 期间把 Bad 标转译为 Uncertain + 保留上次值 (避免 UI 出现 Bad 抖动)
     MyProt::Polling::ResultDispatch resultDispatch =
         [&latest](const std::vector<MyProt::Core::TagValue>& results) {
             // 离线值恢复: 对 CircuitOpen 引起的 Bad, 用最近一次成功值 + Uncertain 标

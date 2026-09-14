@@ -86,7 +86,7 @@ inline void Logger::RotateLocked(State& st) {
     for (int i = st.keepBackups - 1; i >= 1; --i) {
         std::string from = st.filePath + "." + std::to_string(i);
         std::string to   = st.filePath + "." + std::to_string(i + 1);
-        std::remove(to.c_str());   // 先清目标槽再顺移 (原实现误删源文件 → 轮转永不生效)
+        std::remove(to.c_str());   // 先清目标槽再顺移 (顺序反了会误删源文件, 轮转永不生效)
         std::rename(from.c_str(), to.c_str());
     }
     std::remove((st.filePath + ".1").c_str());

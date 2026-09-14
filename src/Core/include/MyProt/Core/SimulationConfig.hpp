@@ -1,5 +1,5 @@
 // src/Core/include/MyProt/Core/SimulationConfig.hpp
-// v1.1 增: 仿真配置 POCO. 原本嵌在 Config.hpp 内, 因 v1.1 移至 server.json 顶层
+// 仿真配置 POCO. 位于 server.json 顶层 (不在 Config.hpp 内)
 // 而抽离, 供 Config.hpp (残留引用) + ServerConfig.hpp 共同 include.
 //
 // 仿真本应隶属"服务端行为"而非"协议语法", 但因字段都是结构化数据, 仍放 Core 层。
@@ -28,7 +28,7 @@ struct SimOperationConfig {
     SimOperationConfig() : dataOffset(-1) {}
 };
 
-/// 全局仿真配置 (v1.1 起放 server.json 而非 protocols/*.json). listenPort == 0 = 不启用仿真服务。
+/// 全局仿真配置 (位于 server.json, 不在 protocols/*.json). listenPort == 0 = 不启用仿真服
 struct SimulationConfig {
     uint16_t listenPort;
     int registerCount;                                    // 数据区寄存器数

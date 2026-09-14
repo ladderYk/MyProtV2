@@ -30,17 +30,17 @@
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
-#include "MyProt/Core/ServerConfig.hpp"  // v1.1 增: LoadedConfig.server
+#include "MyProt/Core/ServerConfig.hpp"  // LoadedConfig.server
 #include "MyProt/Core/ByteView.hpp"
 #include "MyProt/Core/ByteOrder.hpp"
 #include "MyProt/Core/Value.hpp"
 #include "MyProt/Core/Metrics.hpp"
 #include "MyProt/Gateway/ProtocolGateway.hpp"
-#include "MyProt/Gateway/TagReader.hpp"     // v1.6: WriteBackCheck
-#include "MyProt/Gateway/TagGrouper.hpp"    // v1.6: GetStartAddress (读回变量表)
+#include "MyProt/Gateway/TagReader.hpp"     // WriteBackCheck
+#include "MyProt/Gateway/TagGrouper.hpp"    // GetStartAddress (读回变量表)
 #include "MyProt/Polling/PollingEngine.hpp"
 #include "MyProt/Polling/LatestValueStore.hpp"
-#include "MyProt/Engine/ResponseParser.hpp"   // v1.28: 写路径 byteOrder 裁决共用 (读写一致)
+#include "MyProt/Engine/ResponseParser.hpp"   // 写路径 byteOrder 裁决共用 (读写
 #include "MyProt/Service/ConfigDirectoryLoader.hpp"
 #include "MyProt/Simulation/SimulationServer.hpp"
 #include "RuntimeGlue.hpp"

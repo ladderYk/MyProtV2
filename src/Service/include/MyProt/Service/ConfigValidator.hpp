@@ -117,7 +117,7 @@ private:
     // ── 模板文法 (§3) ──
     void validateTemplate(const std::string& opName, const std::string& line,
                           ValidationResult& r) const;
-    /// v1.13: 长度偏移自检 — 校验位于成帧长度槽位的派生变量相对 payload 的常量偏移与模板布局一致
+    /// 长度偏移自检 — 校验位于成帧长度槽位的派生变量相对 payload 的常量偏移与模板布局一致
     void ValidateDerivedLengthOffsets(const Core::ProtocolConfig& proto,
                                       const Core::OperationConfig& op,
                                       const std::string& opName,
