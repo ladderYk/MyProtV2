@@ -136,8 +136,10 @@ public:
 | `GET /api/data/latest[?device=]` | 引擎轮询最新值快照 | Bearer + 限流 |
 | `GET /api/data/stream[?device=]` | SSE 实时推送（建连即推首帧，此后每 3s 全量快照）| Bearer 或 `?token=` + 限流 |
 | `POST /api/data/write` | 单寄存器写（FC06 全链路：构建→发送→echo 校验→可选 read-back）| Bearer + 限流 |
+| `GET /api/validate?scope=&name=` | 只读校验**磁盘现有内容**，返回结构化问题清单 | Bearer + 限流 |
+| `POST /api/validate?scope=&name=` | 只读校验**请求体候选内容**（不落盘），返回结构化问题清单 | Bearer + 限流 |
 
-> `/api/sim/*` 与 `/api/data/*` 由 App 层经 `SetExtHandler` 注入（§7.6）；未注册 handler 时返回 `404 {"error":"sim api not available"}`。
+> **非内置域**的 `/api/*`（`sim` / `data` / `validate` / 未来新增）由 App 层经 `SetExtHandler` 注入（§7.6）——内置域只有 `config`，另有免认证的 `/health`、`/metrics`；扩展路由仍在 token 鉴权之后。未注册 handler 时返回 `404 {"error":"ext api not available"}`。
 
 ## 7.3 配置管理 /api/config/*
 
@@ -154,6 +156,36 @@ public:
 // → 200 {"ok":true}   // 校验通过、已备份、已写盘、已触发 reload
 // POST /api/config/reload → 200 {"ok":true}
 ```
+
+### 7.3.1 只读校验 /api/validate
+
+用途：WebUI 保存前「自检」、保存被拒后解释原因（见 [docs/webui.md](../../webui.md)）。
+
+| 方法 | 语义 |
+|------|------|
+| `GET /api/validate?scope=protocols\|tags&name=<n>` | 校验**磁盘现有内容** |
+| `POST /api/validate?scope=protocols\|tags&name=<n>`（body = 候选 JSON 原文）| 校验**待保存内容** |
+
+响应（**校验未通过也返回 200** —— 请求本身成功，语义看 `body.ok`）：
+
+```jsonc
+{
+  "ok": false, "scope": "protocols", "name": "s7-1200",
+  "errorCount": 2, "warningCount": 0,
+  "issues": [
+    { "severity": "error", "ruleId": "frame.length_consistency",
+      "subject": "WriteMultipleRegisters",
+      "field": "operations.WriteMultipleRegisters.requestTemplate",
+      "message": "操作 WriteMultipleRegisters 帧长一致性失败: 长度槽位值 10 ≠ 期望 9 ..." }
+  ]
+}
+```
+
+- **绝不写盘 / 不备份 / 不触发热重载** —— 这是与 `PUT /api/config/*` 的本质差别
+- `severity`：`error` 阻断保存；`warning` 仅提示（原 `[WARN]` 条目）
+- `ruleId`：稳定标识，首批 9 类（帧长一致性 / 派生长度 expr / 长度偏移自检 / 设备→协议 / 标签→设备 / 标签→操作 / 模板文法 / 版本门禁 / 名称重复）；未命中为 `unclassified`
+- `subject` / `field`：供 UI 点击定位（协议：模块/操作；标签：设备/标签）；`message` 始终是校验器原文，**不丢信息**
+- 参数非法或缺失 → `400`；方法非 GET/POST → `405`；GET 目标配置不存在 → `404`
 
 ## 7.4 reload 运行时联动（仿真器 + 实时数据）
 

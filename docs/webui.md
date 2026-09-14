@@ -24,6 +24,18 @@ npm run build      # 产物 dist/, base='./' 支持子路径部署
 
 所有配置保存（`PUT /api/config/{scope}/{name}`）成功后自动触发热重载；也可手动 `POST /api/config/reload`。
 
+## 校验可见化（保存前自检 / 保存被拒解释）
+
+配置保存要过服务端深度校验（帧长一致性、引用完整性等），不通过即拒绝并回滚。为了让"改了就弹回"不再无迹可寻：
+
+- 工具栏 **「自检」**：不落盘，对当前编辑器内容跑同一套校验，直接给出结构化问题清单
+- **保存被拒时**：除顶部横幅的纯文本原因外，自动把同一份结构化清单渲染成**页内面板**（取代早期只有一段文本的模态弹窗）
+- **点击条目跳转**：每条带 `ruleId` / 主体（操作名、设备 ID、标签名）/ 建议定位路径；点击后自动切回「表单」模式并跳到对应位置：
+  - 协议：`operations.*` → 「操作定义」段并选中该操作；`outputs` / `variables` → 「变量」段；其余 → 「基础信息」段
+  - 标签：`devices.<id>` → 选中该设备；`tags.<name>` / `ref.tag*` → 选中该标签
+
+对接的只读端点（详见 [modules/07_WebApi.md §7.3.1](./modules/07_WebApi.md)）：`GET /api/validate` 校验磁盘现值、`POST /api/validate` 校验候选内容；响应 `issues[]` 形如 `{severity, ruleId, subject, field, message}`，`warning` 不阻断保存。
+
 ## 三个可视化组件
 
 ### FrameBuilder — 帧构建器（协议配置 → 请求模板）

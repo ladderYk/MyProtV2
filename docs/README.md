@@ -21,6 +21,7 @@
 | 协议 | 配置 | 教学文档 | 状态 |
 |------|------|----------|:----:|
 | Modbus TCP | [configs/protocols/modbus-tcp.json](../../configs/protocols/modbus-tcp.json) | [modbus-tcp.md](./protocols/modbus-tcp.md) | ✅ 已支持 |
+| Siemens S7-1200 | [configs/protocols/s7-1200.json](../../configs/protocols/s7-1200.json) | [s7-1200.md](./protocols/s7-1200.md) | ✅ 已支持（仅 Read/Write Var）|
 
 新增协议：见 [protocols/README.md §如何新增一个协议](./protocols/README.md#如何新增一个协议指引)。
 
@@ -98,6 +99,7 @@
 协议配置上手:
   → protocols/README.md     // 通用教学指引
   → protocols/modbus-tcp.md // Modbus TCP 配置↔字节对照
+  → protocols/s7-1200.md    // Siemens S7-1200 配置↔字节对照
 
 扩展查询:
   → ROADMAP.md              // 未实装扩展候选
