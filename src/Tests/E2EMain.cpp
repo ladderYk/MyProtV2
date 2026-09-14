@@ -2079,7 +2079,7 @@ int RunE2E() {
     {
         MyProt::Polling::LatestValueStore store;
 
-        // 鍗曞厓绾? 瑕嗙洊鍐?+ 设备过滤
+        // 单元级: 覆盖读 + 设备过滤
         std::vector<MyProt::Core::TagValue> batch;
         MyProt::Core::TagValue t1;
         t1.tagName = "Temperature"; t1.deviceId = "PLC-001";
@@ -2135,7 +2135,7 @@ int RunE2E() {
             return std::string(raw.begin(), raw.end());
         };
 
-        // GET 全量快照 (閲嶈瘯绛夌鍙ｅ氨缁?
+        // GET 全量快照 (重试等待端口就绪)
         std::string resp;
         for (int i = 0; i < 20 && resp.empty(); ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -2151,7 +2151,7 @@ int RunE2E() {
               resp.find("Pressure") != std::string::npos &&
               resp.find("Uncertain") != std::string::npos);
 
-        // ?device= 鏉╁洦鎶?
+        // ?device= 参数过滤
         const std::string fResp = HttpGet(
             "GET /api/data/latest?device=PLC-002 HTTP/1.1\r\nHost: t\r\n"
             "Connection: close\r\n\r\n");
@@ -2322,7 +2322,7 @@ int RunE2E() {
         const std::string pDir = std::string(kDir) + "\\protocols";
         ::CreateDirectoryA(pDir.c_str(), NULL);
 
-        // 閺嶅洨顒?JSON 瀹搞儱宸? nTags=鏍囩鏁? devPort=鐠佹儳顦潻鐐村复缁旑垰褰?(v1→v2 双变更点)
+        // 重载 JSON: nTags=标签数, devPort=仿真器端口 (双变更点)
         auto TagsJson = [](int nTags, int devPort) {
             std::ostringstream ss;
             ss << "{\"schemaVersion\":2,"
@@ -2348,7 +2348,7 @@ int RunE2E() {
             std::ofstream f((std::string(kDir) + "\\tags.json").c_str());
             f << TagsJson(1, 11531);
         }
-        // 閸楀繗顔?JSON 瀹搞儱宸? listenPort 娑撳骸鐦庣€涙ê娅掗崚婵嗏偓鐓庡棘閺佹澘瀵?(v1→v2 鍙樻洿鐐?
+        // 仿真 JSON 重载: listenPort 变更应生效
         auto ProtoJson = [](uint16_t port) {
             std::ostringstream ss;
             ss << "{\"schemaVersion\":2,\"protocolName\":\"SimModbus\","
@@ -2391,7 +2391,7 @@ int RunE2E() {
 
         asio::io_context rio;
         // 空闲保活: 瀵洘鎼搁柌宥堫棅闁板秶绮?io.post 閹舵洟鈧?閳?閼?run() 因无工作提前返回,
-        // post 的装配闭包将永不执行 (run_for 瀵邦亞骞嗛弮鐘愁劃闂傤噣顣? 独立线程 run() 閺?
+        // post 的装配闭包将永不执行: 独立线程 run() 已接管
         asio::executor_work_guard<asio::io_context::executor_type> rioWork =
             asio::make_work_guard(rio);
         // 浠跨湡鍣?accept 与引擎轮询回调均需线程驱动 io_context
@@ -2401,7 +2401,7 @@ int RunE2E() {
         MyProt::Polling::LatestValueStore latest;
         std::vector<MyProt::Core::ProtocolConfig> protoStore;
 
-        // 寮曟搸渚ц閰?(娑?RunProduction 閸氬本鐎?: lookup/factory 鏁版嵁婧?+ 缂冩垵鍙?+ 瀵洘鎼?
+        // 引擎侧装配 (与 RunProduction 同构): lookup/factory 数据源 + 快照注入
         typedef std::vector<MyProt::Core::ProtocolConfig> T12ProtoList;
         std::shared_ptr<T12ProtoList> rProtosPtr =
             std::make_shared<T12ProtoList>();
@@ -2450,7 +2450,7 @@ int RunE2E() {
             return pred();
         };
 
-        // 杩愯鏃剁姸鎬佽仛鍚?(AppContext) + ConfigStore 閳?椤诲厛浜?ctx 娴犮儳鎾奸崗銉ㄤ粵閸?
+        // 运行时状态聚合 (AppContext) + ConfigStore (须先于 ctx 完成装配)
         MyProt::Service::ConfigStoreOptions rOpts;
         rOpts.configDir = kDir;
         MyProt::Service::ConfigStore rStore(rOpts);
@@ -2460,7 +2460,7 @@ int RunE2E() {
             &latest, &sims, &owners, &protoStore, &rStore
         };
 
-        // 12a: 首次装配 (娴犺法婀￠崳銊ユ倱濮濄儱缂?+ 寮曟搸缁?post 闁插秴鎯?閳?与生产同一入口)
+        // 12a: 首次装配 (引擎启动 + 引擎线程 post) → 与生产同一入口
         {
             MyProt::Core::VoidExpected rr = ApplyRuntimeSync(kDir, rCtx, nullptr);
             Check("16-1: 冷启动 ApplyRuntimeSync 成功", rr.has_value());
@@ -2477,7 +2477,7 @@ int RunE2E() {
             return ApplyRuntimeSync(kDir, rCtx, nullptr);
         });
 
-        // 12b: 棰勭疆鏃у揩鐓?閳?閺€褰掑帳缂?(浠跨湡鍣?鐠佹儳顦潻浣盒?11532 + 标签×2 + 閸掓繂鈧?7) 閳?reload
+        // 12b: 预置旧快照 (仿真器 + 标签×2) → reload
         std::vector<MyProt::Core::TagValue> seed(1);
         seed[0].tagName = "Old.Tag"; seed[0].deviceId = "Old-Dev";
         seed[0].typedValue.type = MyProt::Core::ValueType::UInt16;
@@ -2490,7 +2490,7 @@ int RunE2E() {
         WriteSimServerJson(11532, 7);   // 仿真器随 server.json 迁移端口
         {
             std::ofstream f((std::string(kDir) + "\\tags.json").c_str());
-            f << TagsJson(2, 11532);   // 标签×2 + 设备端口迁移 閳?鐠佹儳顦柊宥囩枂閻戭厾鏁撻弫鍫ョ崣鐠囦胶鍋?
+            f << TagsJson(2, 11532);   // 标签×2 + 设备端口迁移 → 仿真器新端口生效
         }
         Check("16-5: reload 成功", rStore.Reload().has_value());
         Check("16-6: 仿真器迁移至 @11532",
@@ -2528,13 +2528,13 @@ int RunE2E() {
             }, 40);
         Check("16-10: R.V=7 (引擎→新仿真器数据闭环)", rvGood && rvVal == 7);
 
-        // 12c: 閸欏秴鎮?閳?鍧忛厤缃?reload 婢惰精瑙?閳?杩愯鎬佷繚鎸佷笉鍙?
+        // 12c: 反向 → 坏配置 reload 失败 → 运行态保持不变
         { std::ofstream f(protoPath.c_str()); f << "{\"schemaVersion\":99}"; }
         Check("16-11: 坏配置 reload 失败", !rStore.Reload().has_value());
         Check("16-12: 仿真器保留 @11532",
               sims.count("SimModbus") == 1 &&
               sims["SimModbus"]->ListenPort() == 11532);
-        // 12b 閸氬骸绱╅幙搴㈠瘮缂侇厼婀柌鍥ㄦ殶閹?閳?鍙獙璇佹湭琚娓? 涓嶉獙璇佸叿浣撴暟閲?
+        // 之后只验证引擎未被误停, 不验证具体数量
         Check("16-13: 实时快照未被误清", latest.Count() >= 1);
         Check("16-14: 引擎保持 activeTags=2",
               rengine.GetStats().activeTags.load() == 2);
@@ -2558,7 +2558,7 @@ int RunE2E() {
         const std::string pDir = std::string(kDir) + "\\protocols";
         ::CreateDirectoryA(pDir.c_str(), NULL);
 
-        // 閺嶅洨顒? R.W @ addr5, 150ms 鏉烆喛顕?(鍐欏悗鍥炶楠岃瘉鐐?
+        // 标签: R.W @ addr5, 150ms 轮询 (写后回读验证点)
         {
             std::ofstream f((std::string(kDir) + "\\tags.json").c_str());
             f << "{\"schemaVersion\":2,"
@@ -2635,7 +2635,7 @@ int RunE2E() {
         MyProt::Polling::LatestValueStore latest;
         std::vector<MyProt::Core::ProtocolConfig> protoStore;
 
-        // 寮曟搸渚ц閰?(涓庣敓浜?Test12 閸氬本鐎?
+        // 引擎侧装配 (与生产/Test12 同构)
         typedef std::vector<MyProt::Core::ProtocolConfig> T13ProtoList;
         std::shared_ptr<T13ProtoList> wProtosPtr =
             std::make_shared<T13ProtoList>();
@@ -2695,7 +2695,7 @@ int RunE2E() {
             return false;
         };
 
-        // AppContext + 鐠侯垳鏁辩悰?閳?涓庣敓浜?RunProduction 鍚屾瀯鐨勮閰嶆柟寮?
+        // AppContext + 路由装配 → 与生产 RunProduction 同构的装配方式
         MyProt::Service::ConfigStoreOptions opts;
         opts.configDir = kDir;
         MyProt::Service::ConfigStore store(opts);
@@ -2746,7 +2746,7 @@ int RunE2E() {
             return std::string(raw.begin(), raw.end());
         };
 
-        // 缁?WebApi 鐏忚京鍗?+ 寮曟搸閲囧埌鍩虹嚎鍊?(娴犺法婀￠崳銊ュ灥閸?addr5=99)
+        // 经 WebApi 写 + 引擎采到基线值 (引擎启动后 addr5=99)
         std::uint64_t rwVal = 0;
         bool baseOk = WaitFor(
             [&SnapVal, &rwVal]() { return SnapVal("R.W", rwVal); }, 60);
@@ -2765,7 +2765,7 @@ int RunE2E() {
               wrResp.find("200") != std::string::npos &&
               wrResp.find("\"ok\"") != std::string::npos);
 
-        // 写→仿真器内存→轮询回读闭环: R.W 搴斿彉涓?1234
+        // 写→仿真器内存→轮询回读闭环: R.W 应变为 1234
         bool updOk = WaitFor(
             [&SnapVal, &rwVal]() {
                 return SnapVal("R.W", rwVal) && rwVal == 1234; }, 60);
@@ -2822,7 +2822,7 @@ int RunE2E() {
         std::cout << std::endl;
     }
 
-    // ──SSE /api/data/stream (SetStreamRoute 閹恒劑鈧胶鏁撻崨钘夋噯閺? ──
+    // ── SSE /api/data/stream (SetStreamRoute 注册与推送) ──
     std::cout << "--- Test 18: SSE Data Stream ---" << std::endl;
     {
         MyProt::Polling::LatestValueStore store;
@@ -2857,7 +2857,7 @@ int RunE2E() {
             if (p.rfind("/api/data", 0) == 0) return HandleDataApi(req, store);
             return HandleSimApi(req, noSims);
         });
-        // 鎺ㄩ€侀棿闅?300ms (缩短等待); 鐢熶骇涓?3000ms
+        // 推送间隔 300ms (缩短等待); 生产为 3000ms
         sApi.SetStreamRoute("/api/data/stream", 300,
             [&store](const std::string& p) {
                 return BuildLatestJson(store, QueryParam(p, "device"));
@@ -2868,7 +2868,7 @@ int RunE2E() {
         SyncTcpClient sClient(sio);
         sClient.SetReadTimeoutMs(2000);
 
-        // 缁涘顏崣锝呮皑缂?
+        // 周期推送
         bool connected = false;
         for (int i = 0; i < 20 && !connected; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -2876,7 +2876,7 @@ int RunE2E() {
         }
         Check("18-1: 建立 /api/data/stream 连接", connected);
 
-        // 閸?GET 閳?循环收块直到首帧 data: 閸戣櫣骞?(閺堝秴濮熺粩顖氱紦鏉╃偟鐝涢崡铏腹妫ｆ牕鎶?
+        // 发 GET → 循环收块直到首帧 data: (避免阻塞等待)
         const std::string streamReq =
             "GET /api/data/stream HTTP/1.1\r\nHost: t\r\n"
             "Accept: text/event-stream\r\n\r\n";
@@ -2895,7 +2895,7 @@ int RunE2E() {
               acc.find("Temperature") != std::string::npos &&
               acc.find("37.25") != std::string::npos);
 
-        // 鍛ㄦ湡鎺ㄩ€? 累计收到 >= 2 娑?data 鐢?
+        // 周期推送: 累计收到 >= 2 条 data 事件
         auto CountFrames = [](const std::string& s) {
             size_t n = 0;
             for (size_t pos = s.find("data:"); pos != std::string::npos;
@@ -2909,7 +2909,7 @@ int RunE2E() {
         Check("18-4: 周期推送第二帧到达", CountFrames(acc) >= 2);
         sClient.Close();
 
-        // 鐎广垺鍩涚粩顖涙焽瀵偓閸氬孩婀囬崝鈥茬矝閸嬨儱鎮?(写失败清理不崩溃)
+        // 客户端异常断开 (写失败清理不崩溃)
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         SyncTcpClient hClient(sio);
         std::string healthResp;
@@ -3257,12 +3257,12 @@ int RunE2E() {
             vProtosPtr, vDevicesPtr, vTagsPtr,
             &vLatest, &vSims, &vOwners, &vProtoStore, &vStore
         };
-        // Test 16 闇€瑕佷竴涓?R.W16 标签 + PLC-RB 设备 (涓?PLC-V 隔离).
-        // 璧?ApplyRuntimeSync 不可 (浼氬啿鎺?R.W15); 鐢?ConfigStore 灞€閮?PUT
-        // + Reload 不可 (会重建仿真器). 最简: 鐩存帴鏋?vTagsPtr 副本 + Apply.
-        // 浣?ApplyRuntimeSync 浼氬叏鍋? 杩欓噷鍙涓嶅洖鍐? 直接复用现有 vTagsPtr
-        // 鐨?R.W15 标签 (StartAddress=0). read-back 路径同样适用, 接受.
-        // (娉? R.W15 也叫 R.W16 浠呭湪鏂囨。涓尯鍒? 瀹為檯鏍囩鍚?R.W15)
+        // Test 16 需要一个 R.W16 标签 + PLC-RB 设备 (与 PLC-V 隔离).
+        // 走 ApplyRuntimeSync 不可 (会冲突 R.W15); 用 ConfigStore 局部 PUT
+        // + Reload 不可 (会重建仿真器). 最简: 直接改 vTagsPtr 副本 + Apply.
+        // 但 ApplyRuntimeSync 会全停; 这里只读不回写, 直接复用现有 vTagsPtr
+        // 的 R.W15 标签 (StartAddress=0). read-back 路径同样适用, 接受.
+        // (注: R.W15 也叫 R.W16 仅在文档中区分; 实际标签名 R.W15)
         Check("20-0: readBack 配置装配成功",
               ApplyRuntimeSync(kDir20, t16Ctx, nullptr).has_value());
         Check("20-0b: 仿真器已监听 @11542",
