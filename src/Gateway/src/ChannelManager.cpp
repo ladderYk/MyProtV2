@@ -243,8 +243,8 @@ void ChannelManager::PerformConnect(
     std::function<void(Core::Expected<ConnectResult>)> handler) {
 
     // 有效端口解析 (ADR-0012 附录 A.1): device.connection.port=0 → 协议 defaultPort。
-    // 此前 POCO 值从未传入通道, TcpChannel 硬编码回落 502 — S7 漏填 port 时
-    // 校验通过却连错端口; 现在端点键与 Connect 均使用解析后的有效端口。
+    // 端点键与 Connect 都必须使用解析后的有效端口 —— 通道不得自行回落到某个协议默认值
+    // (否则 S7 漏填 port 时会连错端口, 且校验期看不出来)。
     Core::ConnectionConfig conn = entry.deviceConfig.connection;
     if (conn.port == 0) {
         if (protocol.transport.type == Core::TransportType::Tcp) {

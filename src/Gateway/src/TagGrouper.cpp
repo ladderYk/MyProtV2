@@ -11,14 +11,14 @@ namespace MyProt { namespace Gateway {
 // ── 提取起始地址 ──
 
 uint32_t TagGrouper::GetStartAddress(const Core::TagDefinition& tag) {
-    // v1.25 改: 读跨协议字节单位 "StartByteAddress" (协议 JSON derivedLength 派生前已是字节).
-    //   Modbus tag 原写 "StartAddress": N (寄存器号), 现改写 "StartByteAddress": N×2 (字节地址),
+    // 读跨协议字节单位 "StartByteAddress" (协议 JSON derivedLength 派生前已是字节).
+    //   Modbus 侧标签声明字节地址 "StartByteAddress": N×2 (协议族寄存器号由 outputs.derivedLength 派生),
     //   协议 JSON 通过 outputs.StartAddress = StartByteAddress/2 派生寄存器号给 FC03 命令字用.
     auto it = tag.variables.find(Core::StartByteAddressVariableName());
     return (it != tag.variables.end()) ? it->second : 0;
 }
 
-// ── 提取字节跨度 (v1.25: 替代 tag.registerCount * 2) ──
+// ── 提取字节跨度 (不按 registerCount×2 推算, 而是按协议声明) ──
 //   由协议 JSON 通过 outputs.ByteCount (derivedLength) 派生;
 //   Modbus: {RegisterCount} * 2; S7: 直接字节数.
 //   引擎零协议知识, 仅按 "ByteCount" 约定键查表; tag 没声明 → 回退 2 字节
@@ -67,7 +67,7 @@ std::vector<MergedRequest> TagGrouper::CoalesceAdjacent(
         return {};
     }
 
-    // 按起始字节地址排序 (v1.25: 字节语义, 协议族单位由协议 JSON derivedLength 解释)
+    // 按起始字节地址排序 (字节语义; 协议族单位由协议 JSON derivedLength 解释)
     std::vector<size_t> sorted = group.tagIndices;
     std::sort(sorted.begin(), sorted.end(),
         [&tags](size_t a, size_t b) {
@@ -79,7 +79,7 @@ std::vector<MergedRequest> TagGrouper::CoalesceAdjacent(
     // 贪心合并: 当前批次的 [startByte, endByte]
     size_t batchStart = 0;  // sorted 中的起始索引
     uint32_t startAddr = GetStartAddress(tags[sorted[0]]);
-    // v1.25 改: 跨度 = tag.variables["ByteCount"] (协议 JSON derivedLength 派生后填入)
+    // 跨度 = tag.variables["ByteCount"] (协议 JSON derivedLength 派生后填入)
     uint32_t endAddr = startAddr + GetByteCount(tags[sorted[0]]);
 
     for (size_t i = 1; i <= sorted.size(); ++i) {
