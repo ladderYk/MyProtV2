@@ -11,7 +11,7 @@
 #include "MyProt/Core/Optional.hpp"    // 自研 Core::Optional<T> (C++11 兼容, 取代 std::optional, 2026-08-29 回退 v140 不支持 <optional>)
 
 #include "MyProt/Core/ByteOrder.hpp"   // LengthFieldConfig 依赖 ByteOrder 枚举
-#include "MyProt/Core/SimulationConfig.hpp" // v1.1 抽离; ServerConfig / 旧引用方 (ConfigDeepValidator) 仍需此头
+#include "MyProt/Core/SimulationConfig.hpp" // ServerConfig / 引用方 (ConfigDeepValidator) 仍需此头
 
 namespace MyProt { namespace Core {
 
@@ -40,7 +40,7 @@ struct FixedConfig {
 
 struct SilenceConfig {               // 串口/RTU 静默成帧 (v1; 成帧由通道读循环驱动)
     int charTimeUs;                  // 单字符时间(微秒); 0 = 按协议级波特率/数据位自动折算 (仅诊断参考)
-    int frameGapUs;                  // 帧间静默阈值(微秒); 须 > 0 显式配置 — v1.27 起不再默认 3.5×charTimeUs (Modbus RTU 约定已从引擎移除)
+        int frameGapUs;                  // 帧间静默阈值(微秒); 须 > 0 显式配置 — 引擎不内置协议约定, 不自动折算 charTimeUs
     int maxFrameSize;
 
     SilenceConfig() : charTimeUs(0), frameGapUs(0), maxFrameSize(256) {}
@@ -128,11 +128,11 @@ struct OperationConfig {
     std::string name;                  // 由加载器从 operations map 的 key 回填, JSON 中不写
     std::vector<std::string> requestTemplate;
     ResponseParserConfig responseParser;
-    // v1.7 增: 操作语义标注 (可选, 空 = 未标注) — "read" | "write".
+        // 操作语义标注 (可选, 空 = 未标注) — "read" | "write".
     //   运行时不依赖 (写路径按引用区分), 用于 UI 表单过滤与配置校验
     //   (标签 operation 应为 read 类, writeOperation 应为 write 类).
     std::string kind;
-    // v1.17 (方案B): 输入/输出参数分组 — 取代旧的单段 variables:
+        // 输入/输出参数分组 (inputs / outputs) — 配置中不存在单段 variables:
     //   inputs : 操作者提供 / 运行时生成的输入 ( source=static 值或纯 UI 提示
     //            + source=auto{autoIncrement,frameSlice,expr,crc} ). 同层合并入
     //            RequestBuilder 扁平变量池供模板 {Name:Xn} 查表渲染.
@@ -141,7 +141,7 @@ struct OperationConfig {
     //   - 同一操作域内 inputs 与 outputs 不得同名 (校验 Error, 防"一个名字串场").
     //   - 跨操作允许角色变化: 同名变量在不同操作可以是 input 或 output
     //     (如 RegisterCount: 读操作=输入 / 写操作=输出), 合法且各自声明可见.
-    //   - 原 op.variables 段 (v1.10) 在 v1.17 硬迁移移除; op.placeholderHints 早已移除.
+        //   - op.variables / op.placeholderHints 均不在当前 Schema 中 (代际变迁见 ADR-0005).
     std::unordered_map<std::string, VariableConfig> inputs;
     std::unordered_map<std::string, VariableConfig> outputs;
 
@@ -163,7 +163,7 @@ struct HandshakeStep {
     HandshakeStep() : timeoutMs(0) {}
 };
 
-// ────────── 协议变量声明 (v1.10 合并 defaultVariables + autoCompute + placeholderHints) ──────────
+// ────────── 协议变量声明 (inputs / outputs 两组) ──────────
 
 /// 协议变量统一声明 — 一个变量在一处声明其来源 + 值/策略 + 展示元信息.
 /// 取代旧三段 (defaultVariables / autoComputeJson / metadata.placeholderHints).
@@ -176,13 +176,13 @@ struct HandshakeStep {
 //
 //   strategy (source=auto 时):
 //     autoIncrement / frameSlice / expr / crc — 调用即自动求值 (拼进 autoComputeJson 喂 AutoComputeProvider)
-//     derivedLength (v1.16)                   — 派生长度: 参数层按载荷字节数(payload) 的纯函数预解析,
+//     derivedLength — 派生长度: 参数层按载荷字节数(payload) 的纯函数预解析,
 //       只用 expr (e.g. "{WriteValue:len} + 7" / "{WriteValue:len} * 8"); 取代旧硬编码名族 (PayloadPlus4/
 //       PayloadBits/FrameWithUnit 等已随 kind 字段一并移除).
 //
 //   source 必须显式声明. auto 需 strategy; static 需 value (uint32_t 或字符串 → 运行时按 size).
 //
-//   v1.22: 变长写载荷不再需要特殊策略声明 — 引擎扫描模板 {Name:raw} 占位符自动识别载荷,
+//   变长写载荷无需特殊策略声明 — 引擎扫描模板 {Name:raw} 占位符自动识别载荷,
 //   把实际载荷字节数注入 {name:len} 解析表. inputs 中载荷名仅作 UI 展示 (source=static 无 value).
 //
 // JSON 形态(方案A: 参数分层，计算下沉):
@@ -205,7 +205,7 @@ struct VariableConfig {
     // auto 段
     std::string strategy;      // source=auto 时必填: autoIncrement|frameSlice|expr|crc|derivedLength
     std::string paramsJson;    // source=auto 时有效 (derivedLength 不使用): 策略参数 (AutoComputeProvider 消费)
-    // source=auto + strategy=derivedLength (v1.16: 唯一表达):
+        // source=auto + strategy=derivedLength (唯一表达):
     //   expr: 基于载荷字节数的轻量算术表达式 (e.g. "{WriteValue:len} + 7", "{WriteValue:len} * 8");
     //   {name:len} 引用模板中变量的字节长度 (raw 载荷 = 实际字节数, 其余 = 模板渲染宽度);
     //   不依赖内置名词，全公式自解释。
@@ -231,9 +231,9 @@ struct VariableConfig {
 
 /// 仿真配置 (协议级可选节) ──────────
 
-/// 仿真操作行为描述见 SimulationConfig.hpp. (v1.1 抽离)
+/// 仿真操作行为描述见 SimulationConfig.hpp.
 
-/// 协议级仿真配置; v1.1 起 simulation 移至 server.json 顶层 ServerConfig.simulation.
+/// 协议级仿真配置; simulation 位于 server.json 顶层 ServerConfig.simulation.
 /// 协议层彻底与 listenPort / initialValues / packetLossRate 等服务端行为脱耦.
 
 /// ────────── 配置代际 ──────────
@@ -241,7 +241,7 @@ struct VariableConfig {
 /// 受支持的配置代际号 (ADR-0005 版本门禁) — **单一真源**.
 ///   协议文件 / tags.json 根 / server.json 三者的 schemaVersion 必须精确等于此值
 ///   (缺省 = Warning + 假定为本值; 不符 = ConfigError Fail-Fast).
-/// v1.30: 该值原先以字面量 2 散落在装配点 (main.cpp / RuntimeGlue.cpp /
+/// 该值的唯一来源在此; 装配点 (main.cpp / RuntimeGlue.cpp /
 ///   ConfigStoreOptions 默认值), 且 Core 注释引用了一个从未定义的常量
 ///   kSupportedSchemaVersion — 现补齐该常量并统一引用.
 /// 变更此值须同步迁移 configs/ 下全部配置 (ADR-0005 迁移流程).
@@ -264,29 +264,29 @@ struct ProtocolConfig {
     Optional<ByteOrder> dataByteOrder; // 协议级数据解码字节序; 标签未显式声明 byteOrder 时回退至此; 未设置 = BigEndian
     std::unordered_map<std::string, OperationConfig> operations;
     std::vector<HandshakeStep> handshake;             // 填空数组 = 无握手 (Modbus)
-    // v1.32 删: 协议级 writeOperation / writeBytesOperation —
+        // 协议级 writeOperation / writeBytesOperation 不属于 Schema —
     //   写能力只在标签层声明 (标签级 writeOperation / writeBytesOperation /
     //   direction=write 三形态); 协议级字段曾使只读标签隐式可写 (legacy 兜底),
-    //   与「配置即契约」相悖, 已移除.
-    // v1.1 改: simulation 段从本结构移至 ServerConfig (server.json). 协议层不承载服务端行为.
-    // v1.10 改: defaultVariables / autoComputeJson / metadata.placeholderHints 三段合并为统一 variables 段.
-    // v1.17 改 (方案B): variables 段拆分为 inputs / outputs 两组, 运行时按 source 分流:
+        //   与「配置即契约」相悖 (写声明点唯一: 标签).
+        // simulation 段在 ServerConfig (server.json); 协议层不承载服务端行为.
+        // 变量声明归一为 inputs / outputs 两组 (不存在 defaultVariables/autoComputeJson/placeholderHints 段).
+        // inputs / outputs 按 source 分流:
     //     - inputs.source=static 有 value → 注入扁平变量池 (旧 static 语义); 无 value → 仅 UI (原 hint)
     //     - inputs.source=auto          → 拼装为 autoComputeJson 喂 AutoComputeProvider (非 derivedLength)
     //     - outputs.source=auto derivedLength → 参数层预解析按 expr 求值注入 (引用模板变量名, {name:len} 取字节长度)
-    //     - 变长写载荷 (v1.22): 模板 {Name:raw} 占位符自动识别, 无需 inputs 特殊声明
+        //     - 变长写载荷: 模板 {Name:raw} 占位符自动识别, 无需 inputs 特殊声明
     std::unordered_map<std::string, VariableConfig> inputs;
     std::unordered_map<std::string, VariableConfig> outputs;
     int schemaVersion;                        // 配置代际号 (ADR-0005); 须等于 kSupportedSchemaVersion
-    // v1.27 增 / v1.28 收敛: 变量别名映射 (alias → internal name).
+        // 变量别名映射 (alias → internal name).
     //   用户在协议 JSON 的 variableAliases 段自定义变量名, 引擎内部仍用契约名.
-    //   v1.28: 可映射目标仅 2 个 — StartByteAddress / ByteCount (引擎真正查表读取的
+        //   可映射目标仅 2 个 — StartByteAddress / ByteCount (引擎真正查表读取的
     //     跨协议字节单位); 其余旧名已降级/移出契约, 见 Config_Schema.md §2.
     //   注意: 全局 variable-aliases.json 文件尚未实装 — 加载器只读协议文件内的本段.
     //   别名在加载期由 ConfigDirectoryLoader::ApplyVariableAliases 一次性归一化,
     //   运行期消费点无需感知; 本表仅作直接构造 ProtocolConfig (不经加载器) 路径的兜底.
     std::unordered_map<std::string, std::string> varAliasMap;
-    // v1.29 增: 标签按地址邻近合并的最大字节跨度 (沿革见 kDefaultMaxSpanBytes).
+        // 标签按地址邻近合并的最大字节跨度 (语义见 kDefaultMaxSpanBytes).
     //   协议族"单次读取上限"在此统一表达, 引擎不再内建任何具体数字.
     //   注: v1 不区分读操作类型 (Modbus FC01 线圈上限 2000 远大于 FC03 寄存器上限 125),
     //       故协议作者应按其最紧的一类读操作取值.
@@ -360,24 +360,24 @@ struct DeviceConfig {
 };
 
 // ────────── 协议族约定键名 (引擎 ↔ 协议模板的接口约定) ──────────
-// v1.24: 引擎中所有协议名字面量收敛于以下约定函数 (v1.25 增 2 个跨协议字节单位,
-//   v1.26 增 BitOffset 位偏移); 除此之外 Core 不含任何协议知识.
+// 引擎中所有协议名字面量收敛于以下约定函数 (跨协议字节单位 2 个,
+//   另含 BitOffset 位偏移); 除此之外 Core 不含任何协议知识.
 //   {StartByteAddress/ByteCount} 是跨协议统一的字节单位 (引擎内部);
 //   {StartAddress/RegisterCount} 是协议族单位 (协议 JSON 模板按 derivedLength 从前两者推导;
 //   Modbus: {StartByteAddress}/2 = 寄存器号; S7: 直接字节地址;
-//   v1.26 线圈类: StartByteAddress*8 + BitOffset = 线圈位地址).
+//   线圈类: StartByteAddress*8 + BitOffset = 线圈位地址).
 
-/// 起始字节地址变量名 — v1.25 跨协议字节单位
+/// 起始字节地址变量名 — 跨协议字节单位
 inline std::string StartByteAddressVariableName() {
     return "StartByteAddress";
 }
 
-/// 数据区字节跨度变量名 — v1.25 跨协议字节单位
+/// 数据区字节跨度变量名 — 跨协议字节单位
 inline std::string ByteCountVariableName() {
     return "ByteCount";
 }
 
-// v1.28 删: StartAddressVariableName / RegisterCountVariableName —
+// StartAddressVariableName / RegisterCountVariableName 不存在 —
 //   协议族单位名 (StartAddress/RegisterCount) 由协议 JSON outputs(derivedLength) 自行声明,
 //   引擎从不查表读取; 校验器的模板引用域白名单已改为从 protocol.outputs / op.outputs
 //   动态收集派生名 (ConfigDeepValidator), 不再假定任何具体名.
@@ -386,7 +386,7 @@ inline std::string ByteCountVariableName() {
 ///   (标签可用 writeVariable 覆盖; 模板按需用 {WriteValue:X4} 或 {WriteValue:raw} 消费).
 const char* const kDefaultWriteValueVariable = "WriteValue";
 
-/// 位偏移在 derivedLength expr 中的作用域名 — 非契约名 (v1.28).
+/// 位偏移在 derivedLength expr 中的作用域名 — 非契约名.
 ///   协议 inputs 需声明同名 static 缺省 0 (满足 expr 引用域校验);
 ///   标签侧的值来自 TagDefinition::bitOffset, 由 TagReader 注入本键以覆盖协议缺省.
 const char* const kBitOffsetExprVariable = "BitOffset";
@@ -394,7 +394,7 @@ const char* const kBitOffsetExprVariable = "BitOffset";
 // ────────── 帧结构保留名 (单一真源) ──────────
 //   这些名字由引擎内建解释 — 协议变量名 / 标签变量名 / variableAliases 别名均不得
 //   声明占用 (校验器报错, 见 ConfigDeepValidator 的保留名冲突检查).
-//   v1.30: 原为散落在 ConfigDeepValidator (同一集合写了两遍) / AutoComputeProvider /
+//   唯一来源在此; 禁止在 ConfigDeepValidator / AutoComputeProvider /
 //   FrameConsistencyCheck 的字面量集合; 现收敛于此, 并逐名常量化供各使用点直接引用.
 
 const char* const kFramePrimitiveName = "Frame";      // {Frame:fixed} 模板原语 (模板固定段总宽)
@@ -426,28 +426,28 @@ struct TagDefinition {
     std::string name;                   // 全局唯一 (e.g. "PLC-001.Temperature")
     std::string deviceId;
     std::string operation;              // 操作名 (e.g. "ReadHoldingRegisters")
-    // 标签变量表 — 跨协议字节单位 (v1.25/v1.28 收敛):
+        // 标签变量表 — 跨协议字节单位:
     //   StartByteAddress / ByteCount 为引擎契约名 (TagGrouper 取址 / 派生长度引用);
     //   协议族单位 (Modbus 的 StartAddress/RegisterCount、S7 的 DB/偏移族) 不写在标签里 —
     //   由协议 JSON 的 outputs(derivedLength) 派生. 标签显式声明同名键会覆盖派生值 (校验器告警).
     std::unordered_map<std::string, uint32_t> variables;
     int scanRateMs;
-    // v1.25 删: registerCount 字段 — 改为由协议 JSON 通过 outputs.ByteCount (derivedLength) 派生.
+        // registerCount 字段不存在 — 字节跨度由协议 outputs.ByteCount (derivedLength) 派生.
     //   引擎零硬编码 (无"寄存器 = 2 字节"假设); 跨协议字节跨度统一在协议 JSON 内表达.
     //   Modbus: variables.RegisterCount (协议族单位) → derivedLength.ByteCount = {RegisterCount} * 2
     //   S7:     variables.ByteCount (字节单位) 直接
     std::string finalType;              // 转换目标类型 (Config_Schema §6)
     Optional<ByteOrder> byteOrder; // 未设置 = 回退链: 协议 dataByteOrder → BigEndian
-    // v1.32 删: deadband / reportMode — 上报过滤无消费落点 (唯一结果出口 onResults
+        // deadband / reportMode 不存在 — 上报过滤无消费落点 (唯一结果出口 onResults
     //   直连 LatestValueStore, 在此过滤会让"最新值缓存"失真); 见 ROADMAP 上报过滤项.
     bool coalesce;                      // 是否参与地址邻近合并; 单地址读(如 S7 ReadVar)设 false
-    // v1.28 增: 位偏移 (0-7), 语义 = StartByteAddress 所指字节内的位偏移; -1 = 未声明.
-    //   v1.28 前用 variables["BitOffset"] 魔法键表达, 现升格为一等字段:
+        // 位偏移 (0-7), 语义 = StartByteAddress 所指字节内的位偏移; -1 = 未声明.
+        //   一等字段 (不再用 variables["BitOffset"] 魔法键表达):
     //     - ResponseParser 的 Bool 位提取直接读本字段 (不再查变量表);
     //     - TagReader 在 bitOffset >= 0 时注入 expr 作用域键 kBitOffsetExprVariable,
     //       供协议 outputs derivedLength 引用 (如 Modbus FC05/FC15 位寻址派生).
     int bitOffset;
-    // ── 写标签 (v1.6): direction="write" 时本标签定义一次写入而非采集点 ──
+        // ── 写标签: direction="write" 时本标签定义一次写入而非采集点 ──
     // operation 直接指向写操作模板 (如 "WriteVar"/"WriteSingleRegister"),
     // variables 携带完整写语义 (TransportSize/Length/DBNumber/AddrLo/...),
     // 不参与轮询; /api/data/write 按 tag 名定向到本标签.
@@ -458,13 +458,13 @@ struct TagDefinition {
                                         //   (空 = 用写标签自身读语义原样重读;
                                         //   v1.x 已取代 "ReadHoldingRegisters" 硬编码约定)
                                         // 注: 请求-应答超时不在此配置, 统一由 device.requestTimeoutMs 决定 (2026-08-24 收敛)
-    // ── 标签级写能力 (v1.7 / v1.32): direction=read 标签在此声明写语义 ──
+        // ── 标签级写能力: direction=read 标签在此声明写语义 ──
     // 三形态: 只读 (两字段均空, 写 API 明确拒绝)
     //         读写 (writeOperation 非空 = 可标量写; writeBytesOperation 非空 = 可变长写)
     //         只写 (direction=write, operation 即写操作, 不参与轮询).
     // 写请求变量表 = defaultVariables → variables → writeVariables → 注入 {writeVariable};
     // 读回校验用自身 operation (readBackTag 无需配置).
-    // v1.32 删: 协议级 writeOperation/writeBytesOperation 兜底 — 写声明点收敛于标签.
+        // 协议级 writeOperation/writeBytesOperation 兜底不存在 — 写声明点唯一: 标签.
     std::string writeOperation;         // 标量写 (POST value) 用的操作模板名 (如 "WriteVar")
     std::string writeBytesOperation;    // 变长写 (POST bytes) 用的操作模板名 (模板以 {Name:raw} 消费)
     std::unordered_map<std::string, uint32_t> writeVariables; // 写请求专用变量覆盖 (如 S7 写的 TransportSize/Length 与读不同)

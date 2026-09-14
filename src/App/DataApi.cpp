@@ -31,17 +31,17 @@
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
-#include "MyProt/Core/ServerConfig.hpp"  // v1.1 增: LoadedConfig.server
+#include "MyProt/Core/ServerConfig.hpp"  // LoadedConfig.server
 #include "MyProt/Core/ByteView.hpp"
 #include "MyProt/Core/ByteOrder.hpp"
 #include "MyProt/Core/Value.hpp"
 #include "MyProt/Core/Metrics.hpp"
 #include "MyProt/Gateway/ProtocolGateway.hpp"
-#include "MyProt/Gateway/TagReader.hpp"     // v1.6: WriteBackCheck
-#include "MyProt/Gateway/TagGrouper.hpp"    // v1.6: GetStartAddress (读回变量表)
+#include "MyProt/Gateway/TagReader.hpp"     // WriteBackCheck
+#include "MyProt/Gateway/TagGrouper.hpp"    // GetStartAddress (读回变量表)
 #include "MyProt/Polling/PollingEngine.hpp"
 #include "MyProt/Polling/LatestValueStore.hpp"
-#include "MyProt/Engine/ResponseParser.hpp"   // v1.28: 写路径 byteOrder 裁决共用 (读写一致)
+#include "MyProt/Engine/ResponseParser.hpp"   // 写路径 byteOrder 裁决共用 (读写一致)
 #include "MyProt/Service/ConfigDirectoryLoader.hpp"
 #include "MyProt/Simulation/SimulationServer.hpp"
 #include "RuntimeGlue.hpp"
@@ -121,14 +121,14 @@ namespace MyProt { namespace App {
         return Resp(200, BuildLatestJson(latestStore, QueryParam(path, "device")));
     }
 
-    // ── v1.6 写标签辅助 ──
+        // ── 写标签辅助 ──
 
     // finalType 是否浮点族 (Float/Double → IEEE754 大端字节编码)
     bool IsFloatFinalType(const std::string& ft) {
         return ft == "Float" || ft == "Double";
     }
 
-    // v1.7 修正: 判断写操作模板是否以 {Name:raw} 消费写值 —
+        // 判断写操作模板是否以 {Name:raw} 消费写值 —
     // S7 WriteVar 等变长模板的整数标量也须走 WriteBytes (BuildBytes) 路径:
     // WriteOnce 标量路径不派生 PDULength/DataLen/DataLength/DataBits,
     // 模板构建即报 "模板变量未提供 (PDULength)"。
@@ -153,17 +153,17 @@ namespace MyProt { namespace App {
         return (colon == std::string::npos) ? inner : inner.substr(0, colon);
     }
 
-    // v1.8 增: 写 op 是否需要走 BuildBytes 路径.
+        // 写 op 是否需要走 BuildBytes 路径.
     // 条件: 模板以 {Name:raw} 消费写值, 或模板引用了「依赖载荷长度」的派生量
     //   (expr 含 {name:len} — 仅 BuildBytes 有 payload 上下文可求值, 如 PDULength 族;
-    //   单条件判定取代 v1.7 单一 raw 检查, 修复 S7 模板 {PDULength:X4} 在
+        //   单条件判定: 覆盖 S7 模板 {PDULength:X4} 这类派生量占位 (只查 raw 会漏)
     //   不含 {WriteValue:raw} 时被误判走 Build 标量路径的问题).
-    // v1.32 收紧: 原实现把「模板引用任何派生量」都判为字节路径 — 但仅由静态量
+        // 收紧: 不能把「模板引用任何派生量」都判为字节路径 — 仅由静态量
     //   派生的值 (如 Modbus {StartAddress} = StartByteAddress/2) 在 WriteOnce 的
     //   InjectDerivedLengthVariables 同样可解析; 误判使整数标量写被推入 BuildBytes,
     //   而该路径的 uint32 变量表不含 WriteValue (载荷以 hex 进 variableBytesHex),
     //   {WriteValue:X4} 渲染报 "模板变量未提供 [WriteValue]" — FC06 标量写全数失败
-    //   (E2E 17-3 / 20a, 自 v1.8 起即为红).
+        //   (E2E 17-3 / 20a 长期为红的根因).
     bool OpNeedsBytePath(const MyProt::Core::ProtocolConfig& proto,
                          const MyProt::Core::OperationConfig& op,
                          const std::string& valueVariable) {
@@ -300,10 +300,10 @@ namespace MyProt { namespace App {
         return false;
     }
 
-    // v1.6: 组装写后读回校验参数.
+        // 组装写后读回校验参数.
     // 读标签选择: 写标签 readBackTag 优先; 未配置时用写标签自身 —
     //   legacy 场景下写目标即读标签, 其 operation 本就是读 op,
-    //   以其自身读语义原样重读 (取代 v1.5 的 "ReadHoldingRegisters"
+        //   以其自身读语义原样重读 (不复用 "ReadHoldingRegisters"
     //   约定查找与硬编码 FC03 布局解析).
     // 期望字节: bytes 非空 = 写入字节; 否则按读标签 finalType 编码 value.
     // 数据区起点由读 op 的 responseParser.dataStartIndex 提供 (RunReadBack).
@@ -341,7 +341,7 @@ namespace MyProt { namespace App {
         out.readVars = MyProt::Engine::RequestBuilder::MergeVariables(
             MyProt::Engine::RequestBuilder::CollectStaticVariables(proto),
             readTag->variables);
-        // v1.25: 注入跨协议字节单位; 协议族地址 (如 Modbus StartAddress 寄存器号)
+                // 注入跨协议字节单位; 协议族地址 (如 Modbus StartAddress 寄存器号)
         //   由读 op outputs 派生 — 与 ReadBatch/Write 路径同一 Inject 管线.
         out.readVars[Core::StartByteAddressVariableName()] =
             MyProt::Gateway::TagGrouper::GetStartAddress(*readTag);
@@ -356,7 +356,7 @@ namespace MyProt { namespace App {
                 /*totalBytes=*/0, layout);
         }
         out.tagLabel = writeTag.name;
-        // v1.10 改: 读回也是 op 级 (readOp), 需要合并 op.inputs 中 source=auto
+                // 读回也是 op 级 (readOp), 需合并 op.inputs 中 source=auto
         //   的覆盖项 — 与 TagReader::Read/Write 调用点走同一 SyncAutoComputeRules 路径.
         out.autoComputeJson = MyProt::Gateway::MergeOpAutoComputeJson(proto, out.readOp);
         if (!bytes.empty()) {
@@ -368,12 +368,12 @@ namespace MyProt { namespace App {
                 out.expectedBytes, errMsg);
     }
 
-    // ── /api/data/write 写路径同步封装 (v1.5; v1.6 写标签扩展) ──
+        // ── /api/data/write 写路径同步封装 (含写标签扩展) ──
     // WebApi 线程 → io.post 全链 (查标签/设备/协议 → GOC → WriteOnce/WriteBytes),
     // 与轮询回调在 io 线程串行 — 消除跨线程 socket 操作与配置向量竞争。
     // promise 用 shared_ptr 保活: 超时返回后 lambda 可能仍在 io 队列中执行。
     // bytes 路径 (P1 A 销账项): 非空时走 WriteBytes 变长写, 透传 {Name:raw} 注入表。
-    // v1.6 写标签 (tag.direction == "write"):
+        // 写标签 (tag.direction == "write"):
     //   - 写 op = tag.operation (不再依赖协议级 writeOperation 约定,
     //     修复 S7 等无 writeOperation 协议标量写必失败的问题)
     //   - 数值注入变量 = tag.writeVariable (默认 "WriteValue")
@@ -450,11 +450,11 @@ namespace MyProt { namespace App {
             //    tag 按值拷贝: GOC 异步连接期间热重载可能替换 *tagsPtr,
             //    指针将指向被换出的旧向量元素 (悬垂)。
             //    bytes 按值拷贝: 同上, lambda 异步期间仍需保活。
-            // v1.6: 写标签 (direction=write) — 写 op 取 tag.operation,
+                        // 写标签 (direction=write) — 写 op 取 tag.operation,
             //    不参与轮询。
-            // v1.7/v1.32: 标签级写能力 — direction=read 标签在标签上声明
+                        // 标签级写能力 — direction=read 标签在标签上声明
             //    writeOperation (标量写) / writeBytesOperation (变长写);
-            //    写声明点收敛于标签 (协议级字段已移除)。
+                        //    写声明点唯一: 标签 (协议级写字段不属于 Schema)。
             const MyProt::Core::TagDefinition tagCopy = *tag;
             const bool isWriteTag = (tagCopy.direction == "write");
             const bool hasTagWrite = isWriteTag || !tagCopy.writeOperation.empty();
@@ -496,7 +496,7 @@ namespace MyProt { namespace App {
                         return;
                     }
                     // 5. 构建写请求 → 发送 → echo 校验
-                    // v1.6: 统一的完成回调 (指标 + promise 置值)
+                                        // 统一的完成回调 (指标 + promise 置值)
                     auto onWriteDone =
                         [promise, tagCopy](MyProt::Core::VoidExpected wr) {
                             Core::metrics::CounterInc(
@@ -507,7 +507,7 @@ namespace MyProt { namespace App {
                             promise->set_value(std::move(wr));
                         };
 
-                    // 5a. v1.6: 组装写后读回校验 (readBack=true 时)
+                                        // 5a. 组装写后读回校验 (readBack=true 时)
                     //     读 op 取 readBackTag (缺省写标签自身) 的读语义,
                     //     期望字节 = 写入字节 / 按 finalType 编码的 value
                     std::shared_ptr<const MyProt::Gateway::WriteBackCheck>
@@ -531,10 +531,10 @@ namespace MyProt { namespace App {
 
                     // 5b. 变长路径: bytes 直传; 可写标签 Float/Double 标量
                     //     → IEEE754 大端字节 → {writeVariable:raw} 注入;
-                    //     v1.7: 写 op 模板以 {writeVariable:raw} 消费时, 整数
+                                        //     写 op 模板以 {writeVariable:raw} 消费时, 整数
                     //     标量同样按 finalType 宽度编码走 BuildBytes 派生链
                     //     (S7 WriteVar — WriteOnce 不派生 PDULength/DataLen 等)
-                    //     v1.8: 用 OpNeedsBytePath 取代单一 raw 检查, 模板引用
+                                        //     经 OpNeedsBytePath 判定 (不能只查 raw), 模板引用
                     //     任何仅 BuildBytes 注入的派生量 (PDULength/DataLength/
                     //     DataBits/DataLen/RegisterCount/ByteCount) 也强制走
                     //     BuildBytes 路径, 修复 "模板变量未提供 (PDULength)".
@@ -572,7 +572,7 @@ namespace MyProt { namespace App {
                         rawVars[tagCopy.writeVariable.empty()
                             ? Core::kDefaultWriteValueVariable : tagCopy.writeVariable] =
                             BytesToHexSpace(payload);
-                        // v1.32: 变长写 op 取标签级 writeBytesOperation (写标签取
+                                                // 变长写 op 取标签级 writeBytesOperation (写标签取
                         //   tag.operation); 仅声明了标量写的标签回退其 writeOperation
                         //   (模板 {Name:Xn} 同样可消费编码后的载荷)。
                         const std::string writeBytesOp = isWriteTag
@@ -603,7 +603,7 @@ namespace MyProt { namespace App {
                         return;
                     }
 
-                    // 5c. v1.6/v1.7 可写标签整数标量: 按 finalType 校验范围
+                                        // 5c. 可写标签整数标量: 按 finalType 校验范围
                     if (hasTagWrite) {
                         std::string rangeErr;
                         if (!CheckIntegerWriteValue(tagCopy.finalType,
@@ -630,7 +630,7 @@ namespace MyProt { namespace App {
                     }
 
                     // 5d. 未声明写能力的只读标签 → fail-fast
-                    //     (v1.32: 协议级 writeOperation 兜底已移除, 写声明点
+                                        //     (写声明点唯一: 标签; 协议级 writeOperation 兜底不存在
                     //     收敛于标签层 — 只读标签的语义就是"写 API 必须拒绝")
                     Core::metrics::CounterInc(
                         Core::metrics::kWriteFailuresTotal,
@@ -654,7 +654,7 @@ namespace MyProt { namespace App {
         return future.get();
     }
 
-    // ── POST /api/data/write — 单寄存器写端点 (v1.5) ──
+        // ── POST /api/data/write — 单寄存器写端点 ──
     std::pair<int, std::string> HandleWriteApi(
             const AppContext& ctx, const HttpRequest& req) {
         const std::string& method = req.method;
@@ -757,7 +757,7 @@ namespace MyProt { namespace App {
             ctx, jt->get<std::string>(), value, bytes, readBack);
         if (!wr.has_value()) {
             nlohmann::json err;
-            // v1.32: Error.context (变量名/设备名等定位信息) 一并回传 —
+                        // Error.context (变量名/设备名等定位信息) 一并回传 —
             //   丢失会让 "模板变量未提供" 这类错误无从定位.
             err["error"] = (wr.error().message.empty()
                                 ? "write failed" : wr.error().message)
