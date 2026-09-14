@@ -1018,7 +1018,7 @@ int RunE2E() {
             Check("needMoreData = false", !parseResult.value().needMoreData);
         }
 
-        // 鎴柇甯?閳?闂団偓鐟曚焦娲挎径姘殶閹?
+        // 截断帧 → needMoreData (等待更多字节)
         MyProt::Core::ByteView partialView(frame, 10);
         auto partialResult = parser.Parse(partialView, 0);
         Check("截断帧: needMoreData = true",
@@ -1277,7 +1277,7 @@ int RunE2E() {
                   res.has_value() && VrHas::Error(res.value(), "规则3"));
         }
 
-        // 8c: 閹烩剝澧?sessionExtractExpr 娑?sessionVariable 娑撳秵鍨氱€?閳?鐟欏嫬鍨?
+        // 8c: sessionExtractExpr / sessionVariable 校验 → 拒绝
         {
             const std::string bad = Patch(kValidProto,
                                           "\"handshake\":[]",
@@ -1361,7 +1361,7 @@ int RunE2E() {
                   && res3.error().message.find("须为整数或") != std::string::npos);
         }
 
-        // 8g: 閺嶅洨顒烽幙宥勭稊瀵洜鏁ら崡蹇氼唴娑擃厺绗夌€涙ê婀惃鍕惙娴?閳?鐟欏嫬鍨?2
+        // 8g: 操作引用未知设备 → 规则12
         {
             const char* kRoot =
                 "{\"schemaVersion\":2,"
@@ -1449,7 +1449,7 @@ int RunE2E() {
         ::CreateDirectoryA(kFaultDir, NULL);
         const std::string faultProtoDir = std::string(kFaultDir) + "\\protocols";
         ::CreateDirectoryA(faultProtoDir.c_str(), NULL);
-        // 濞撳懐鎮婃稉濠冾偧鏉╂劘顢戦惃鍕暙閻?(E2E 闂団偓閸欘垶鍣告径宥嗗⒔鐞?
+        // 制造坏配置: 删除 modbus.json (E2E 故障注入)
         ::DeleteFileA((faultProtoDir + "\\modbus.json").c_str());
         for (int i = 1; i <= 3; ++i) {
             ::DeleteFileA((faultProtoDir + "\\modbus.json.bak."
@@ -1462,7 +1462,7 @@ int RunE2E() {
         opts.backupRetention = 3;
         ConfigStore store(opts);
 
-        // 閸氬牊纭堕崡蹇氼唴閸╄櫣鍤?(Test 8 閸氬本顑? 闂嗗爼鏁婄拠顖炴祩鐠€锕€鎲?
+        // 有效协议内容 (Test 8 同构, 用于回滚注入)
         const char* kValidProto =
             "{\"schemaVersion\":2,\"protocolName\":\"ModbusTCP\","
             "\"transport\":{\"type\":\"Tcp\",\"defaultPort\":502},"
@@ -1496,7 +1496,7 @@ int RunE2E() {
                   g.has_value() && g.value() == kValidProto);
         }
 
-        // 9c: 濞夈劌鍙嗘径杈Е閻?reload handler 閳?Save 瑙﹀彂鐑噸杞藉け璐?閳?閼奉亜濮╅崶鐐寸泊閸?bak.1
+        // 9c: reload handler 抛错 → Save 触发热重载失败 → 保留 bak.1
         {
             store.SetReloadHandler([]() {
                 return MyProt::Core::Unexpected(
@@ -1537,7 +1537,7 @@ int RunE2E() {
             Check("12-9: reload 成功后生效", g.has_value()
                   && g.value().find("ModbusTCP_v2") != std::string::npos);
 
-            // 9e: 閹靛濮?Rollback bak.1 閳?娑撶粯鏋冩禒璺烘礀閸?v1
+            // 9e: Rollback bak.1 → 回滚到 v1
             auto rb = store.Rollback(ConfigScope::Protocol, "modbus", "bak.1");
             Check("12-10: Rollback 成功", rb.has_value());
             auto g1 = store.Get(ConfigScope::Protocol, "modbus");
@@ -1545,7 +1545,7 @@ int RunE2E() {
                   g1.has_value() && g1.value() == kValidProto);
         }
 
-        // 9f: Delete 鏉╃偛鐢〒鍛倞婢跺洣鍞?
+        // 9f: Delete 删除配置
         {
             auto d = store.Delete(ConfigScope::Protocol, "modbus");
             Check("12-12: Delete 成功", d.has_value());
@@ -1555,7 +1555,7 @@ int RunE2E() {
     }
     std::cout << std::endl;
 
-    // ── (HTTP 閺堝秴濮?+ ConfigStore 鍏ㄩ摼璺? ──
+    // ── (HTTP 端到端 + ConfigStore 全链路) ──
     std::cout << "--- Test 13: WebApiServer ---" << std::endl;
     {
         // 准备测试配置目录: configs_webapi_test/protocols/modbus.json + tags.json
@@ -1587,7 +1587,7 @@ int RunE2E() {
             catch (const std::exception& e) { serverError = e.what(); }
         });
 
-        // HTTP 请求辅助: 姣忚姹傜嫭绔嬭繛鎺?(鏈嶅姟绔?Connection: close)
+        // HTTP 请求辅助: 每请求独立连接 (服务端 Connection: close)
         auto HttpGet = [](const std::string& req, uint16_t port) {
             asio::io_context io;
             SyncTcpClient client(io);
@@ -1598,7 +1598,7 @@ int RunE2E() {
             return std::string(resp.begin(), resp.end());
         };
 
-        // 缁涘绶熼惄鎴濇儔鐏忚京鍗?(閺堚偓婢?~2s)
+        // 等待就绪 (重试等待 ~2s)
         std::string healthResp;
         for (int i = 0; i < 20 && healthResp.empty(); ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1641,7 +1641,7 @@ int RunE2E() {
               && schemaResp.find("\"device\"") != std::string::npos
               && schemaResp.find("\"tag\"") != std::string::npos);
 
-        // 闂堢偞纭?schemaVersion 娣囨繂鐡?閳?濞ｅ崬瀹抽弽锟犵崣閹锋帞绮?(400)
+        // 非法 schemaVersion → 请求被拒 (400)
         const std::string badBody = "{\"schemaVersion\":99}";
         const std::string putReq =
             "PUT /api/config/protocols/bad HTTP/1.1\r\n"
@@ -1664,9 +1664,9 @@ int RunE2E() {
     }
     std::cout << std::endl;
 
-    // ──配置驱动仿真闭环 (閸氬奔绔存禒?ProtocolConfig 双向消费:
-    //     瀹㈡埛绔?RequestBuilder 閫犺姹?閳?浠跨湡鍣?TemplateMatcher 反向识别 +
-    //     ResponseSynthesizer 閹?responseParser 鐟欏嫭鐗搁崥鍫熷灇鎼存梻鐡?閳?瀹㈡埛绔?ResponseParser 妤犲本鏁? ──
+    // ── 配置驱动仿真闭环 (单一 ProtocolConfig 双向消费):
+    //     客户端 RequestBuilder 造请求 → 仿真器 TemplateMatcher 反向识别 +
+    //     ResponseSynthesizer 按 responseParser 合成应答 → 客户端 ResponseParser 解析 ──
     std::cout << "--- Test 14: Config-Driven Simulation Loop ---" << std::endl;
     {
         using MyProt::Core::ProtocolConfig;
@@ -1723,8 +1723,8 @@ int RunE2E() {
           so.addressVar = "StartAddress"; so.dataOffset = 10;
           sim.operations["WriteSingleRegister"] = so; }
 
-        // 鑷畾涔夊簲绛旀ā鏉挎搷浣?(P1#8): FC "10" 区分形状; 搴旂瓟闈?echo 閳?
-        // TID/UID/Addr+Value 閸ョ偞妯?+ 閸ュ搫鐣?FC + 自定义尾缀 AA BB
+        // 自定义应答模板操作 (P1#8): FC "10" 区分形状; 应答非 echo →
+        // TID/UID/Addr+Value 变体 + 固定 FC + 自定义尾缀 AA BB
         MyProt::Core::OperationConfig tplOp;
         tplOp.name = "WriteTplAck";
         tplOp.requestTemplate = {
@@ -1742,17 +1742,17 @@ int RunE2E() {
           so.responseTemplate.push_back("{req:6:1}");   // UID 回填
           so.responseTemplate.push_back("10");
           // FC 鍥哄畾鍊?
-          so.responseTemplate.push_back("{req:8:4}");   // Addr+Value 閸ョ偞妯?
-          so.responseTemplate.push_back("AA BB");       // 自定义尾缀 (echo 鍋氫笉鍒?
+          so.responseTemplate.push_back("{req:8:4}");   // Addr+Value 变体
+          so.responseTemplate.push_back("AA BB");       // 自定义尾缀 (echo 做不到)
           sim.operations["WriteTplAck"] = so; }
 
-        // 濡剝婢樿ぐ銏㈠Ц濮澭傜疅濡偓濞?(P0#3): FC 鐎涙娼伴柌蹇撳隘閸掑棛娈戠拠璇插晸濡剝婢樻惔鏃€妫ゅ褌绠?
+        // 模板匹配边界场景 (P0#3): FC 不符时的拒绝路径
         {
             MyProt::Simulation::TemplateMatcher tm(proto);
             tm.Compile();
             Check("14-1: 正常读写模板无形状歧义", tm.Ambiguities().empty());
 
-            // 閸欏秳绶? 娑撱倖鎼锋担婊€绮庨崣姗€鍣洪崥宥勭瑝閸?(鐎涙濡痪锔芥将閸忋劌鍚嬬€? 閳?蹇呴』妫€鍑?
+            // 歧义场景: 多模板可匹配时必须选中正确者
             ProtocolConfig amb;
             amb.protocolName = "Amb";
             MyProt::Core::OperationConfig opA;
@@ -1771,7 +1771,7 @@ int RunE2E() {
                   tam.Ambiguities().size() == 1);
         }
 
-        // responseTemplate 濡剝婢橀崥鍫熷灇閸楁洘绁?(P1#8): 瀛楅潰閲?閸ョ偞妯?鏁版嵁鍖?闂€鍨闁插秶鐣?文法拒绝
+        // responseTemplate 元素类型 (P1#8): 字面量 / 变体 / 数据区; 非法文法须拒绝
         {
             MyProt::Core::FramingConfig fr;
             fr.lengthField.lengthFieldOffset = 4;
@@ -1793,12 +1793,12 @@ int RunE2E() {
             std::vector<std::uint8_t> out;
             const bool ok1 = MyProt::Simulation::ResponseSynthesizer::
                 SynthesizeFromTemplate(t1, req, dat, fr, out);
-            // 閹鏆?8 閳?LEN = 8 - header(6) = 2, 婢堆咁伂閸愭瑥鍙嗛崑蹇曅?4..5
+            // 期望帧长 8 → LEN = 8 - header(6) = 2, 位于 out[4..5]
             bool okB = ok1 && out.size() == 8
                 && out[0] == 0x11 && out[1] == 0x22      // req 閸ョ偞妯?
                 && out[2] == 0xAA && out[3] == 0xBB      // 字面量 (0xAA 0xBB)
-                && out[4] == 0x00 && out[5] == 0x02      // LEN 闁插秶鐣?
-                && out[6] == 0x01 && out[7] == 0x02;     // {data} 鐏炴洖绱?
+                && out[4] == 0x00 && out[5] == 0x02      // LEN 校验
+                && out[6] == 0x01 && out[7] == 0x02;     // {data} 注入值
             Check("14-3: 模板合成 (回显 + 字面量 + 数据区)", okB);
 
             std::vector<std::string> bad;
@@ -1830,7 +1830,7 @@ int RunE2E() {
             autoProvider.DeclareJson(
                 "{\"TransactionId\":{\"strategy\":\"autoIncrement\",\"params\":{\"seed\":1}}}");
 
-            // ── 璇婚棴鐜? 瀵勫瓨鍣?0..3 閳?閸掓繂鈧?100/101/102 ──
+            // ── 读闭环: 寄存器 0..3 → 值 100/101/102 ──
             std::unordered_map<std::string, uint32_t> rvars;
             rvars["StartAddress"] = 0;
             rvars["RegisterCount"] = 3;
@@ -1857,7 +1857,7 @@ int RunE2E() {
                 }
                 Check("应答逐字节精确匹配 (framing 无偏移)", bytesOk);
 
-                // 瀹㈡埛绔?ResponseParser 妤犲本鏁?(真实解析路径)
+                // 客户端 ResponseParser 解析 (真实解析路径)
                 MyProt::Engine::ResponseParser parser;
                 MyProt::Core::TagDefinition tag;
                 tag.name = "Temperature";
@@ -1875,7 +1875,7 @@ int RunE2E() {
                 }
             }
 
-            // ── 鍐欓棴鐜? 閸愭瑥鐦庣€涙ê娅?5 = 12345 閳?echo 鎼存梻鐡?閳?读回验证 ──
+            // ── 写闭环: 寄存器 5 = 12345 → echo 回读 → 读回验证 ──
             std::unordered_map<std::string, uint32_t> wvars;
             wvars["StartAddress"] = 5;
             wvars["Value"] = 12345;
@@ -1903,7 +1903,7 @@ int RunE2E() {
                       && simServer.Store().ReadRegisters(5, 1)[0] == 0x30);
             }
 
-            // ── 鑷畾涔夊簲绛旀ā鏉块棴鐜?(P1#8): 閸愭瑥鐦庣€涙ê娅?9 = 777 閳?妯℃澘搴旂瓟閫愬瓧鑺傞獙鏀?──
+            // ── 自定义应答模板闭环 (P1#8): 寄存器 9 = 777 → 模板应答逐字节校验 ──
             std::unordered_map<std::string, uint32_t> tvars;
             tvars["StartAddress"] = 9;
             tvars["Value"] = 777;
@@ -1967,7 +1967,7 @@ int RunE2E() {
                 Check("14-15: 协议 default 合并后 Build 成功", reqV.has_value());
                 if (reqV.has_value() && reqV.value().size() >= 6) {
                     // 模板 UnitID 为硬编码字面量 "01" (位于解析后 byte 6), 非 {UnitID} 占位符
-                    // (v1.17 方案B 璧?TokenId 鐢?inputs 声明驱动, 鍘?byte-5 断言 index 有误)
+                    // (TokenId 由 inputs 声明驱动; 断言用 byte 6, 不是 byte 5)
                     Check("14-16: 单位地址字节 0x01 注入到 byte 6", reqV.value()[6] == 0x01);
                 }
             }
@@ -1975,7 +1975,7 @@ int RunE2E() {
             client.Close();
         }
 
-        // ── Phase 2: /api/sim/* 鏁版嵁闈?閳?UI 鏀瑰€?閳?鐠佹儳顦笟褑顕伴崚鐗堟煀閸?──
+        // ── Phase 2: /api/sim/* 数据面 → UI 改值 → 引擎采到新值 ──
         MyProt::Service::ConfigStoreOptions simStoreOpts;
         simStoreOpts.configDir = ".";
         MyProt::Service::ConfigStore simStore(simStoreOpts);
@@ -2314,7 +2314,7 @@ int RunE2E() {
         std::cout << std::endl;
     }
 
-    // ──reload 鏉╂劘顢戦弮鎯颁粓閸?(ApplyRuntimeSync: 娴犺法婀￠崳銊╁櫢瀵?+ 鐎圭偞妞傝箛顐ゅ弾濞撳懐鈹? ──
+    // ── reload 联动测试 (ApplyRuntimeSync: 引擎快照重建 + 仿真器重启) ──
     std::cout << "--- Test 16: Reload Runtime Sync ---" << std::endl;
     {
         const char* kDir = "configs_reload_test";
@@ -2483,7 +2483,7 @@ int RunE2E() {
         seed[0].typedValue.type = MyProt::Core::ValueType::UInt16;
         seed[0].typedValue.u = 42;
         latest.Update(seed);
-        // 閻劏顔曟径鍥箖濠娿倛鈧矂娼?Count 閳?瀵洘鎼搁獮璺哄絺闁插洭娉︽稉瀣偓缁樻殶娑撳秶鈥樼€? Old-Dev 引擎永不产出
+        // 预置旧快照: Old-Dev 引擎永不产出新数据
         Check("16-4: 预置快照 Old-Dev 已存在", !latest.Snapshot("Old-Dev").empty());
 
         { std::ofstream f(protoPath.c_str()); f << ProtoJson(11532); }
@@ -2497,7 +2497,7 @@ int RunE2E() {
               sims.count("SimModbus") == 1 &&
               sims["SimModbus"]->ListenPort() == 11532);
         Check("16-7: 旧标签快照已清空", latest.Snapshot("Old-Dev").empty());
-        // 瀵洘鎼告笟褏鍎归柌宥堟祰缂?io.post 瀵倹顒為幍褑顢?閳?鏉烆喛顕楃粵澶婄窡閺傜増鐖ｇ粵楣冩肠閻㈢喐鏅?
+        // reload 后经 io.post 重新装配 → 新快照只含新标签
         Check("16-8: 引擎热重载 activeTags=2",
               WaitFor([&rengine]() {
                   return rengine.GetStats().activeTags.load() == 2; }, 40));
@@ -2508,9 +2508,9 @@ int RunE2E() {
                   !oldClient.Connect("127.0.0.1", 11531));
         }
 
-        // 濞? 浠跨湡鍣?AcceptLoop 娑撹尪顢戞径鍕倞鏉╃偞甯?(v1 鐠佹崘顓? 瀵洘鎼搁梹鑳箾閹恒儳瀚崡鐘插綀閻?,
-        // 涓嶅啀鍋氫簩娆?TCP 鐎广垺鍩涚粩顖炵崣鐠?閳?閸掓繂鈧?7 閻ㄥ嫯顔曟径鍥︽櫠閻㈢喐鏅ラ悽鍙樼瑓閺傝鏆熼幑顕€妫撮悳顖濐洬閻?
-        // (引擎请求 閳?娴犺法婀￠崳銊ユ惙鎼?閳?鐟欙絾鐎?閳?韫囶偆鍙? 闁炬崘鐭鹃弴鏉戠暚閺?
+        // 仿真器 AcceptLoop 监听新端口后, 旧端口应已释放
+        // 不做二次 TCP 校验: 设备侧生效由下方断言验证
+        // (引擎请求由旧快照发起; 新端口数据由下方断言覆盖)
 
         // 数据闭环: 瀵洘鎼哥紒蹇氱讣缁夎鎮楃拋鎯ь槵闁插洤鍩岄弬棰佽雹閻喎娅掗惃鍕灥閸?R.V==7 (quality=Good)
         std::uint64_t rvVal = 0;
