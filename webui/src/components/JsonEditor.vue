@@ -31,7 +31,7 @@ const validity = computed(() => {
       :value="modelValue"
       @input="onInput"
     ></textarea>
-    <div class="status" :class="validity.ok ? 'valid' : 'invalid'">
+    <div class="status" :class="validity.ok ? 'valid' : 'invalid'" role="status" aria-live="polite">
       {{ validity.msg }}
     </div>
   </div>

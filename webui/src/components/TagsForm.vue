@@ -629,7 +629,7 @@ function onEditSource({ varName, layerKey }) {
       <el-tabs v-else-if="selMode === 'dev' && curDev" v-model="devTab" class="sec-tabs">
         <el-tab-pane label="设备信息" name="info">
           <el-card shadow="never" class="blk">
-            <el-form label-width="96px" size="default" class="form-grid">
+            <el-form size="default" class="form-grid">
               <el-form-item label="设备 ID">
                 <el-input
                   :model-value="curDev.id" style="width: 200px"
@@ -653,7 +653,7 @@ function onEditSource({ varName, layerKey }) {
 
         <el-tab-pane label="连接参数" name="conn">
           <el-card shadow="never" class="blk">
-            <el-form label-width="96px" size="default" class="form-grid">
+            <el-form size="default" class="form-grid">
               <el-form-item label="主机">
                 <el-input
                   :model-value="curDev.connection.host" style="width: 200px"
@@ -715,7 +715,7 @@ function onEditSource({ varName, layerKey }) {
       <el-tabs v-else-if="selMode === 'tag' && curTag" v-model="tagTab" class="sec-tabs">
         <el-tab-pane label="标签定义" name="def">
           <el-card shadow="never" class="blk">
-            <el-form label-width="96px" size="default" class="form-grid">
+            <el-form size="default" class="form-grid">
               <el-form-item label="标签全名">
                 <el-input
                   :model-value="curTag.name" style="width: 240px"
@@ -791,7 +791,7 @@ function onEditSource({ varName, layerKey }) {
 
         <el-tab-pane label="变量与来源" name="vars">
           <el-card shadow="never" class="blk">
-            <el-form label-width="96px" size="default" class="form-grid">
+            <el-form size="default" class="form-grid">
               <!-- v1.8 增: 当前操作的占位符提示速览 (折叠展开) — 让用户一眼看到变量名↔可读名 映射 -->
               <el-form-item v-if="opHintsList(curTag).length" label="占位符提示" class="span2">
                 <el-collapse class="hint-preview">
@@ -932,7 +932,7 @@ function onEditSource({ varName, layerKey }) {
         <el-collapse v-model="activeBlocks" class="blk-collapse">
           <el-collapse-item name="resilience">
             <template #title><span class="sec-title blk-ct">弹性参数 (Resilience)</span></template>
-            <el-form label-width="140px" size="default" class="form-grid">
+            <el-form size="default" class="form-grid form-grid-wide">
               <el-form-item label="最大重试次数">
                 <el-input-number
                   :model-value="local.resilience.maxAttempts" :min="0"
@@ -979,7 +979,7 @@ function onEditSource({ varName, layerKey }) {
 
           <el-collapse-item name="webapi">
             <template #title><span class="sec-title blk-ct">WebApi 参数</span></template>
-            <el-form label-width="140px" size="default" class="form-grid">
+            <el-form size="default" class="form-grid form-grid-wide">
               <el-form-item label="绑定地址">
                 <el-input
                   :model-value="local.webApi.bindAddress"
@@ -1374,4 +1374,11 @@ function onEditSource({ varName, layerKey }) {
 .type-badge.float { background: #fef3c7; color: #b45309; }
 .type-badge.int32 { background: #f0fdf4; color: #166534; }
 .type-badge.bytearray { background: #f1f5f9; color: #64748b; }
+/* v5: label 宽度 — 常规段统一全局 token; 韧性/管理面段字段名较长用 wide 变体 */
+.form-grid-wide.el-form {
+  --el-form-label-width: 140px;
+}
+@media (max-width: 1100px) {
+  .form-grid-wide.el-form { --el-form-label-width: 120px; }
+}
 </style>

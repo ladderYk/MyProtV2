@@ -4,7 +4,7 @@
 //   inputs  : source=static (value/label/unit/enum) 或 source=auto (autoIncrement/frameSlice/expr/crc)
 //   outputs : source=auto strategy=derivedLength + expr (引用 inputs 名或模板 {Name:raw} 载荷名, {name:len} 取字节长度)
 // 旧 schema 的 variables/defaultVariables/autoCompute/metadata.placeholderHints 打开时自动迁移到 inputs/outputs
-import { reactive, ref, computed, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getSchema } from '../api'
 import {
@@ -370,6 +370,19 @@ function renameOperation(oldName, newName) {
 // ── 方案 2: 校验问题 → 表单定位 ──────────────────────────────────
 //   field 前缀决定区块 (operations.* → 操作 / outputs|variables → 变量);
 //   subject 命中操作名时同时切到该操作 tab。返回提示文案 (供上层 flash)。
+/// v5: 切段/切操作后把目标滚入视口并闪烁高亮 (旧实现只切 tab 不滚动,
+///   用户在长表单里要自己找改哪)
+function scrollFlash(selector) {
+  nextTick(() => {
+    const el = document.querySelector(selector)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    el.classList.remove('mp-issue-flash')
+    void el.offsetWidth
+    el.classList.add('mp-issue-flash')
+  })
+}
+
 function focusIssue(issue) {
   const field = (issue && issue.field) || ''
   const subject = (issue && issue.subject) || ''
@@ -377,15 +390,18 @@ function focusIssue(issue) {
     activeSection.value = 'ops'
     if (subject && opNames.value.indexOf(subject) >= 0) {
       selOp.value = subject
+      scrollFlash('#op-detail-head')
       return `已跳到「操作」段 → ${subject}`
     }
     return subject ? `已切到「操作」段 (未找到操作「${subject}」)` : '已切到「操作」段'
   }
   if (field.indexOf('outputs') === 0 || field.indexOf('variables') === 0) {
     activeSection.value = 'vars'
+    scrollFlash('#vars-head')
     return subject ? `已切到「变量」段 (${subject})` : '已切到「变量」段'
   }
   activeSection.value = 'basic'
+  scrollFlash('#basic-head')
   return '已切到「基础信息」段'
 }
 
@@ -531,6 +547,7 @@ onMounted(async () => {
     <el-tabs v-model="activeSection" class="sec-tabs">
       <!-- ① 基础信息 (协议名 + 传输与成帧 + 握手; 概念速查默认折叠为一行) -->
       <el-tab-pane label="基础信息" name="basic">
+  <div id="basic-head"></div>
     <el-card shadow="never" class="blk cheat-card">
       <el-collapse>
         <el-collapse-item name="cheat">
@@ -579,7 +596,7 @@ onMounted(async () => {
 
     <!-- 基础信息 -->
     <el-card shadow="never" class="blk">
-      <el-form label-width="110px" size="default" class="form-grid">
+      <el-form size="default" class="form-grid">
         <el-form-item>
           <template #label>协议名<FieldHelp section="protocol" field="protocolName" /></template>
           <el-input
@@ -604,7 +621,7 @@ onMounted(async () => {
 
     <el-divider content-position="left" class="sec-divider">传输与成帧</el-divider>
     <el-card shadow="never" class="blk">
-      <el-form label-width="110px" size="default" class="form-grid">
+      <el-form size="default" class="form-grid">
         <el-form-item>
           <template #label>传输类型<FieldHelp section="protocol" field="transport" /></template>
           <el-select
@@ -731,7 +748,7 @@ onMounted(async () => {
       </el-form>
     </el-card>
 
-    <el-divider content-position="left" class="sec-divider">握手 (handshake)</el-divider>
+    <el-divider content-position="left" class="sec-divider" id="hs-head">握手 (handshake) · 连接建立后按序执行</el-divider>
     <el-card shadow="never" class="blk">
       <el-input
         type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" :model-value="handshakeText()"
@@ -744,6 +761,7 @@ onMounted(async () => {
 
       <!-- ④ 全局变量 (v4.2: 卡片呈现 — 字段数随来源/策略变化, 等宽列反而难对齐) -->
       <el-tab-pane label="全局变量" name="vars">
+  <div id="vars-head"></div>
     <el-card shadow="never" class="blk vars-card">
       <div v-if="aliasEntries.length" class="alias-note">
         <span class="alias-title">别名映射</span>
@@ -790,7 +808,7 @@ onMounted(async () => {
           <el-button type="primary" size="small" plain @click="addOperation">新增操作</el-button>
         </div>
         </div>
-        <section class="md-detail">
+        <section class="md-detail" id="op-detail-head">
           <el-card v-if="curOp" shadow="never" class="op md-card">
             <template #header>
               <div class="card-head">
@@ -804,7 +822,7 @@ onMounted(async () => {
               </div>
             </template>
 
-            <el-form label-width="110px" size="default" class="form-grid">
+            <el-form size="default" class="form-grid">
               <el-form-item>
                 <template #label>操作类型<FieldHelp text="read = 该操作模板供读标签引用; write = 可作写请求模板 (由标签的 writeOperation / writeBytesOperation 引用)" /></template>
                 <el-select
@@ -962,12 +980,20 @@ onMounted(async () => {
 }
 /* v4.9: 基础信息段内小节分隔 (传输与成帧 / 握手) */
 .sec-divider {
-  margin: 8px 0 12px;
+  margin: 18px 0 14px;
+  scroll-margin-top: 8px;
 }
 .sec-divider :deep(.el-divider__text) {
   font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: #334155;
+  letter-spacing: .02em;
+}
+/* v5: 段落锚点滚动定位余量 */
+#basic-head, #vars-head, #op-detail-head {
+  scroll-margin-top: 8px;
+  display: block;
+  height: 0;
 }
 .sec-tabs :deep(.el-tabs__content) {
   flex: 1;
@@ -1237,8 +1263,5 @@ onMounted(async () => {
   padding: 1px 6px;
   border-radius: 3px;
 }
-/* 操作详情表单 label 收窄 (110→90px) */
-.md-detail .el-form {
-  --el-form-label-width: 90px;
-}
+/* v5: 操作详情 label 统一走全局 token (原 90px 局部覆盖已移除) */
 </style>
