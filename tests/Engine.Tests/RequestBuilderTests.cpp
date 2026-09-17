@@ -121,3 +121,65 @@ TEST(RequestBuilderTest, AutoIncrementDeclaredStrategy) {
     EXPECT_EQ(second.value()[1], 0x02);   // 原子 +1
     EXPECT_EQ(first.value()[2], 0x03);    // 后续字面量不受影响
 }
+
+// ── XnLE 小端渲染: 值按 LSB 在前输出 (小端协议字段直配, 免反转公式) ──
+TEST(RequestBuilderTest, LittleEndianWidthRendering) {
+    OperationConfig op;
+    op.requestTemplate.push_back("{Port:X4LE}");     // 2 字节小端
+    op.requestTemplate.push_back("{Offset:X8LE}");   // 4 字节小端
+    op.requestTemplate.push_back("{Dev:X6LE}");      // 3 字节小端 (任意偶数宽度)
+
+    std::unordered_map<std::string, uint32_t> vars;
+    vars["Port"] = 801u;         // 0x0321 → LE: 21 03
+    vars["Offset"] = 0x000001A0u; // 416   → LE: A0 01 00 00
+    vars["Dev"] = 50u;           // 0x32   → LE: 32 00 00
+
+    AutoComputeProvider autoProvider;
+    RequestBuilder builder;
+    const Expected<Bytes> built = builder.Build(op, vars, std::unordered_map<std::string, std::string>(), autoProvider);
+    ASSERT_TRUE(built.has_value());
+
+    const Bytes& frame = built.value();
+    ASSERT_EQ(frame.size(), 9u);
+    EXPECT_EQ(frame[0], 0x21); EXPECT_EQ(frame[1], 0x03);
+    EXPECT_EQ(frame[2], 0xA0); EXPECT_EQ(frame[3], 0x01);
+    EXPECT_EQ(frame[4], 0x00); EXPECT_EQ(frame[5], 0x00);
+    EXPECT_EQ(frame[6], 0x32); EXPECT_EQ(frame[7], 0x00); EXPECT_EQ(frame[8], 0x00);
+}
+
+// ── 任意偶数宽度: X6/X12/X14 等非 2/4/8/16 宽度合法 (校验器白名单曾与之不一致) ──
+TEST(RequestBuilderTest, ArbitraryEvenWidth) {
+    OperationConfig op;
+    op.requestTemplate.push_back("{Three:X6}");    // 3 字节大端
+    op.requestTemplate.push_back("{Six:X12LE}");   // 6 字节小端 (6 字节 NetId 形态)
+
+    std::unordered_map<std::string, uint32_t> vars;
+    vars["Three"] = 0x000032u;
+    vars["Six"] = 0x0C0A0806u;
+
+    AutoComputeProvider autoProvider;
+    RequestBuilder builder;
+    const Expected<Bytes> built = builder.Build(op, vars, std::unordered_map<std::string, std::string>(), autoProvider);
+    ASSERT_TRUE(built.has_value());
+
+    const Bytes& frame = built.value();
+    ASSERT_EQ(frame.size(), 9u);
+    EXPECT_EQ(frame[0], 0x00); EXPECT_EQ(frame[1], 0x00); EXPECT_EQ(frame[2], 0x32);
+    // 0x0C0A0806 小端: 06 08 0A 0C 00 00
+    EXPECT_EQ(frame[3], 0x06); EXPECT_EQ(frame[4], 0x08); EXPECT_EQ(frame[5], 0x0A);
+    EXPECT_EQ(frame[6], 0x0C); EXPECT_EQ(frame[7], 0x00); EXPECT_EQ(frame[8], 0x00);
+}
+
+// ── XnLE 溢出拦截仍生效 (与 Xn 同规则) ──
+TEST(RequestBuilderTest, LittleEndianWidthOverflowRejected) {
+    OperationConfig op;
+    op.requestTemplate.push_back("{V:X4LE}");
+
+    std::unordered_map<std::string, uint32_t> vars;
+    vars["V"] = 0x12345u;   // 超 X4 (2 字节) 上限
+
+    AutoComputeProvider autoProvider;
+    RequestBuilder builder;
+    const Expected<Bytes> built = builder.Build(op, vars, std::unordered_map<std::string, std::string>(), autoProvider);
+    EXPECT_FALSE(built.has_value());
+}

@@ -5,10 +5,10 @@
   "framing": {
     "type": "LengthField",
     "lengthFieldOffset": 0,
-    "lengthFieldLength": 2,
+    "lengthFieldLength": 4,
     "lengthIncludesHeader": false,
     "byteOrder": "BigEndian",
-    "headerLength": 0,
+    "headerLength": 8,
     "lengthAdjustment": 0,
     "maxFrameSize": 2048
   },
@@ -32,6 +32,8 @@
       "requestTemplate": [
         "46 49 4E 53",
         "{Len:X8}",
+        "00 00 00 02",
+        "00 00 00 00",
         "80", "00",
         "{GCT:X2}",
         "{DNA:X2}", "{DA1:X2}", "{DA2:X2}",
@@ -44,15 +46,15 @@
       ],
       "inputs": {},
       "outputs": {
-        "Len": { "source": "auto", "strategy": "derivedLength", "expr": "{Frame:fixed} - 8", "label": "命令长度 (ICF 起至帧尾 = 帧长 - 4 魔数 - 4 自身)" },
+        "Len": { "source": "auto", "strategy": "derivedLength", "expr": "{Frame:fixed} - 8", "label": "TCP 长度 = 帧长 - 8 (command 域起至帧尾: 4B command + 4B error + FINS 帧)" },
         "StartWordHi": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress / 2 / 256 % 256", "label": "起始字地址高字节" },
         "StartWordLo": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress / 2 % 256", "label": "起始字地址低字节" },
         "WordCntHi": { "source": "auto", "strategy": "derivedLength", "expr": "ByteCount / 2 / 256 % 256", "label": "字数高字节" },
         "WordCntLo": { "source": "auto", "strategy": "derivedLength", "expr": "ByteCount / 2 % 256", "label": "字数低字节" }
       },
       "responseParser": {
-        "validCondition": "resp[12] == 0",
-        "dataStartIndex": 30,
+        "validCondition": "resp[26] == 0",
+        "dataStartIndex": 28,
         "dataLengthExpr": ""
       }
     }

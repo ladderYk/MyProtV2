@@ -59,8 +59,27 @@ bool IsIdentChar(char c) {
 // inputs.source=auto strategy=crc + params.algo (crc16-modbus/crc16-ccitt/crc32),
 // 派生长度走 outputs 的 derivedLength。
 
+/// 格式说明 → 字节宽度; 非法返回 0.
+///   文法: Xn / XnLE (n = 偶数 hex 位数 2..16 → n/2 字节) — 与引擎
+///   RenderTemplate/BuildTemplateLayout、仿真 TemplateMatcher 三处同步;
+///   文法唯一事实来源: docs/Config_Schema.md §3.2
+int FormatSpecBytes(const std::string& s) {
+    std::string core = s;
+    if (core.size() > 2 && core.compare(core.size() - 2, 2, "LE") == 0) {
+        core.resize(core.size() - 2);
+    }
+    if (core.size() < 2 || core[0] != 'X') return 0;
+    int n = 0;
+    for (size_t i = 1; i < core.size(); ++i) {
+        if (core[i] < '0' || core[i] > '9') return 0;
+        n = n * 10 + (core[i] - '0');
+    }
+    if (n < 2 || n > 16 || n % 2 != 0) return 0;
+    return n / 2;
+}
+
 bool IsFormatSpec(const std::string& s) {
-    return s == "X2" || s == "X4" || s == "X8" || s == "X16";
+    return FormatSpecBytes(s) > 0;
 }
 
 /// {Name:raw} 是 P1 A 变长字节注入标记; 与 Xn 定宽十六进制并列
@@ -328,10 +347,10 @@ int TemplateElementBytes(const std::string& el) {
         if (SplitPlaceholder(el, parts) && !parts.empty()) {
             const std::string& fmt = parts[parts.size() - 1];
             if (fmt == "raw")  return 0;
-            if (fmt == "X2")   return 1;
-            if (fmt == "X4")   return 2;
-            if (fmt == "X8")   return 4;
-            if (fmt == "X16")  return 8;
+            {   // Xn/XnLE → n/2 字节 (与 IsFormatSpec 同一解析)
+                const int wb = FormatSpecBytes(fmt);
+                if (wb > 0) return wb;
+            }
         }
         return 0;
     }

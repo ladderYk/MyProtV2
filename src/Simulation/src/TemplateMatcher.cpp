@@ -45,9 +45,20 @@ TemplateMatcher::TemplateMatcher(const Core::ProtocolConfig& protocol)
 }
 
 std::size_t TemplateMatcher::WidthSpecToBytes(const std::string& widthSpec) {
-    if (widthSpec.size() < 2 || widthSpec[0] != 'X') return 0;
-    const int hexWidth = std::atoi(widthSpec.c_str() + 1);
-    if (hexWidth <= 0 || hexWidth % 2 != 0 || hexWidth > 16) return 0;
+    // Xn / XnLE → n/2 字节 (与引擎 RenderTemplate 同一文法)。
+    // LE 后缀不改变匹配/提取语义: 字节仍按大端装配出值, 小端字段由业务侧
+    // 按 dataByteOrder 解释 — 匹配只关心形状与定宽。
+    std::string core = widthSpec;
+    if (core.size() > 2 && core.compare(core.size() - 2, 2, "LE") == 0) {
+        core.resize(core.size() - 2);
+    }
+    if (core.size() < 2 || core[0] != 'X') return 0;
+    int hexWidth = 0;
+    for (size_t i = 1; i < core.size(); ++i) {
+        if (core[i] < '0' || core[i] > '9') return 0;
+        hexWidth = hexWidth * 10 + (core[i] - '0');
+    }
+    if (hexWidth < 2 || hexWidth > 16 || hexWidth % 2 != 0) return 0;
     return static_cast<std::size_t>(hexWidth / 2);
 }
 

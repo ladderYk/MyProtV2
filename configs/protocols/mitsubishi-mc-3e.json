@@ -4,11 +4,11 @@
   "transport": { "type": "Tcp", "defaultPort": 5007 },
   "framing": {
     "type": "LengthField",
-    "lengthFieldOffset": 0,
+    "lengthFieldOffset": 7,
     "lengthFieldLength": 2,
     "lengthIncludesHeader": false,
     "byteOrder": "LittleEndian",
-    "headerLength": 0,
+    "headerLength": 9,
     "lengthAdjustment": 0,
     "maxFrameSize": 2048
   },
@@ -20,6 +20,7 @@
     "PCNo": { "source": "static", "value": 255, "label": "PC 编号 0xFF" },
     "ReqDestIO": { "source": "static", "value": 0, "label": "请求目标模块 I/O 0x0000 (CPU)" },
     "ReqDestSta": { "source": "static", "value": 0, "label": "请求目标站 0x00" },
+    "Watchdog": { "source": "static", "value": 1600, "label": "监视定时器 0x0640 (250ms 仕様; 0 = 不监视)" },
     "DevCodeD": { "source": "static", "value": 168, "label": "D 寄存器设备码 0xA8" },
     "SubCmd": { "source": "static", "value": 0, "label": "副命令 0x0000" }
   },
@@ -27,24 +28,21 @@
     "ReadDRegisters": {
       "kind": "read",
       "requestTemplate": [
-        "C5", "C5",
-        "{NetNo:X2}", "{PCNo:X2}", "{ReqDestIO:X4}", "{ReqDestSta:X2}",
-        "{WatchHi:X2}", "{WatchLo:X2}",
+        "50", "00",
+        "{NetNo:X2}", "{PCNo:X2}", "{ReqDestIO:X4LE}", "{ReqDestSta:X2}",
+        "{ReqDataLen:X4LE}",
+        "{Watchdog:X4LE}",
         "01", "04",
-        "{SubCmdLo:X2}", "{SubCmdHi:X2}",
+        "{SubCmd:X4LE}",
         "{DevCodeD:X2}",
-        "{HeadDevLo16:X4}", "{HeadDevHi8:X2}",
-        "{DevCountRev2:X4}"
+        "{HeadDev:X6LE}",
+        "{Points:X4LE}"
       ],
       "inputs": {},
       "outputs": {
-        "WatchHi": { "source": "auto", "strategy": "derivedLength", "expr": "1600 / 256 % 256", "label": "监视定时器高字节 (小端值需反转)" },
-        "WatchLo": { "source": "auto", "strategy": "derivedLength", "expr": "1600 % 256", "label": "监视定时器低字节 (小端值需反转)" },
-        "SubCmdLo": { "source": "auto", "strategy": "derivedLength", "expr": "0 % 256", "label": "副命令低字节" },
-        "SubCmdHi": { "source": "auto", "strategy": "derivedLength", "expr": "0 / 256 % 256", "label": "副命令高字节" },
-        "HeadDevLo16": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress / 2 % 256 * 256 + (StartByteAddress / 2 / 256 % 256)", "label": "头软元件号低 2 字节 (小端合成)" },
-        "HeadDevHi8": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress / 2 / 65536 % 256", "label": "头软元件号最高字节 (D 区恒 0)" },
-        "DevCountRev2": { "source": "auto", "strategy": "derivedLength", "expr": "ByteCount / 2 % 256 * 256 + (ByteCount / 2 / 256 % 256)", "label": "点数 2 字节小端合成" }
+        "HeadDev": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress / 2", "label": "头软元件号 (D 区字地址)" },
+        "ReqDataLen": { "source": "auto", "strategy": "derivedLength", "expr": "{Frame:fixed} - 9", "label": "请求数据长 (监视定时器起至帧尾 = 帧长 - 9)" },
+        "Points": { "source": "auto", "strategy": "derivedLength", "expr": "ByteCount / 2", "label": "点数 (字)" }
       },
       "responseParser": {
         "validCondition": "resp[9] == 0",

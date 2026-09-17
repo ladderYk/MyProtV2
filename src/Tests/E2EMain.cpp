@@ -3407,7 +3407,8 @@ int RunE2E() {
             return 0;
         };
 
-        // ── 欧姆龙 FINS/TCP: ASCII "FINS" 魔数 + {Frame:fixed}+2 长度域 ──
+        // ── 欧姆龙 FINS/TCP: ASCII "FINS" 魔数 + 大端长度域 ({Frame:fixed}-8) ──
+        //   34B = 4 魔数 + 4 长度 + 4 command + 4 error + 2 ICF/RSV + 8 路由 + 2 命令 + 2 区 + 2 地址 + 2 字数
         {
             const MyProt::Core::ProtocolConfig* proto = FindProto("omron-fins-tcp");
             Check("22-p1: FINS 协议已加载", proto != 0);
@@ -3441,20 +3442,24 @@ int RunE2E() {
                 Check("22-1a: FINS 请求构建成功", built.has_value());
                 if (built.has_value()) {
                     const MyProt::Core::Bytes& f = built.value();
-                    Check("22-1: FINS 帧长 26", f.size() == 26);
+                    Check("22-1: FINS 帧长 34", f.size() == 34);
                     Check("22-2: FINS 魔数 ASCII 'FINS'",
                           f[0] == 'F' && f[1] == 'I' && f[2] == 'N' && f[3] == 'S');
-                    Check("22-3: FINS 长度域 00 00 00 12 (=帧-8)", f[4] == 0x00 && f[5] == 0x00 && f[6] == 0x00 && f[7] == 0x12);
-                    Check("22-3b: ICF=80 RSV=00", f[8] == 0x80 && f[9] == 0x00);
-                    Check("22-4: FINS 命令 0101", f[18] == 0x01 && f[19] == 0x01);
-                    Check("22-5: FINS 区代码 B300 (WR)", f[20] == 0xB3 && f[21] == 0x00);
+                    Check("22-3: FINS 长度域大端 00 00 00 1A (=帧-8)",
+                          f[4] == 0x00 && f[5] == 0x00 && f[6] == 0x00 && f[7] == 0x1A);
+                    Check("22-3b: FINS command 大端 00 00 00 02",
+                          f[8] == 0x00 && f[9] == 0x00 && f[10] == 0x00 && f[11] == 0x02);
+                    Check("22-3c: ICF=80 RSV=00", f[16] == 0x80 && f[17] == 0x00);
+                    Check("22-4: FINS 命令 0101", f[26] == 0x01 && f[27] == 0x01);
+                    Check("22-5: FINS 区代码 B300 (WR)", f[28] == 0xB3 && f[29] == 0x00);
                     Check("22-6: FINS 地址/字数 00 32 / 00 01",
-                          f[22] == 0x00 && f[23] == 0x32 && f[24] == 0x00 && f[25] == 0x01);
+                          f[30] == 0x00 && f[31] == 0x32 && f[32] == 0x00 && f[33] == 0x01);
                 }
             }
         }
 
-        // ── 三菱 MC 3E: 小端长度域 (成帧层) + 小端合成派生 (模板层) ──
+        // ── 三菱 MC 3E: 副头部 50 00 + XnLE 小端渲染 + 成帧层小端长度域 (offset 7) ──
+        //   帧 = 2 副头 + 5 路由 + 2 请求数据长 + 2 监视 + 2 命令 + 2 副命令 + 1 设备码 + 3 软元件 + 2 点数 = 21B
         {
             const MyProt::Core::ProtocolConfig* proto = FindProto("mitsubishi-mc-3e");
             Check("22-p2: MC3E 协议已加载", proto != 0);
@@ -3488,20 +3493,28 @@ int RunE2E() {
                 Check("22-7a: MC3E 请求构建成功", built.has_value());
                 if (built.has_value()) {
                     const MyProt::Core::Bytes& f = built.value();
-                    Check("22-7: MC3E 帧长 19 (2 版本+5 路由+2 监视+2 命令+2 副命令+1 设备码+3 软元件+2 点数)", f.size() == 19);
-                    Check("22-8: MC3E 版本 C5C5", f[0] == 0xC5 && f[1] == 0xC5);
-                    Check("22-9: MC3E 命令 0104", f[9] == 0x01 && f[10] == 0x04);
-                    Check("22-10: MC3E 设备码 A8", f[13] == 0xA8);
-                    Check("22-11: MC3E 头软元件小端 32 00 00",
-                          f[14] == 0x32 && f[15] == 0x00 && f[16] == 0x00);
-                    Check("22-12: MC3E 点数小端 02 00", f[17] == 0x02 && f[18] == 0x00);
-                    Check("22-13: MC3E 长度域声明为小端",
-                          proto->framing.lengthField.byteOrder == MyProt::Core::ByteOrder::LittleEndian);
+                    Check("22-7: MC3E 帧长 21 (2 副头+5 路由+2 数据长+2 监视+2 命令+2 副命令+1 设备码+3 软元件+2 点数)", f.size() == 21);
+                    Check("22-8: MC3E 副头部 50 00", f[0] == 0x50 && f[1] == 0x00);
+                    Check("22-8b: MC3E 请求数据长 12 00 (帧-9)",
+                          f[7] == 0x0C && f[8] == 0x00);
+                    Check("22-8c: MC3E 监视定时器 X4LE 40 06",
+                          f[9] == 0x40 && f[10] == 0x06);
+                    Check("22-9: MC3E 命令 0104", f[11] == 0x01 && f[12] == 0x04);
+                    Check("22-10: MC3E 设备码 A8", f[15] == 0xA8);
+                    Check("22-11: MC3E 头软元件 X6LE 32 00 00",
+                          f[16] == 0x32 && f[17] == 0x00 && f[18] == 0x00);
+                    Check("22-12: MC3E 点数 X4LE 02 00",
+                          f[19] == 0x02 && f[20] == 0x00);
+                    Check("22-13: MC3E 长度域声明为小端 (offset 7)",
+                          proto->framing.lengthField.byteOrder == MyProt::Core::ByteOrder::LittleEndian
+                          && proto->framing.lengthField.lengthFieldOffset == 7);
                 }
             }
         }
 
-        // ── 倍福 ADS/AMS: 帧中部 4B 小端长度域 + 小端派生族 ──
+        // ── 倍福 ADS/AMS: AMS/TCP 外层 (reserved 2B + 4B LE 长度域) + XnLE 全字段小端 ──
+        //   42B = 6 外层 + 8 目标 + 8 源 + 4 命令 + 4 状态 + 4 数据长 + 4 错误 + 4 调用
+        //         + 4 索引组 + 4 偏移 + 4 长度; AMS/TCP 长度域 = 帧 - 6
         {
             const MyProt::Core::ProtocolConfig* proto = FindProto("twincat-ads");
             Check("22-p3: ADS 协议已加载", proto != 0);
@@ -3540,17 +3553,24 @@ int RunE2E() {
                 Check("22-14a: ADS 请求构建成功", built.has_value());
                 if (built.has_value()) {
                     const MyProt::Core::Bytes& f = built.value();
-                    Check("22-14: ADS 净帧长 47 (4 头+8 目标+2 命令+1 状态+4 数据长+4 错误+4 调用+4 索引组+4 偏移+4 长度+8 源)", f.size() == 47);
-                    Check("22-15: ADS 目标端口小端 21 03 (801=0x321)",
-                          f[10] == 0x21 && f[11] == 0x03);
-                    Check("22-16: ADS 命令小端 01 03 (0x0301)",
-                          f[20] == 0x01 && f[21] == 0x03);
-                    Check("22-17: ADS 状态 04", f[22] == 0x04);
-                    Check("22-18: ADS IndexOffset 小端 A0 01 00 00",
-                          f[39] == 0xA0 && f[40] == 0x01 && f[41] == 0x00 && f[42] == 0x00);
-                    Check("22-19: ADS 读取长度小端 02 00 00 00",
-                          f[43] == 0x02 && f[44] == 0x00 && f[45] == 0x00 && f[46] == 0x00);
-                    Check("22-20: ADS 长度域 offset=2 len=4 LE",
+                    Check("22-14: ADS 帧长 50 (6 外层+8 目标+8 源+2 命令+2 状态+4x3 数据长/错误/调用+4x3 索引组/偏移/长度)", f.size() == 50);
+                    Check("22-14b: AMS/TCP 长度域 2C 00 00 00 (=帧-6)",
+                          f[2] == 0x2C && f[3] == 0x00 && f[4] == 0x00 && f[5] == 0x00);
+                    Check("22-15: 目标 NetId Lo/Hi/端口 X LE (01 01 01 00 / A8 C0 / 21 03)",
+                          f[6] == 0x01 && f[7] == 0x01 && f[8] == 0x01 && f[9] == 0x00
+                          && f[10] == 0xA8 && f[11] == 0xC0
+                          && f[12] == 0x21 && f[13] == 0x03);
+                    Check("22-16: ADS 命令 X4LE 02 00 (0x0002 Read, 2 字节)",
+                          f[22] == 0x02 && f[23] == 0x00);
+                    Check("22-17: ADS 状态 X4LE 04 00 (0x0004 Request, 2 字节)",
+                          f[24] == 0x04 && f[25] == 0x00);
+                    Check("22-17b: ADS 数据长 X8LE 0C 00 00 00 (12)",
+                          f[26] == 0x0C && f[27] == 0x00 && f[28] == 0x00 && f[29] == 0x00);
+                    Check("22-18: ADS IndexOffset X8LE A0 01 00 00",
+                          f[42] == 0xA0 && f[43] == 0x01 && f[44] == 0x00 && f[45] == 0x00);
+                    Check("22-19: ADS 读取长度 X8LE 02 00 00 00",
+                          f[46] == 0x02 && f[47] == 0x00 && f[48] == 0x00 && f[49] == 0x00);
+                    Check("22-20: 长度域 offset=2 len=4 LE",
                           proto->framing.lengthField.lengthFieldOffset == 2 &&
                           proto->framing.lengthField.lengthFieldLength == 4 &&
                           proto->framing.lengthField.byteOrder == MyProt::Core::ByteOrder::LittleEndian);

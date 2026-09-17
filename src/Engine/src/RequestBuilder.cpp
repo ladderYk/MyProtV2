@@ -89,22 +89,35 @@ Core::Expected<Core::Bytes> RenderTemplate(
             }
 
             // 模板函数令牌仅 CRC/LRC/XOR; auto 行为由 autoCompute 声明驱动
-            std::string widthSpec;
-            if (segs.size() == 2) {
-                widthSpec = segs[1];
-            } else {
+            if (segs.size() != 2) {
                 return Core::Unexpected(Core::Error::Code::BuildError,
-                                        "模板段格式无效 (仅 {Name:Xn} / {Name:raw})", part);
+                                        "模板段格式无效 (仅 {Name:Xn} / {Name:XnLE} / {Name:raw})", part);
             }
-
+            // 宽度说明: Xn / XnLE (n = 偶数 hex 位数 2..16, 对应 n/2 字节)
+            //   Xn   → 大端输出 (MSB 在前); XnLE → 小端输出 (LSB 在前)
+            //   字节序只裁决该占位符自身的线序, 与 framing/dataByteOrder 无关
+            std::string widthSpec = segs[1];
+            bool littleEndian = false;
+            if (widthSpec.size() > 2
+                    && widthSpec.compare(widthSpec.size() - 2, 2, "LE") == 0) {
+                littleEndian = true;
+                widthSpec.resize(widthSpec.size() - 2);
+            }
+            int hexWidth = 0;
             if (widthSpec.size() < 2 || widthSpec[0] != 'X') {
                 return Core::Unexpected(Core::Error::Code::BuildError,
-                                        "宽度说明须为 Xn", part);
+                                        "宽度说明须为 Xn 或 XnLE", part);
             }
-            int hexWidth = std::atoi(widthSpec.c_str() + 1);
-            if (hexWidth <= 0 || hexWidth % 2 != 0 || hexWidth > 16) {
+            for (size_t ci = 1; ci < widthSpec.size(); ++ci) {
+                if (widthSpec[ci] < '0' || widthSpec[ci] > '9') {
+                    return Core::Unexpected(Core::Error::Code::BuildError,
+                                            "宽度说明须为 Xn 或 XnLE (偶数 hex 位数 2..16)", part);
+                }
+                hexWidth = hexWidth * 10 + (widthSpec[ci] - '0');
+            }
+            if (hexWidth < 2 || hexWidth > 16 || hexWidth % 2 != 0) {
                 return Core::Unexpected(Core::Error::Code::BuildError,
-                                        "宽度 n 须为 1..8 字节对应的偶数 hex 位数", part);
+                                        "宽度说明须为 Xn 或 XnLE (偶数 hex 位数 2..16)", part);
             }
             int byteWidth = hexWidth / 2;
 
@@ -135,8 +148,14 @@ Core::Expected<Core::Bytes> RenderTemplate(
                                         name);
             }
 
-            for (int b = byteWidth - 1; b >= 0; --b) {
-                out.push_back(static_cast<uint8_t>((value >> (b * 8)) & 0xFF));
+            if (littleEndian) {
+                for (int b = 0; b < byteWidth; ++b) {
+                    out.push_back(static_cast<uint8_t>((value >> (b * 8)) & 0xFF));
+                }
+            } else {
+                for (int b = byteWidth - 1; b >= 0; --b) {
+                    out.push_back(static_cast<uint8_t>((value >> (b * 8)) & 0xFF));
+                }
             }
         } else {
             // 十六进制字面量: 每 2 字符 1 字节; 空格/制表符为字节分隔符
@@ -295,12 +314,32 @@ TemplateLayout RequestBuilder::BuildTemplateLayout(
             } else {
                 const std::string name = inner.substr(0, colon);
                 const std::string fmt = inner.substr(colon + 1);
-                if      (fmt == "X2")  w = 1;
-                else if (fmt == "X4")  w = 2;
-                else if (fmt == "X8")  w = 4;
-                else if (fmt == "X16") w = 8;
-                else if (fmt == "raw") w = TemplateLayout::kRawMarker;
-                else out.hasUnknown = true;
+                if (fmt == "raw") {
+                    w = TemplateLayout::kRawMarker;
+                } else {
+                    // Xn[XLE]: 偶数 hex 位数 2..16 → n/2 字节; LE 后缀 = 小端线序
+                    //   (与 RenderTemplate 同一解析语义; 未知格式记 hasUnknown, 宽度按 0)
+                    std::string fmtCore = fmt;
+                    if (fmtCore.size() > 2
+                            && fmtCore.compare(fmtCore.size() - 2, 2, "LE") == 0) {
+                        fmtCore.resize(fmtCore.size() - 2);
+                    }
+                    if (fmtCore.size() >= 2 && fmtCore[0] == 'X') {
+                        int hexWidth = 0;
+                        bool digitsOk = true;
+                        for (size_t ci = 1; ci < fmtCore.size(); ++ci) {
+                            if (fmtCore[ci] < '0' || fmtCore[ci] > '9') { digitsOk = false; break; }
+                            hexWidth = hexWidth * 10 + (fmtCore[ci] - '0');
+                        }
+                        if (digitsOk && hexWidth >= 2 && hexWidth <= 16 && hexWidth % 2 == 0) {
+                            w = static_cast<uint32_t>(hexWidth / 2);
+                        } else {
+                            out.hasUnknown = true;
+                        }
+                    } else {
+                        out.hasUnknown = true;
+                    }
+                }
                 if (out.offsets.find(name) == out.offsets.end()) {
                     out.offsets[name] = cursor;               // 首现偏移
                 }

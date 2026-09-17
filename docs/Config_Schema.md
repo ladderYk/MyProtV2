@@ -251,10 +251,12 @@ configs/
 | 成分 | 取值 | 说明 |
 |------|------|------|
 | 名称 | `[A-Za-z_]\w*` | 变量名的可读标识 |
-| 格式 | `X2` / `X4` / `X8` / `X16` | 输出的十六进制位数，对应 1 / 2 / 4 / 8 字节 |
+| 格式 | `Xn` / `XnLE`（n = 偶数 hex 位数 2..16，对应 n/2 字节） | 输出的十六进制位数；`Xn` 大端输出（MSB 在前），`XnLE` 小端输出（LSB 在前，小端协议字段直配免反转公式）。字节序只裁决该占位符自身线序，与 `framing.byteOrder` / `dataByteOrder` 无关 |
 | 变长 | `raw` | 变长字节流直插（载荷由写请求运行时注入，仅 `BuildBytes` 入口，见 §9） |
 
-占位符正则：`^\{([A-Za-z_]\w*):(X2|X4|X8|X16|raw)\}$`。
+占位符正则：`^\{([A-Za-z_]\w*):(X[0-9]+(LE)?|raw)\}$`（X 后为偶数 2..16；`LE` 后缀 = 该字段按小端线序输出）。
+
+> **`{Frame:fixed}` 语义（长度域计算示例）**：`{Frame:fixed}` 的值 = 模板**定长部分**的总字节数（hex 字面量按字节数、`{Name:Xn}`/`{Name:XnLE}` 按 n/2 字节计；`{Name:raw}` 载荷不计入）。写"长度域 = 帧长 − 常数"时注意 `{Frame:fixed}` **已包含长度域占位符自身宽度**，因此常数 = 长度域之前的头部字节数 + 长度域宽度。示例（FINS/TCP，长度域在魔数之后）：魔数 4B + `{Len:X8}` 4B → `Len = {Frame:fixed} - 8`（= 帧总长 − 8 = ICF 起至帧尾的命令部分长度）。三菱 MC 3E（长度域在 7 字节头内）：`ReqDataLen = {Frame:fixed} - 9`。
 
 > **三段文法已移除**：`{名称:函数关键字:格式}` 形式（`auto` / `calc` / 内联校验和 `crc16modbus` / `crc16ccitt` / `crc32` / `lrc` / `xor8`）**不再合法**，校验器报 Error（规则6）并给出迁移指引。校验和改用声明式 `inputs.source=auto` + `strategy=crc` + `params.algo`（取值 `crc16-modbus` / `crc16-ccitt` / `crc32`）；派生长度改用 `outputs` 的 `derivedLength`。
 

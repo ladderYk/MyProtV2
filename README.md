@@ -83,11 +83,15 @@ MyProt.App.exe --config configs_write_test
 
 | 协议 | 传输层 | 帧解析 | 配置文件 |
 |------|--------|--------|----------|
-| ModbusTCP | TCP | LengthField (2B) | `configs/protocols/modbus-tcp.json` |
+| ModbusTCP | TCP | LengthField (2B 大端) | `configs/protocols/modbus-tcp.json` |
 | S7 (Siemens) | TCP | 握手 COTP + LengthField | `configs/protocols/s7-1200.json` |
+| SEER (仙工) | TCP | LengthField | `configs/protocols/seer-robot.json` |
+| 欧姆龙 FINS/TCP | TCP | LengthField (4B 大端 @0) | `configs/protocols/omron-fins-tcp.json` |
+| 三菱 MC 3E | TCP | LengthField (2B 小端 @7) | `configs/protocols/mitsubishi-mc-3e.json` |
+| 倍福 ADS/AMS | TCP | LengthField (4B 小端 @2) | `configs/protocols/twincat-ads.json` |
 | SEER（仙工 AGV） | TCP | LengthField (4B) + JSON 数据 | `configs/protocols/seer.json`（教学文档 [docs/protocols/seer.md](docs/protocols/seer.md)） |
 
-添加新协议只需在 `configs/protocols/` 新增 JSON 定义并在 `tags.json` 引用，重启即生效——无需改动代码。
+添加新协议只需在 `configs/protocols/` 新增 JSON 定义并在 `tags.json` 引用，重启即生效——无需改动代码。小端字段用 `{Name:XnLE}` 占位符直配（LSB 在前），无需手写反转公式（E2E Test 22 对 FINS/MC 3E/ADS 三协议做了逐字节断言验证）。
 
 ---
 

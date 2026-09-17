@@ -33,6 +33,9 @@ const VAR_FORMATS = [
   { value: 'X2', label: 'X2 (1字节十六进制)', bytes: 1 },
   { value: 'X4', label: 'X4 (2字节十六进制)', bytes: 2 },
   { value: 'X8', label: 'X8 (4字节十六进制)', bytes: 4 },
+  { value: 'X4LE', label: 'X4LE (2字节小端)', bytes: 2 },
+  { value: 'X8LE', label: 'X8LE (4字节小端)', bytes: 4 },
+  { value: 'X12LE', label: 'X12LE (6字节小端, NetId)', bytes: 6 },
   { value: 'raw', label: 'raw (原始字节流)', bytes: null }
 ]
 
