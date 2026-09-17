@@ -14,22 +14,42 @@ export class ApiError extends Error {
   }
 }
 
+// v5: 会话失效全局出口 — App.vue 启动时注册; 401 时统一清 token 并通知切回登录页
+let authLostHandler = null
+export function setAuthLostHandler(fn) { authLostHandler = fn }
+
+// v5: 全局请求超时 — 后端挂起时 fetch 不再永久 pending (此前无 AbortSignal, 界面假死)
+const REQUEST_TIMEOUT_MS = 15000
+
 async function request(method, url, rawBody) {
   const headers = {}
   const token = getToken()
   if (token) headers['Authorization'] = 'Bearer ' + token
   if (rawBody !== undefined) headers['Content-Type'] = 'application/json'
 
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
   let res
   try {
-    res = await fetch(url, { method, headers, body: rawBody })
+    res = await fetch(url, { method, headers, body: rawBody, signal: ctl.signal })
   } catch (e) {
+    if (e && e.name === 'AbortError') {
+      throw new ApiError(0, '请求超时 (' + (REQUEST_TIMEOUT_MS / 1000) + 's) — 服务无响应')
+    }
     throw new ApiError(0, '无法连接服务器')
+  } finally {
+    clearTimeout(timer)
   }
   const text = await res.text()
   if (!res.ok) {
     let msg = res.statusText || ('HTTP ' + res.status)
     try { msg = JSON.parse(text).error || msg } catch (_) { /* 非 JSON 响应 */ }
+    // v5: 401 = 会话失效 — 清 token + 全局通知 (仅一次; 登录试探自身 status===401 也走这里,
+    //   handler 为 null 时安全跳过, LoginGate 自行处理)
+    if (res.status === 401) {
+      setToken('')
+      if (authLostHandler) authLostHandler()
+    }
     throw new ApiError(res.status, msg)
   }
   return text

@@ -4,7 +4,7 @@ import LoginGate from './components/LoginGate.vue'
 import ScopeManager from './components/ScopeManager.vue'
 import SimPanel from './components/SimPanel.vue'
 import LivePanel from './components/LivePanel.vue'
-import { listConfigs, getToken, setToken, reloadConfig } from './api'
+import { listConfigs, getToken, setToken, reloadConfig, setAuthLostHandler } from './api'
 
 const checking = ref(true)
 const authed = ref(false)
@@ -22,6 +22,12 @@ const views = [
 
 // 启动探测: 用已存 token 试探一次受保护端点; 401 → 登录页
 onMounted(async () => {
+  // v5: 任意请求 401 → 统一切回登录页 (此前各组件只各自报错, 用户被困在全按钮报错界面)
+  setAuthLostHandler(() => {
+    authed.value = false
+    banner.value = ''
+    showBanner('err', '登录已失效, 请重新输入 Token')
+  })
   try {
     await listConfigs('protocols')
     authed.value = true

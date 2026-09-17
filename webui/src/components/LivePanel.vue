@@ -152,7 +152,15 @@ function startStream() {
       } catch (_) { /* 忽略坏帧 */ }
     }
     es.onerror = () => {
-      // 连接断开 — 浏览器自动重连; 仅在推送开启时提示状态
+      // v5: CLOSED 且未在重连 = 服务端拒绝 (典型 401 失效 token) — 停止重连,
+      //   提示重新登录 (此前浏览器无限重连循环); 连接中断 (CONNECTING) 仍自动重连
+      if (es && es.readyState === EventSource.CLOSED) {
+        stopStream()
+        if (!message.value) {
+          message.value = '推送连接已被服务端关闭 (登录可能已失效), 请刷新页面重新登录'
+        }
+        return
+      }
       if (streaming.value && !message.value) {
         message.value = '推送连接中断, 正在自动重连…'
       }

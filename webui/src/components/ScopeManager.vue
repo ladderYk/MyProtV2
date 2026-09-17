@@ -1,7 +1,7 @@
 <script setup>
 // 配置工作台 v3 — 顶部 tabs (protocols) / 单页直出 (tags) + 工具栏 (表单/JSON 切换、备份回滚)
 // scope=protocols: 可新建/删除; scope=tags: 固定单文件 tags.json (不提供删除)
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import JsonEditor from './JsonEditor.vue'
 import ProtocolForm from './ProtocolForm.vue'
@@ -355,6 +355,16 @@ async function onRestore(tag) {
 }
 
 onMounted(refreshList)
+
+// v5: 未保存修改守卫 — 关闭/刷新标签页时浏览器原生确认 (应用内切换已有 confirm;
+//   此前 F5/关页直接静默丢失全部编辑)
+function onBeforeUnload(e) {
+  if (!dirty.value) return
+  e.preventDefault()
+  e.returnValue = ''
+}
+window.addEventListener('beforeunload', onBeforeUnload)
+onUnmounted(() => window.removeEventListener('beforeunload', onBeforeUnload))
 watch(() => props.scope, () => {
   selected.value = ''
   rawText.value = ''
