@@ -3210,7 +3210,20 @@ int RunE2E() {
                   << "\"variables\":{\"StartByteAddress\":20,\"ByteCount\":2},"
                   << "\"scanRateMs\":200,"
                   << "\"writeOperation\":\"WriteSingleRegister\","
-                  << "\"finalType\":\"UInt16\"}]}";
+                  << "\"finalType\":\"UInt16\"},"
+                  // R.RB4: 4 字节读标签 — FC16 变长写读回校验的期望字节载体
+                  << "{\"name\":\"R.RB4\",\"deviceId\":\"PLC-RB\","
+                  << "\"operation\":\"ReadHoldingRegisters\","
+                  << "\"variables\":{\"StartByteAddress\":20,\"ByteCount\":4},"
+                  << "\"scanRateMs\":200,\"finalType\":\"ByteArray\"},"
+                  // R.WB: FC16 变长写标签 (direction=write) — 读回引用 R.RB4
+                  << "{\"name\":\"R.WB\",\"deviceId\":\"PLC-RB\","
+                  << "\"direction\":\"write\","
+                  << "\"operation\":\"WriteMultipleRegisters\","
+                  << "\"variables\":{\"StartByteAddress\":20},"
+                  << "\"writeVariable\":\"WriteValue\","
+                  << "\"readBackTag\":\"R.RB4\","
+                  << "\"finalType\":\"ByteArray\"}]}";
             }
             {
                 std::ofstream f((pDir20 + "\\simmodbusrb.json").c_str());
@@ -3242,6 +3255,21 @@ int RunE2E() {
                   << "\"{StartAddress:X4}\",\"{WriteValue:X4}\"],"
                   << "\"outputs\":{\"StartAddress\":{\"source\":\"auto\",\"strategy\":\"derivedLength\",\"expr\":\"StartByteAddress / 2\"}},"
                   << "\"responseParser\":{\"validCondition\":\"resp[7]==0x06\","
+                  << "\"dataStartIndex\":12,\"dataLengthExpr\":\"\"}},"
+                  // FC16 变长写: {WriteValue:raw} 尾段 (TemplateMatcher 变长尾段
+                  // 匹配的前提) + 派生长度族 (PDULength/RegisterCount/RegByteCount)
+                  << "\"WriteMultipleRegisters\":{"
+                  << "\"kind\":\"write\","
+                  << "\"requestTemplate\":[\"{TransactionID:X4}\","
+                  << "\"00 00\",\"{PDULength:X4}\",\"01\",\"10\","
+                  << "\"{StartAddress:X4}\",\"{RegisterCount:X4}\","
+                  << "\"{RegByteCount:X2}\",\"{WriteValue:raw}\"],"
+                  << "\"outputs\":{"
+                  << "\"StartAddress\":{\"source\":\"auto\",\"strategy\":\"derivedLength\",\"expr\":\"StartByteAddress / 2\"},"
+                  << "\"RegisterCount\":{\"source\":\"auto\",\"strategy\":\"derivedLength\",\"expr\":\"{WriteValue:len} / 2\"},"
+                  << "\"RegByteCount\":{\"source\":\"auto\",\"strategy\":\"derivedLength\",\"expr\":\"{WriteValue:len}\"},"
+                  << "\"PDULength\":{\"source\":\"auto\",\"strategy\":\"derivedLength\",\"expr\":\"{Frame:fixed} - 6 + {WriteValue:len}\"}},"
+                  << "\"responseParser\":{\"validCondition\":\"resp[7]==0x10\","
                   << "\"dataStartIndex\":12,\"dataLengthExpr\":\"\"}}},"
                   << "\"handshake\":[]}";
             }
@@ -3250,7 +3278,8 @@ int RunE2E() {
                 std::ofstream f((std::string(kDir20) + "\\server.json").c_str());
                 f << "{\"schemaVersion\":2,\"simulation\":{\"listenPort\":11542,"
                   << "\"initialValues\":{\"10\":0},"
-                  << "\"operations\":{\"WriteSingleRegister\":{\"dataOffset\":10}}}}";
+                  << "\"operations\":{\"WriteSingleRegister\":{\"dataOffset\":10},"
+                  << "\"WriteMultipleRegisters\":{\"dataOffset\":13}}}}";
             }
         }
         AppContext t16Ctx = {
@@ -3306,6 +3335,42 @@ int RunE2E() {
             const auto r = t16do(
                 R"({"tag":"R.RB","readBack":true})");
             Check("20e 缺 value+bytes 期望 400", r.first == 400);
+        }
+        // 20f: FC16 变长写 + 读回闭环 (bytes 路径) ──
+        // 闭环构成: HandleWriteApi → WriteViaGateway → TagReader::WriteBytes
+        //   (BuildBytes 展开 {WriteValue:raw}, 派生 PDULength/RegisterCount/
+        //    RegByteCount) → 仿真器 TemplateMatcher 变长尾段识别 FC16 →
+        //   dataOffset 取载荷写寄存器 10..11 → echo 应答 → BuildWriteBackCheck
+        //   按 R.RB4 (ByteCount=4) 构建读请求 → RunReadBack 逐字节比较。
+        // 回归护栏: 修复前该路径复用写模板构建读请求 (S7 下发出第二个写
+        //   请求造成"假成功"), 现断言全链 200。
+        {
+            const auto r = t16do(
+                R"({"tag":"R.WB","bytes":"12 34 56 78","readBack":true})");
+            Check("20f FC16 变长写+读回 期望 200", r.first == 200);
+        }
+        // 20g: 写入落底座 — R.RB4 轮询快照反映 FC16 写入的 4 字节
+        {
+            const auto r = t16do(
+                R"({"tag":"R.WB","bytes":"00 0A 00 0B","readBack":false})");
+            Check("20g-1 FC16 变长写(无读回) 期望 200", r.first == 200);
+            std::this_thread::sleep_for(std::chrono::milliseconds(600));
+            std::vector<MyProt::Core::TagValue> snap = t16Ctx.latest->Snapshot("");
+            bool found = false;
+            bool bytesOK = false;
+            for (size_t i = 0; i < snap.size(); ++i) {
+                if (snap[i].tagName != "R.RB4") continue;
+                found = true;
+                bytesOK =
+                    snap[i].quality == MyProt::Core::QualityCode::Good &&
+                    snap[i].typedValue.type == MyProt::Core::ValueType::ByteArray &&
+                    snap[i].typedValue.bytes.size() == 4 &&
+                    snap[i].typedValue.bytes[0] == 0x00 &&
+                    snap[i].typedValue.bytes[1] == 0x0A &&
+                    snap[i].typedValue.bytes[2] == 0x00 &&
+                    snap[i].typedValue.bytes[3] == 0x0B;
+            }
+            Check("20g-2 R.RB4 轮询快照 = 00 0A 00 0B (Good)", found && bytesOK);
         }
         std::cout << std::endl;
 

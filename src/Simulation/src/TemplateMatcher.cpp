@@ -62,8 +62,18 @@ bool TemplateMatcher::CompileLine(const std::string& raw,
         const std::vector<std::string> sgs = SplitSegments(inner);
         if (sgs.empty()) return false;
 
-        // {Name:Xn} 或 {Name:auto:Xn}; 其余文法不支持 → 该行编译失败
+        // {Name:Xn} / {Name:auto:Xn} / {Name:raw}; 其余文法不支持 → 该行编译失败
         if (sgs.size() != 2 && !(sgs.size() == 3 && sgs[1] == "auto")) return false;
+
+        // {Name:raw} 变长尾段: 仅允许作为模板最后一行 (Compile 侧校验末段
+        // 位置; raw 之后的定长段偏移不可知, 非末位 raw 编译失败)
+        if (sgs.size() == 2 && sgs[1] == "raw") {
+            Segment seg;
+            seg.kind = Segment::Raw;
+            seg.varName = sgs[0];
+            segs.push_back(seg);
+            return true;
+        }
 
         Segment seg;
         seg.widthBytes = static_cast<int>(WidthSpecToBytes(sgs[sgs.size() - 1]));
@@ -111,6 +121,19 @@ void TemplateMatcher::Compile() {
         }
         if (!ok || op.totalSize == 0) continue; // 编译失败的操作不参与匹配
 
+        // 变长尾段校验: {Name:raw} 仅允许作为末段 (CompileLine 已拒绝非首行
+        // raw; 此处拒绝"raw 在首行但后随定长段"的非法形状)。合法时 totalSize
+        // = 定长前缀长, 匹配按 "帧长 >= 前缀" 判定。
+        bool rawMid = false;
+        for (std::size_t s = 0; s + 1 < op.segments.size(); ++s) {
+            if (op.segments[s].kind == Segment::Raw) { rawMid = true; break; }
+        }
+        if (rawMid) continue;
+        if (!op.segments.empty()
+                && op.segments[op.segments.size() - 1].kind == Segment::Raw) {
+            op.hasTail = true;
+        }
+
         _ops.push_back(op);
     }
 
@@ -141,6 +164,8 @@ void TemplateMatcher::Compile() {
 
         for (std::size_t j = i + 1; j < _ops.size(); ++j) {
             const CompiledOp& oj = _ops[j];
+            // 变长尾段模式无固定帧长, 不参与定长歧义比对
+            if (oi.hasTail || oj.hasTail) continue;
             if (oj.totalSize != oi.totalSize) continue;
             b.clear();
             for (std::size_t s = 0; s < oj.segments.size(); ++s) {
@@ -178,12 +203,17 @@ TemplateMatch TemplateMatcher::Match(const Core::ByteView& frame) const {
 
     for (std::size_t i = 0; i < _ops.size(); ++i) {
         const CompiledOp& op = _ops[i];
-        if (op.totalSize != frame.size) continue;
+        // 定长模式: 帧长须精确相等; 变长尾段模式: 帧长 >= 定长前缀
+        if (op.hasTail) {
+            if (frame.size < op.totalSize) continue;
+        } else if (op.totalSize != frame.size) {
+            continue;
+        }
 
         TemplateMatch cand;
         cand.matched = true;
         cand.operation = op.name;
-        cand.frameLength = op.totalSize;
+        cand.frameLength = frame.size;
 
         bool ok = true;
         std::size_t off = 0;
@@ -209,6 +239,10 @@ TemplateMatch TemplateMatcher::Match(const Core::ByteView& frame) const {
                 }
                 case Segment::Wildcard:
                     off += static_cast<std::size_t>(seg.widthBytes);
+                    break;
+                case Segment::Raw:
+                    // 尾段消耗剩余全部字节, 内容不捕获 (写数据提取走 dataOffset)
+                    off = frame.size;
                     break;
                 default:
                     ok = false;

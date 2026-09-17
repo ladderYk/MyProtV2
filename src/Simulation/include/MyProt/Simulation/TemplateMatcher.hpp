@@ -8,6 +8,9 @@
 //   - 十六进制字面量行: 偶数长度 hex 字符串, 每 2 字符 1 字节 (忽略空格)
 //   - 占位符 {Name:Xn}      → 定宽变量段, 匹配时提取大端数值
 //   - 占位符 {Name:auto:Xn} → 定宽通配段 (自增字段如 TransactionId), 跳过内容
+//   - 占位符 {Name:raw}     → 变长尾段 (仅允许作为模板最后一行): 匹配时消耗
+//     帧内剩余全部字节, 内容不捕获; 写场景数据提取由 server.json dataOffset
+//     承担。变长写 (如 Modbus FC16 {WriteValue:raw}) 由此可被仿真器反向识别。
 //   Xn: hex 字符宽度, 偶数 2..16 → n/2 字节。
 //   其余格式 (校验和函数占位符等) 编译期跳过该操作 — 与构建器未实现的文法保持一致。
 
@@ -52,17 +55,19 @@ public:
 
 private:
     struct Segment {
-        enum Kind { Literal, Variable, Wildcard } kind;
+        enum Kind { Literal, Variable, Wildcard, Raw } kind;
         std::vector<std::uint8_t> literal; ///< Literal: 期望字节序列
-        std::string varName;               ///< Variable: 变量名
-        int widthBytes;                    ///< Variable/Wildcard: 定宽字节数
+        std::string varName;               ///< Variable: 变量名; Raw: 尾段变量名 (不捕获)
+        int widthBytes;                    ///< Variable/Wildcard: 定宽字节数; Raw 恒 0
         Segment() : kind(Literal), widthBytes(0) {}
     };
     struct CompiledOp {
         std::string name;
         std::vector<Segment> segments;
-        std::size_t totalSize; ///< 模式总字节长 (帧长必须精确相等)
-        CompiledOp() : totalSize(0) {}
+        std::size_t totalSize; ///< 定长模式: 模式总字节长 (帧长须精确相等);
+                               ///< 变长尾段模式 (hasTail): 定长前缀最小字节长
+        bool hasTail;          ///< 末段为 {Name:raw} 变长尾段
+        CompiledOp() : totalSize(0), hasTail(false) {}
     };
 
     static bool CompileLine(const std::string& raw, std::vector<Segment>& segs,
