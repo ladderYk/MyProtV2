@@ -3387,8 +3387,181 @@ int RunE2E() {
 
 
 
-    // ── 濮瑰洦鈧?──
-    // ── Test 21: 仙工 SEER (0x5A 0x01 + 16B 头 + JSON 正文) 字节级验证 ──
+    // ── v5 (C1 验证): 常用工控协议纯配置接入 — 帧字节级验证 ──
+    // 三份新协议 (configs/protocols/): 欧姆龙 FINS/TCP、三菱 MC 3E、倍福 ADS/AMS。
+    // 目的: 用与既有协议形态差异最大的 TCP 协议压测 "定义即执行" 文法边界。
+    // 断言方式: 直接经 ConfigDirectoryLoader 加载仓库真实配置 → RequestBuilder 构建
+    // 请求帧 → 逐字节比对期望帧 (含小端合成/长度域/魔数常量)。
+    std::cout << "--- Test 22: FINS / MC3E / ADS config-driven frames ---" << std::endl;
+    {
+        const auto loaded = MyProt::Service::ConfigDirectoryLoader::Load(
+            "configs", MyProt::Core::kSupportedSchemaVersion);
+        Check("22-0: configs/ 全目录加载通过 (6 协议)",
+              loaded.has_value() && loaded.value().protocols.size() >= 6);
+        if (loaded.has_value()) {
+        const std::vector<MyProt::Core::ProtocolConfig>& protos = loaded.value().protocols;
+
+        auto FindProto = [&protos](const char* name) -> const MyProt::Core::ProtocolConfig* {
+            for (size_t i = 0; i < protos.size(); ++i)
+                if (protos[i].protocolName == name) return &protos[i];
+            return 0;
+        };
+
+        // ── 欧姆龙 FINS/TCP: ASCII "FINS" 魔数 + {Frame:fixed}+2 长度域 ──
+        {
+            const MyProt::Core::ProtocolConfig* proto = FindProto("omron-fins-tcp");
+            Check("22-p1: FINS 协议已加载", proto != 0);
+            if (proto) {
+                MyProt::Core::TagDefinition tag;
+                tag.name = "T";
+                tag.finalType = "UInt16";
+                tag.variables["StartByteAddress"] = 100;   // 字地址 50 = 0x0032
+                tag.variables["ByteCount"] = 2;            // 1 字
+
+                MyProt::Engine::AutoComputeProvider autoProvider;
+                MyProt::Engine::RequestBuilder builder;
+                const MyProt::Core::OperationConfig& op =
+                    proto->operations.find("ReadWordArea")->second;
+                {   // 与 TagReader::SyncAutoComputeRules 同管线: 声明 auto 变量 (SID)
+                    const std::string acj = MyProt::Gateway::MergeOpAutoComputeJson(*proto, op);
+                    if (!acj.empty()) autoProvider.DeclareJson(acj);
+                }
+                std::unordered_map<std::string, uint32_t> vars =
+                    MyProt::Engine::RequestBuilder::MergeVariables(
+                        MyProt::Engine::RequestBuilder::CollectStaticVariables(*proto),
+                        tag.variables);
+                {   // 与 TagReader::Read 同一管线: 派生变量显式注入 (C1 验证点之一)
+                    const MyProt::Engine::TemplateLayout layout =
+                        MyProt::Engine::RequestBuilder::BuildTemplateLayout(op.requestTemplate);
+                    MyProt::Engine::RequestBuilder::InjectDerivedLengthVariables(
+                        vars, proto->outputs, op.outputs, /*totalBytes=*/0, layout);
+                }
+                const MyProt::Core::Expected<MyProt::Core::Bytes> built = builder.Build(
+                    op, vars, std::unordered_map<std::string, std::string>(), autoProvider);
+                Check("22-1a: FINS 请求构建成功", built.has_value());
+                if (built.has_value()) {
+                    const MyProt::Core::Bytes& f = built.value();
+                    Check("22-1: FINS 帧长 26", f.size() == 26);
+                    Check("22-2: FINS 魔数 ASCII 'FINS'",
+                          f[0] == 'F' && f[1] == 'I' && f[2] == 'N' && f[3] == 'S');
+                    Check("22-3: FINS 长度域 00 00 00 12 (=帧-8)", f[4] == 0x00 && f[5] == 0x00 && f[6] == 0x00 && f[7] == 0x12);
+                    Check("22-3b: ICF=80 RSV=00", f[8] == 0x80 && f[9] == 0x00);
+                    Check("22-4: FINS 命令 0101", f[18] == 0x01 && f[19] == 0x01);
+                    Check("22-5: FINS 区代码 B300 (WR)", f[20] == 0xB3 && f[21] == 0x00);
+                    Check("22-6: FINS 地址/字数 00 32 / 00 01",
+                          f[22] == 0x00 && f[23] == 0x32 && f[24] == 0x00 && f[25] == 0x01);
+                }
+            }
+        }
+
+        // ── 三菱 MC 3E: 小端长度域 (成帧层) + 小端合成派生 (模板层) ──
+        {
+            const MyProt::Core::ProtocolConfig* proto = FindProto("mitsubishi-mc-3e");
+            Check("22-p2: MC3E 协议已加载", proto != 0);
+            if (proto) {
+                MyProt::Core::TagDefinition tag;
+                tag.name = "T";
+                tag.finalType = "UInt16";
+                tag.variables["StartByteAddress"] = 100;   // D50 = 0x32
+                tag.variables["ByteCount"] = 4;            // 2 字
+
+                MyProt::Engine::AutoComputeProvider autoProvider;
+                MyProt::Engine::RequestBuilder builder;
+                const MyProt::Core::OperationConfig& op =
+                    proto->operations.find("ReadDRegisters")->second;
+                {
+                    const std::string acj = MyProt::Gateway::MergeOpAutoComputeJson(*proto, op);
+                    if (!acj.empty()) autoProvider.DeclareJson(acj);
+                }
+                std::unordered_map<std::string, uint32_t> vars =
+                    MyProt::Engine::RequestBuilder::MergeVariables(
+                        MyProt::Engine::RequestBuilder::CollectStaticVariables(*proto),
+                        tag.variables);
+                {   // 与 TagReader::Read 同一管线: 派生变量显式注入 (C1 验证点之一)
+                    const MyProt::Engine::TemplateLayout layout =
+                        MyProt::Engine::RequestBuilder::BuildTemplateLayout(op.requestTemplate);
+                    MyProt::Engine::RequestBuilder::InjectDerivedLengthVariables(
+                        vars, proto->outputs, op.outputs, /*totalBytes=*/0, layout);
+                }
+                const MyProt::Core::Expected<MyProt::Core::Bytes> built = builder.Build(
+                    op, vars, std::unordered_map<std::string, std::string>(), autoProvider);
+                Check("22-7a: MC3E 请求构建成功", built.has_value());
+                if (built.has_value()) {
+                    const MyProt::Core::Bytes& f = built.value();
+                    Check("22-7: MC3E 帧长 19 (2 版本+5 路由+2 监视+2 命令+2 副命令+1 设备码+3 软元件+2 点数)", f.size() == 19);
+                    Check("22-8: MC3E 版本 C5C5", f[0] == 0xC5 && f[1] == 0xC5);
+                    Check("22-9: MC3E 命令 0104", f[9] == 0x01 && f[10] == 0x04);
+                    Check("22-10: MC3E 设备码 A8", f[13] == 0xA8);
+                    Check("22-11: MC3E 头软元件小端 32 00 00",
+                          f[14] == 0x32 && f[15] == 0x00 && f[16] == 0x00);
+                    Check("22-12: MC3E 点数小端 02 00", f[17] == 0x02 && f[18] == 0x00);
+                    Check("22-13: MC3E 长度域声明为小端",
+                          proto->framing.lengthField.byteOrder == MyProt::Core::ByteOrder::LittleEndian);
+                }
+            }
+        }
+
+        // ── 倍福 ADS/AMS: 帧中部 4B 小端长度域 + 小端派生族 ──
+        {
+            const MyProt::Core::ProtocolConfig* proto = FindProto("twincat-ads");
+            Check("22-p3: ADS 协议已加载", proto != 0);
+            if (proto) {
+                MyProt::Core::TagDefinition tag;
+                tag.name = "T";
+                tag.finalType = "UInt16";
+                tag.variables["StartByteAddress"] = 0x1A0;   // IndexOffset 416
+                tag.variables["ByteCount"] = 2;
+
+                MyProt::Engine::AutoComputeProvider autoProvider;
+                MyProt::Engine::RequestBuilder builder;
+                const MyProt::Core::OperationConfig& op =
+                    proto->operations.find("ReadByOffset")->second;
+                {
+                    const std::string acj = MyProt::Gateway::MergeOpAutoComputeJson(*proto, op);
+                    if (!acj.empty()) autoProvider.DeclareJson(acj);
+                }
+                std::unordered_map<std::string, uint32_t> vars =
+                    MyProt::Engine::RequestBuilder::MergeVariables(
+                        MyProt::Engine::RequestBuilder::CollectStaticVariables(*proto),
+                        tag.variables);
+                {   // InvokeIDSeed 无模板占位符 (仅被 outputs expr 引用) - 与生产
+                    //  ResolveAutoIncrementParameters 等价: 先 resolve 进 vars
+                    MyProt::Engine::BuildContext actx;
+                    vars["InvokeIDSeed"] = static_cast<uint32_t>(autoProvider.Resolve("InvokeIDSeed", 4, actx));
+                }
+                {   // 与 TagReader::Read 同一管线: 派生变量显式注入 (C1 验证点之一)
+                    const MyProt::Engine::TemplateLayout layout =
+                        MyProt::Engine::RequestBuilder::BuildTemplateLayout(op.requestTemplate);
+                    MyProt::Engine::RequestBuilder::InjectDerivedLengthVariables(
+                        vars, proto->outputs, op.outputs, /*totalBytes=*/0, layout);
+                }
+                const MyProt::Core::Expected<MyProt::Core::Bytes> built = builder.Build(
+                    op, vars, std::unordered_map<std::string, std::string>(), autoProvider);
+                Check("22-14a: ADS 请求构建成功", built.has_value());
+                if (built.has_value()) {
+                    const MyProt::Core::Bytes& f = built.value();
+                    Check("22-14: ADS 净帧长 47 (4 头+8 目标+2 命令+1 状态+4 数据长+4 错误+4 调用+4 索引组+4 偏移+4 长度+8 源)", f.size() == 47);
+                    Check("22-15: ADS 目标端口小端 21 03 (801=0x321)",
+                          f[10] == 0x21 && f[11] == 0x03);
+                    Check("22-16: ADS 命令小端 01 03 (0x0301)",
+                          f[20] == 0x01 && f[21] == 0x03);
+                    Check("22-17: ADS 状态 04", f[22] == 0x04);
+                    Check("22-18: ADS IndexOffset 小端 A0 01 00 00",
+                          f[39] == 0xA0 && f[40] == 0x01 && f[41] == 0x00 && f[42] == 0x00);
+                    Check("22-19: ADS 读取长度小端 02 00 00 00",
+                          f[43] == 0x02 && f[44] == 0x00 && f[45] == 0x00 && f[46] == 0x00);
+                    Check("22-20: ADS 长度域 offset=2 len=4 LE",
+                          proto->framing.lengthField.lengthFieldOffset == 2 &&
+                          proto->framing.lengthField.lengthFieldLength == 4 &&
+                          proto->framing.lengthField.byteOrder == MyProt::Core::ByteOrder::LittleEndian);
+                }
+            }
+        }
+
+        } // loaded.has_value()
+    }
+    std::cout << std::endl;
+// ── Test 21: 仙工 SEER (0x5A 0x01 + 16B 头 + JSON 正文) 字节级验证 ──
     //   A1 路线 (零代码适配): 全部断言直接基于随仓库发布的 configs/protocols/seer.json,
     //   不以"测试内自造协议"自证 — 配置被改动即回归报警.
     std::cout << "--- Test 21: SEER (Seer AGV) Byte-Level Wiring ---" << std::endl;

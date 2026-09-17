@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 2,
+  "protocolName": "twincat-ads",
+  "transport": { "type": "Tcp", "defaultPort": 48898 },
+  "framing": {
+    "type": "LengthField",
+    "lengthFieldOffset": 2,
+    "lengthFieldLength": 4,
+    "lengthIncludesHeader": false,
+    "byteOrder": "LittleEndian",
+    "headerLength": 6,
+    "lengthAdjustment": 0,
+    "maxFrameSize": 8192
+  },
+  "dataByteOrder": "LittleEndian",
+  "inputs": {
+    "StartByteAddress": { "source": "static", "value": 0, "label": "IndexOffset (按设备符号映射, 字节)", "unit": "字节" },
+    "ByteCount": { "source": "static", "value": 2, "label": "读取字节长度", "unit": "字节" },
+    "TargetPort": { "source": "static", "value": 801, "label": "目标端口 0x0311 (PLC 运行时)" },
+    "SourcePort": { "source": "static", "value": 22880, "label": "源端口 0x5960 (任意高位端口)" },
+    "CmdId": { "source": "static", "value": 769, "label": "命令 ID 0x0301 (Read)" },
+    "StateFlags": { "source": "static", "value": 4, "label": "状态 0x04 (Request)" },
+    "InvokeIDSeed": { "source": "auto", "strategy": "autoIncrement", "params": { "seed": 1 }, "label": "调用 ID (小端渲染经反转公式)" },
+    "IndexGroup": { "source": "static", "value": 61441, "label": "0xF005 READ_Mx (标志区)" }
+  },
+  "operations": {
+    "ReadByOffset": {
+      "kind": "read",
+      "requestTemplate": [
+        "00", "00", "C0", "00",
+        "00", "00", "00", "00", "00", "01",
+        "{TargetPortRev:X4}",
+        "00", "00", "00", "00", "00", "01",
+        "{SourcePortRev:X4}",
+        "{CmdIdRev:X4}",
+        "{StateFlags:X2}",
+        "00", "00", "00", "00",
+        "00", "00", "00", "00",
+        "{InvokeRev:X8}",
+        "{IndexGroupRev:X8}",
+        "{SzOffRev:X8}",
+        "{SzRdRev:X8}"
+      ],
+      "inputs": {},
+      "outputs": {
+        "TargetPortRev": { "source": "auto", "strategy": "derivedLength", "expr": "TargetPort % 256 * 256 + TargetPort / 256 % 256", "label": "目标端口 小端渲染" },
+        "SourcePortRev": { "source": "auto", "strategy": "derivedLength", "expr": "SourcePort % 256 * 256 + SourcePort / 256 % 256", "label": "源端口 小端渲染" },
+        "CmdIdRev": { "source": "auto", "strategy": "derivedLength", "expr": "769 % 256 * 256 + 769 / 256 % 256", "label": "命令 0x0301 小端渲染" },
+        "InvokeRev": { "source": "auto", "strategy": "derivedLength", "expr": "InvokeIDSeed % 256 * 16777216 + (InvokeIDSeed / 256 % 256) * 65536 + (InvokeIDSeed / 65536 % 256) * 256 + (InvokeIDSeed / 16777216 % 256)", "label": "调用 ID 4 字节小端渲染" },
+        "IndexGroupRev": { "source": "auto", "strategy": "derivedLength", "expr": "61441 % 256 * 16777216 + (61441 / 256 % 256) * 65536 + (61441 / 65536 % 256) * 256 + (61441 / 16777216 % 256)", "label": "0xF005 小端渲染" },
+        "SzOffRev": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress % 256 * 16777216 + (StartByteAddress / 256 % 256) * 65536 + (StartByteAddress / 65536 % 256) * 256 + (StartByteAddress / 16777216 % 256)", "label": "IndexOffset 4 字节小端渲染" },
+        "SzRdRev": { "source": "auto", "strategy": "derivedLength", "expr": "ByteCount % 256 * 16777216 + (ByteCount / 256 % 256) * 65536 + (ByteCount / 65536 % 256) * 256 + (ByteCount / 16777216 % 256)", "label": "读取长度 4 字节小端渲染" }
+      },
+      "responseParser": {
+        "validCondition": "resp[38] == 0",
+        "dataStartIndex": 50,
+        "dataLengthExpr": ""
+      }
+    }
+  },
+  "handshake": []
+}

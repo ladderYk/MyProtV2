@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 2,
+  "protocolName": "omron-fins-tcp",
+  "transport": { "type": "Tcp", "defaultPort": 9600 },
+  "framing": {
+    "type": "LengthField",
+    "lengthFieldOffset": 0,
+    "lengthFieldLength": 2,
+    "lengthIncludesHeader": false,
+    "byteOrder": "BigEndian",
+    "headerLength": 0,
+    "lengthAdjustment": 0,
+    "maxFrameSize": 2048
+  },
+  "dataByteOrder": "BigEndian",
+  "inputs": {
+    "StartByteAddress": { "source": "static", "value": 0, "label": "字节地址 (字区按 2 字节/字换算)", "unit": "字节" },
+    "ByteCount": { "source": "static", "value": 2, "label": "数据字节跨度", "unit": "字节" },
+    "GCT": { "source": "static", "value": 2, "label": "网关数 0x02" },
+    "DNA": { "source": "static", "value": 0, "label": "目标网络号 0x00 (本网)" },
+    "DA1": { "source": "static", "value": 20, "label": "目标节点号 0x14 (PLC 默认, 按设备改)" },
+    "DA2": { "source": "static", "value": 0, "label": "目标单元号 0x00 (CPU)" },
+    "SNA": { "source": "static", "value": 0, "label": "源网络号 0x00" },
+    "SA1": { "source": "static", "value": 1, "label": "源节点号 0x01 (上位机, 按设备改)" },
+    "SA2": { "source": "static", "value": 0, "label": "源单元号 0x00" },
+    "SID": { "source": "auto", "strategy": "autoIncrement", "params": { "seed": 0 }, "label": "服务标识 0x00-0xFF 循环" },
+    "MemKind": { "source": "static", "value": 179, "label": "内存区代码 0xB3 (WR 区, 副码 00)" }
+  },
+  "operations": {
+    "ReadWordArea": {
+      "kind": "read",
+      "requestTemplate": [
+        "46 49 4E 53",
+        "{Len:X8}",
+        "80", "00",
+        "{GCT:X2}",
+        "{DNA:X2}", "{DA1:X2}", "{DA2:X2}",
+        "{SNA:X2}", "{SA1:X2}", "{SA2:X2}",
+        "{SID:X2}",
+        "01 01",
+        "{MemKind:X2}", "00",
+        "{StartWordHi:X2}", "{StartWordLo:X2}",
+        "{WordCntHi:X2}", "{WordCntLo:X2}"
+      ],
+      "inputs": {},
+      "outputs": {
+        "Len": { "source": "auto", "strategy": "derivedLength", "expr": "{Frame:fixed} - 8", "label": "命令长度 (ICF 起至帧尾 = 帧长 - 4 魔数 - 4 自身)" },
+        "StartWordHi": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress / 2 / 256 % 256", "label": "起始字地址高字节" },
+        "StartWordLo": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress / 2 % 256", "label": "起始字地址低字节" },
+        "WordCntHi": { "source": "auto", "strategy": "derivedLength", "expr": "ByteCount / 2 / 256 % 256", "label": "字数高字节" },
+        "WordCntLo": { "source": "auto", "strategy": "derivedLength", "expr": "ByteCount / 2 % 256", "label": "字数低字节" }
+      },
+      "responseParser": {
+        "validCondition": "resp[12] == 0",
+        "dataStartIndex": 30,
+        "dataLengthExpr": ""
+      }
+    }
+  },
+  "handshake": []
+}
