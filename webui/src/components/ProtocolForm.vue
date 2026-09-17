@@ -13,6 +13,7 @@ import {
   ElTabs, ElTabPane, ElDivider
 } from 'element-plus'
 import VariableTable from './VariableTable.vue'
+import HandshakeEditor from './HandshakeEditor.vue'
 import FieldHelp from './FieldHelp.vue'
 import FrameBuilder from './FrameBuilder.vue'
 import ExprBuilder from './ExprBuilder.vue'
@@ -95,6 +96,7 @@ const OP_TEMPLATES = {
 const local = reactive(ensureShape(props.modelValue))
 const opTemplate = ref('')   // 新增操作时的模板名 ('' = 空白)
 const activeTemplateTab = ref('visual')  // 请求模板编辑模式：visual | raw
+const activeHandshakeTab = ref('visual') // v5 (C4): 握手编辑模式 visual | raw
 const activeOutputTab = ref('visual')    // 输出编辑模式：visual | form
 // v2 增: 区块导航 — 常规/变量/操作/高级 四页签, 消除长滚动堆叠 (默认首个页签, 与 TagsForm 一致)
 // v4.9 改: 五段并为三段 — 基础信息(含传输与成帧/握手, 段内 divider 分节) / 全局变量 / 操作定义
@@ -750,12 +752,26 @@ onMounted(async () => {
 
     <el-divider content-position="left" class="sec-divider" id="hs-head">握手 (handshake) · 连接建立后按序执行</el-divider>
     <el-card shadow="never" class="blk">
-      <el-input
-        type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" :model-value="handshakeText()"
-        spellcheck="false"
-        @change="onHandshakeText"
-      />
-      <div class="field-hint" style="margin-top: 6px">JSON 数组, 每步含 name/requestTemplate/framingOverride; 连接建立后按序执行</div>
+      <!-- v5 (C4): 握手双模编辑 — 表单 (步骤卡片 + FrameBuilder) / 原始 JSON -->
+      <el-tabs v-model="activeHandshakeTab" class="template-tabs">
+        <el-tab-pane label="表单编辑" name="visual">
+          <HandshakeEditor
+            :model-value="local.handshake || []"
+            @update:model-value="v => { local.handshake = v; emitDoc() }"
+          />
+          <div class="field-hint" style="margin-top: 8px">
+            每步按序执行；模板仅支持 hex 字面量与 {'{'}会话变量{'}'} / {'{'}Username{'}'} / {'{'}Password{'}'}（定长帧渲染，不支持派生长度 / autoIncrement / raw）。
+          </div>
+        </el-tab-pane>
+        <el-tab-pane label="JSON 模式" name="raw">
+          <el-input
+            type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" :model-value="handshakeText()"
+            spellcheck="false"
+            @change="onHandshakeText"
+          />
+          <div class="field-hint" style="margin-top: 6px">JSON 数组, 每步含 name/requestTemplate/framingOverride; 连接建立后按序执行</div>
+        </el-tab-pane>
+      </el-tabs>
     </el-card>
       </el-tab-pane>
 

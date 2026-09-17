@@ -30,7 +30,7 @@ const dirty = ref(false)
 const message = ref('')
 const messageKind = ref('ok')
 const newName = ref('')
-const newTemplate = ref('modbus')   // 新建协议模板: 'modbus' | 'blank'
+const newTemplate = ref('modbus')   // 新建协议模板: 'modbus' | 's7' | 'seer' | 'blank' (v5 C5)
 const itemKw = ref('')              // 协议列表搜索关键字
 
 // ── 方案 2: 结构化校验问题 (自检 / 保存被拒) ──
@@ -219,6 +219,148 @@ async function onDelete(name) {
 
 // ── 新建协议模板 ──
 
+// v5 (C5): S7-1200 模板 — 与 configs/protocols/s7-1200.json 对齐
+// (握手 COTP_CR/S7_Setup + ReadVar/WriteVar; 精简为读 + 写操作核心集)
+function s7Template(name) {
+  return {
+    schemaVersion: 2,
+    protocolName: name,
+    transport: { type: 'Tcp', defaultPort: 102 },
+    framing: {
+      type: 'LengthField',
+      lengthFieldOffset: 0,
+      lengthFieldLength: 2,
+      lengthIncludesHeader: false,
+      byteOrder: 'BigEndian',
+      headerLength: 4,
+      lengthAdjustment: 0,
+      maxFrameSize: 1024
+    },
+    dataByteOrder: 'BigEndian',
+    inputs: {
+      StartByteAddress: { source: 'static', value: 0, label: '起始字节地址', unit: '字节' },
+      ByteCount:        { source: 'static', value: 2, label: '数据字节跨度', unit: '字节' },
+      DBNumber:         { source: 'static', value: 1, label: 'DB 块号' },
+      Area:             { source: 'static', value: 132, label: '区域 (0x84=DB)' }
+    },
+    outputs: {},
+    operations: {
+      ReadVar: {
+        kind: 'read',
+        requestTemplate: [
+          '03 00 00 1F', '02 F0 80', '32 01 00 00',
+          '{TransactionID:X4}', '00 0E', '00 00',
+          '04 01', '12 0A 10', '04',
+          '{Length:X4}', '{DBNumber:X4}', '{Area:X2}',
+          '{AddrHi:X2}', '{AddrMid:X2}', '{AddrLo:X2}'
+        ],
+        inputs: {},
+        outputs: {
+          TransactionID: { source: 'auto', strategy: 'autoIncrement', params: { seed: 1 }, label: 'TPKT 序号' },
+          Length:        { source: 'auto', strategy: 'derivedLength', expr: 'ByteCount', label: '读取字节数' },
+          AddrHi:        { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 8192 % 256', label: '地址高字节 (含字节位)' },
+          AddrMid:       { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 256 % 32', label: '地址中字节' },
+          AddrLo:        { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress % 256', label: '地址低字节' }
+        },
+        responseParser: { validCondition: 'resp[21] == 0x04', dataStartIndex: 25, dataLengthExpr: '' }
+      },
+      WriteVar: {
+        kind: 'write',
+        requestTemplate: [
+          '03 00', '{PDULength:X4}', '02 F0 80', '32 01 00 00',
+          '{TransactionID:X4}', '00 0E', '{DataLen:X4}',
+          '05 01', '12 0A 10', '04',
+          '{ItemLength:X4}', '{DBNumber:X4}', '{Area:X2}',
+          '{AddrHi:X2}', '{AddrMid:X2}', '{AddrLo:X2}',
+          '00', '04', '{DataBits:X4}', '{WriteValue:raw}'
+        ],
+        inputs: { WriteValue: { source: 'static', label: '写入载荷' } },
+        outputs: {
+          TransactionID: { source: 'auto', strategy: 'autoIncrement', params: { seed: 1 }, label: 'TPKT 序号' },
+          PDULength:     { source: 'auto', strategy: 'derivedLength', expr: '{Frame:fixed} - 4 + {WriteValue:len}', label: 'PDU 长度' },
+          DataLen:       { source: 'auto', strategy: 'derivedLength', expr: '{WriteValue:len} + 16', label: '参数+数据长度' },
+          ItemLength:    { source: 'auto', strategy: 'derivedLength', expr: '{WriteValue:len} + 4', label: '项长度' },
+          DataBits:      { source: 'auto', strategy: 'derivedLength', expr: '{WriteValue:len} * 8', label: '数据位数' },
+          AddrHi:        { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 8192 % 256', label: '地址高字节' },
+          AddrMid:       { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 256 % 32', label: '地址中字节' },
+          AddrLo:        { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress % 256', label: '地址低字节' }
+        },
+        responseParser: { validCondition: '', dataStartIndex: 0, dataLengthExpr: '' }
+      }
+    },
+    handshake: [
+      {
+        name: 'COTP_CR',
+        requestTemplate: [
+          '03 00 00 16', '11 E0 00 00 00 01 00',
+          'C1 02 01 00', 'C2 02 01 02', 'C0 01 0A'
+        ],
+        validCondition: 'resp[5] == 0xD0',
+        timeoutMs: 3000
+      },
+      {
+        name: 'S7_Setup',
+        requestTemplate: [
+          '03 00 00 19', '02 F0 80', '32 01 00 00 00 01 00 08 00 00',
+          'F0 00 00 08 00 01 03 C0'
+        ],
+        validCondition: 'resp[8] == 0x03',
+        timeoutMs: 3000
+      }
+    ]
+  }
+}
+
+// v5 (C5): SEER (仙工 AGV) 模板 — 与 configs/protocols/seer.json 对齐
+// (魔数 5A 01 + 自增 Seq + JSON 正文 hex 编码; 文本行原语落地前的标准表达)
+function seerTemplate(name) {
+  return {
+    schemaVersion: 2,
+    protocolName: name,
+    transport: { type: 'Tcp', defaultPort: 11500 },
+    framing: {
+      type: 'LengthField',
+      lengthFieldOffset: 4,
+      lengthFieldLength: 4,
+      lengthIncludesHeader: false,
+      byteOrder: 'BigEndian',
+      headerLength: 8,
+      lengthAdjustment: 0,
+      maxFrameSize: 4096
+    },
+    dataByteOrder: 'BigEndian',
+    inputs: {
+      Seq: { source: 'auto', strategy: 'autoIncrement', params: { seed: 1 }, label: '请求序号 (2 字节)' }
+    },
+    outputs: {},
+    operations: {
+      GetRobotStatus: {
+        kind: 'read',
+        requestTemplate: [
+          '5A 01', '{Seq:X4}', '00 00 00 18', '07 D0',
+          '00 00 00 00 00 00',
+          '7B 22 63 6D 64 22 3A 22 73 74 61 74 75 73 22 7D'
+        ],
+        inputs: {},
+        outputs: {},
+        responseParser: { validCondition: 'resp[0] == 0x5A', dataStartIndex: 16, dataLengthExpr: '' }
+      },
+      GetBattery: {
+        kind: 'read',
+        requestTemplate: [
+          '5A 01', '{Seq:X4}', '00 00 00 19', '07 D3',
+          '00 00 00 00 00 00',
+          '7B 22 63 6D 64 22 3A 22 62 61 74 74 65 72 79 22 7D'
+        ],
+        inputs: {},
+        outputs: {},
+        responseParser: { validCondition: 'resp[0] == 0x5A', dataStartIndex: 16, dataLengthExpr: '' }
+      }
+    },
+    handshake: []
+  }
+}
+
 // 空白骨架: 通用 LengthField + Tcp + 一个示例读操作 (可过深度校验)
 function blankTemplate(name) {
   return {
@@ -330,7 +472,12 @@ async function onCreate() {
     return
   }
   // 注意: 后端 Save 会对 Protocol 做深度字段校验, 空白内容会因缺必填字段被拒
-  const doc = newTemplate.value === 'modbus' ? modbusTcpTemplate(name) : blankTemplate(name)
+  // v5 (C5): 模板四选一
+  let doc
+  if (newTemplate.value === 'modbus') doc = modbusTcpTemplate(name)
+  else if (newTemplate.value === 's7') doc = s7Template(name)
+  else if (newTemplate.value === 'seer') doc = seerTemplate(name)
+  else doc = blankTemplate(name)
   const content = JSON.stringify(doc, null, 2)
   try {
     await saveConfig(props.scope, name, content)
@@ -412,6 +559,8 @@ watch(() => props.scope, () => {
         <div class="create-area stacked">
           <select v-model="newTemplate" title="新建模板">
             <option value="modbus">Modbus TCP 模板</option>
+            <option value="s7">S7-1200 模板 (含握手)</option>
+            <option value="seer">SEER AGV 模板</option>
             <option value="blank">空白骨架</option>
           </select>
           <input v-model="newName" placeholder="新协议名" @keyup.enter="onCreate" />
