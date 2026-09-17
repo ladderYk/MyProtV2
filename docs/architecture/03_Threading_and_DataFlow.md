@@ -22,7 +22,7 @@
 |      +----------+----------+----------+                     |
 |                         |                                   |
 |          IoContextPool (round-robin 分配设备)               |
-|          (目标架构; 初版: 单 io_context + 多线程 run())      |
+|          (目标架构; v1 实态: 单 io_context + 单线程 run())      |
 +--------------------------------------------------------------+
 
 +-------------------------+ +-------------------------------+
@@ -36,7 +36,7 @@
 
 | 线程/池 | 数量 | 职责 | 阻塞约束 |
 |---------|------|------|----------|
-| io_context pool | `N = CPU 核数` | 所有 asio 异步 handler 链执行；协议解析、Socket I/O、轮询 timer 回调 | 零阻塞（仅 asio 异步操作；不挂起协程） |
+| io_context（单实例） | 1 — 主线程 `io.run_for(200ms)` 循环 | 所有 asio 异步 handler 链执行；协议解析、Socket I/O、轮询 timer 回调 | 零阻塞（仅 asio 异步操作；不挂起协程） |
 | WebApi | 1 | HTTP 请求/响应（自研 HTTP/1.1 `WebApiServer`）；写路径经 `io.post` 投递 io_context | 独立于 io 线程池；回调中不阻塞 |
 | ConsoleLogger（自研） | 0~1 | 写 stdout/文件；初版同步，v1 范围不引入 async logger | 同步无约束 |
 
@@ -44,8 +44,8 @@
 
 | 场景 | 策略 | 实现 |
 |------|------|------|
-| 同一设备请求串行 | `asio::strand` | 通道内 `_strand` 绑定 socket/端口操作；粒度为**物理端点**。**P1 D 撤回**：v1 单 io_context + 多线程 `run()` 部署下，per-bus strand 由 io_context 自身隐式串行化满足，通道内 `strand.post()` 为冗余间接层，v1 不再为 per-bus 单独建 strand；共享总线（RS-485）由 PollGroup 单生产者/TagGrouper 合并 + per-device 写互斥（P1 C）保证顺序，详见 ADR-0002 §6 撤回说明 |
-| 不同设备请求并发 | 各请求独立入队 | v1 部署为单 io_context + 多线程 `run()`；不同设备请求天然在不同 worker 线程执行；P1 C per-device 写互斥仍按 `deviceId` 分桶保证同设备写不并发 |
+| 同一设备请求串行 | `asio::strand` | 通道内 `_strand` 绑定 socket/端口操作；粒度为**物理端点**。**P1 D 撤回**：v1 单 io_context + 单线程 `run()` 部署下，同通道 handler 天然按入队顺序执行，通道内 `strand.post()` 为冗余间接层，v1 不再为 per-bus 单独建 strand；共享总线（RS-485）由 PollGroup 单生产者/TagGrouper 合并 + per-device 写互斥（P1 C）保证顺序，详见 ADR-0002 §6 撤回说明 |
+| 不同设备请求并发 | 各请求独立入队 | v1 实态为单 io_context + 单线程 `run()`（`main.cpp` 主循环 `io.run_for`）：全部 handler 在唯一 io 线程串行执行，并发指异步重叠 I/O 而非并行 handler；P1 C per-device 写互斥按 `deviceId` 分桶保证同设备写不并发，且不依赖线程模型 |
 | `ChannelManager::_channels` 读写 | 读多写少 | `std::mutex` + double-check locking（替代 C++17 `std::shared_mutex`） |
 | ~~`DataDispatcher` 队列~~ | (已撤回) | A 撤回后 PollingEngine 通过 `ResultDispatch` 回调直接派发至消费者，跨线程同步在消费者侧完成 |
 | `PollingEngine::_stats` | 多写多读 | 全 `std::atomic` |

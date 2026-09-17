@@ -1793,7 +1793,7 @@ v.type = ValueType::Float;
 
 ## 1.11 线程安全等级表
 
-> v1 异步模型：**单 `io_context` + 多线程 `run()`** 部署；per-bus strand（P1 D）已撤回——io_context 自身工作窃取已隐式满足"同通道连续提交的 handler 在 worker 线程上按入队顺序执行"，通道内 `strand.post()` 为冗余间接层（详见 [ADR-0002 §6 撤回说明](../adr/0002-transport-abstraction.md#6-撤回说明p1-d--2026-08-29)）。
+> v1 异步模型：**单 `io_context` + 单线程 `run()`**（`main.cpp` 主循环 `io.run_for`）部署；per-bus strand（P1 D）已撤回——唯一 io 线程天然满足"同通道连续提交的 handler 按入队顺序执行"，通道内 `strand.post()` 为冗余间接层（详见 [ADR-0002 §6 撤回说明](../adr/0002-transport-abstraction.md#6-撤回说明p1-d--2026-08-29)）。
 > 7 个核心 POCO 的线程安全等级如下：
 
 | POCO | 等级 | 备注 |

@@ -18,7 +18,7 @@
 | 5 | 端点细分限流（按 path 区分令牌桶） | P2 | 🔧 | `webApi.rateLimitRps` | 当前为全局令牌桶 |
 | 6 | `Tls` 字段补 `defaultPort` | P3 | 📋 | `transport.Tls` | Tls 未实装 → 缺省 0 |
 | 7 | alertSink / webhook 端点 | P3 | 🔧 | `ServerConfig` 新字段 | `server.json` 已留位 |
-| 8 | `operations[].converters` 后处理链 | P3 | 🔧 | `TagReader` | 位提取等 |
+| 8 | `operations[].converters` 后处理链 | P1 | 🔧 | `TagReader` | 位提取等；系数换算（线性标定 k/±b）是真实设备接入高频需求，2026-09-16 自 P3 提级 |
 | 9 | `{Crc:*}` 子范围校验 | P3 | 📋 | `Engine` | 当前为全字段校验 |
 | 10 | 协议包下载安装工具 | P3 | 📋 | `scripts/` | 需 cli 设计 |
 | 11 | 协程化（asio → C++20 coroutine） | P3 | ⏸ | 全局 | 需工具链升级（脱离 VS2015） |

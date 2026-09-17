@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |------|------|
-| 状态 | **已接受（ACCEPTED）** · 2026-08-02 确认 · **P1 D 部分撤回** · 2026-08-29：per-bus strand 撤回（v1 单 io_context + 多线程 `run()` 部署下，io_context 自身隐式串行化已满足 per-bus 顺序保证，通道内 `strand.post()` 为冗余间接层；详见 §6 撤回说明）· **A3 部分撤回** · 2026-08-29：`CanChannel` 撤回（v1 不实现 CAN 总线；详见 §5 撤回说明） |
+| 状态 | **已接受（ACCEPTED）** · 2026-08-02 确认 · **P1 D 部分撤回** · 2026-08-29：per-bus strand 撤回（v1 单 io_context + 单线程 `run()` 部署下，唯一 io 线程天然满足 per-bus 顺序保证，通道内 `strand.post()` 为冗余间接层；详见 §6 撤回说明）· **A3 部分撤回** · 2026-08-29：`CanChannel` 撤回（v1 不实现 CAN 总线；详见 §5 撤回说明） |
 | 日期 | 2026-08-02 |
 | 相关文档 | [Config_Schema.md](../Config_Schema.md) §2.1/§2.2/§4 · [modules/03_Transport.md](../modules/03_Transport.md) · [modules/05_Gateway.md](../modules/05_Gateway.md)（ChannelManager）· [ADR-0001](./0001-device-concurrency-vs-throughput.md) |
 
@@ -114,8 +114,8 @@ virtual void Connect(
 **撤回内容**：`IChannel` 内部的 `asio::strand` 成员（`shared_strand post/post` 模式），共享总线下 per-bus strand 显式建串的设计。
 
 **撤回原因**：
-- v1 部署为**单 `io_context` + 多线程 `run()`**，所有异步 handler 提交到同一 io_context；
-- 在该部署下，io_context 自身的工作窃取调度已隐式保证"同通道连续提交的 handler 在 worker 线程上按入队顺序执行"——这是 asio 的执行序保证，不是 per-bus 显式 strand 的贡献；
+- v1 部署为**单 `io_context` + 单线程 `run()`**（`main.cpp` 主循环 `io.run_for(200ms)`），所有异步 handler 在唯一 io 线程串行执行；
+- 在该部署下，唯一 io 线程天然保证"同通道连续提交的 handler 在 worker 线程上按入队顺序执行"——这是单线程执行的天然顺序保证，不是 per-bus 显式 strand 的贡献；
 - 通道内部 `strand.post()` 形成"内层 strand + 外层 io_context 调度"两层串行化冗余，且对吞吐造成可见的回退（P1 D 测量：1000 tag/10 device 压测下，撤回后 P99 延迟从 ~85ms 降到 ~52ms）；
 - per-device 写互斥（P1 C，通道入口处 `deviceId` 分桶互斥锁）已覆盖"同设备写不可重入"的业务约束，per-bus 粒度 strand 对此无补充价值。
 
