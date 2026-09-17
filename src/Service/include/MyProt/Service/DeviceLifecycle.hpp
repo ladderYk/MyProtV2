@@ -11,7 +11,8 @@
 //
 // 状态机迁移表 (modules/04_Service.md §3, ADR-0004 §6):
 //
-//                  ┌────────── Disabled (永久禁用: enabled=false / 不可恢复构建错)
+//                  ┌────────── Disabled (协议/握手 BuildError 即时禁用;
+//                  │            "N 次 Degraded 累积禁用" 未实装 — KI-04)
 //                  ▲
 //   New ──(GOC)──► Connecting ──(握手+连接成功)──► Connected
 //                    │                                │
@@ -32,9 +33,10 @@
 //                                (网络/超时/通道死) — 协议级不迁移
 //   Degraded → Connecting       下一轮 timer 触发 GOC
 //   Degraded → Connected        GOC 成功完成
-//   * → Disabled                device.enabled=false (ConfigValidator 守门)
-//                                或协议/握手 BuildError
-//   Disabled → Connecting       配置热重载恢复 enabled (ResetDevices 重建)
+//   * → Disabled                协议/握手 BuildError (即时)
+//                                注: DeviceConfig 尚无 enabled 字段, 无配置级
+//                                停用开关 (KI-04 待定项)
+//   Disabled → Connecting       配置热重载 (ResetDevices 重建)
 //
 // 故障分类 (PollingEngine 侧):
 //   连接级 (→ Degraded): ConnectFailure / Timeout / NetworkError /
@@ -58,7 +60,7 @@ enum class DeviceLifecycleState {
     Connecting = 1, // 物理连接/握手中
     Connected = 2,  // 物理通道+握手均已建立, 业务可用
     Degraded = 3,   // 通道死了或正在重连, 未到永久禁用门槛
-    Disabled = 4    // 永久禁用 (enabled=false 或不可恢复构建错误)
+    Disabled = 4    // 永久禁用 (不可恢复构建错误; enabled 配置开关 KI-04 待定)
 };
 
 /// 状态名 (供指标 label / 日志使用)

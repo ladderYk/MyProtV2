@@ -23,9 +23,11 @@
 |:--:|------|:--:|:--:|
 | [KI-04](#ki-04) | 设备生命周期：`Disabled` 触发条件与累积策略未定 | 高 | **开放** |
 | [无响应写](#无响应写) | 单向 RTU 写（发完即成功）无表达方式 | 高 | **开放** |
-| [写互斥](#写互斥) | 显式并发写互斥未建，依赖单 io 线程前提 | 高 | **开放** |
-| [变长 read-back](#变长-read-back) | 读回请求复用写操作模板，未改用读操作 | 高 | **开放** |
 | [KI-13](#ki-13) | 表达式优先级已对齐 C，但缺测试用例 | 语义 | 待补测试 |
+
+> 已销账（2026-09-16，编号留空不复用）：
+> - ~~写互斥~~ — per-device 显式写互斥已实装（`TagReader` `_writingInFlight` per-device atomic，写与写互斥且不依赖 io 线程模型；per-bus strand 有意撤回），见 [ADR-0011](./0011-p1cd-write-mutex-and-per-bus-strand.md) §3.1/§3.2。
+> - ~~变长 read-back~~ — 读回已改为调用方以读操作构建（`WriteBackCheck` 携带独立读 op + 期望字节，`RunReadBack` 逐字节比较；变长写读回经 E2E Test 20f 闭环回归），见 [modules/05_Gateway.md](../modules/05_Gateway.md)。
 
 ---
 
@@ -54,29 +56,6 @@
 - **问题**：当前**所有**写操作都要求应答并做 echo 校验（`responseParser.validCondition`）。部分单向 RTU 写协议发完即完成、无从站应答，现有契约无法表达——配上 `validCondition` 必失败，不配则语义不明。
 - **严重级**：`高`
 - **状态**：**开放**（写路径形态见 [ADR-0007](./0007-write-path-scope.md)）
-
----
-
-## 写互斥
-
-### 显式并发写互斥未建，依赖单 io 线程前提
-
-- **位置**：写链（`TagReader` + `ChannelManager`）。
-- **问题**：写互斥当前以"写链整体 `post` 到引擎 io 线程、与轮询回调串行执行"**替代**显式锁，**无显式写互斥**。该替代方案的成立前提是单 io 线程 `run`；若将来切多线程 `run`，前提失效，并发写将失去保护。
-- **严重级**：`高`
-- **状态**：**开放**（与 [ROADMAP.md](../ROADMAP.md) §2「多 io_context 线程 run」关联；选型理由见 [ADR-0011](./0011-p1cd-write-mutex-and-per-bus-strand.md)）
-
----
-
-## 变长 read-back
-
-### 读回请求复用写操作模板，未改用读操作
-
-- **位置**：`TagReader::RunReadBack` 的变长写分支。
-- **问题**：**标量**写 + read-back 正常用读操作（`ReadHoldingRegisters`）构建读回请求；**变长**写 + read-back 却用**写操作名**（如 `WriteMultipleRegisters`）的模板构建读请求，并注入 `RegisterCount = totalBytes / 2`。用写模板去读在语义上不成立——协议若把 `WriteMultipleRegisters` 模板与读请求的模板行复用得不够巧，构建出的就不是读取请求。
-- **现状**：该分支在现有测试中未触发，故未暴露；属简化遗留。
-- **严重级**：`高`
-- **状态**：**开放**（应改为用读操作模板构建读回请求；适用范围见 [ADR-0007](./0007-write-path-scope.md)）
 
 ---
 
