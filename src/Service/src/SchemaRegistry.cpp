@@ -292,7 +292,10 @@ const Fields& SchemaRegistry::TagFields() {
         Plain("coalesce", "bool", false, "true", "是否参与地址邻近合并; 单地址读(如 S7 ReadVar)设 false"),
         Plain("bitOffset", "int", false, "-1",
               "位偏移 0-7 (语义 = StartByteAddress 所指字节内的位偏移); -1 = 未声明. "
-              "Bool 位提取按本字段取位; 协议位寻址 derivedLength expr 通过注入的 BitOffset 引用")
+              "Bool 位提取按本字段取位; 协议位寻址 derivedLength expr 通过注入的 BitOffset 引用"),
+        Plain("converters", "array", false, "[]",
+              "读后换算链 (C1): 采集值→工程值, 按序应用. v1 仅 scale 项 {kind:'scale',k,b} "
+              "(value'=value*k+b, 结果为 Double); 仅数值型 finalType 的读标签可配 (规则13)")
         // 注: 请求-应答超时不在此配置, 统一由 device.requestTimeoutMs 决定 (2026-08-24 收敛)
     };
     return kFields;

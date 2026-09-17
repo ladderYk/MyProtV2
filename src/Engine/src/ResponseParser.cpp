@@ -190,6 +190,36 @@ Core::Expected<Core::TagValue> ResponseParser::Parse(const Core::ByteView& respo
                                 "finalType 不支持或数据不足", tag.finalType);
     }
 
+    // v5 (C1): 读后换算链 — value' = value*k + b 依次应用, 结果统一 Double.
+    //   仅数值型生效 (校验器已拦非数值声明, 此处按类型防御性跳过);
+    //   空链 = 不换算, 与旧版行为逐位一致.
+    if (!tag.converters.empty()) {
+        const Core::ValueType t = tv.typedValue.type;
+        bool numeric =
+            t == Core::ValueType::UInt16 || t == Core::ValueType::Int16
+            || t == Core::ValueType::UInt32 || t == Core::ValueType::Int32
+            || t == Core::ValueType::UInt64 || t == Core::ValueType::Int64
+            || t == Core::ValueType::Float || t == Core::ValueType::Double;
+        if (numeric) {
+            double v = 0.0;
+            switch (t) {
+                case Core::ValueType::UInt16:
+                case Core::ValueType::UInt32:
+                case Core::ValueType::UInt64: v = static_cast<double>(tv.typedValue.u); break;
+                case Core::ValueType::Int16:
+                case Core::ValueType::Int32:
+                case Core::ValueType::Int64:  v = static_cast<double>(tv.typedValue.i); break;
+                default:                      v = tv.typedValue.d; break;
+            }
+            for (size_t ci = 0; ci < tag.converters.size(); ++ci) {
+                v = v * tag.converters[ci].k + tag.converters[ci].b;
+            }
+            tv.typedValue = Core::TypedValue();
+            tv.typedValue.type = Core::ValueType::Double;
+            tv.typedValue.d = v;
+        }
+    }
+
     tv.quality = Core::QualityCode::Good;
     return tv;
 }

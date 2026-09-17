@@ -602,6 +602,7 @@ configs/
 | `direction` | string | ✗ | `"read"` | `read`（参与轮询，写能力由 `writeOperation` / `writeBytesOperation` 声明）/ `write`（**只写标签**，`operation` 即写操作，不参与轮询，见下） |
 | `writeVariable` | string | ✗ | `"WriteValue"` | 写值注入的模板变量名，模板以 `{writeVariable:X4}`（标量）或 `{writeVariable:raw}`（字节/浮点）消费 |
 | `readBackTag` | string | ✗ | `""` | 写标签：写后读回校验引用的**读标签名**；空时回退为按写目标自身读语义重读（仅写标签可配） |
+| `converters` | array | ✗ | `[]` | **读后换算链**（C1）：采集值→工程值，按序应用。v1 仅 `scale` 项 `{"kind":"scale","k":<num>,"b":<num>}`（`value' = value×k + b`，先乘后加），换算后值统一为 Double。仅数值型 `finalType`（整型/Float/Double）的**读标签**可配；写标签或非数值类型声明即校验错误（规则13）。典型：0.1°C/bit → `k=0.1,b=0`；4-20mA 标定 → `k=(量程上限-下限)/27648, b=下限` |
 
 **字段命名裁决**：旧 JSON 示例中 `name` 与 POCO 的 `tagName` 统一为 **`name`**（POCO 字段随之改名）；`pollIntervalMs` 统一为 **`scanRateMs`**（保持 SCADA 术语，与架构文档的 scanRate 分组一致）。运行时输出对象 `TagValue.tagName` 保持不变（它是携带设备上下文的值对象，字段语义无歧义）。
 

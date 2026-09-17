@@ -5,6 +5,7 @@
 
 #include "MyProt/Core/ByteOrder.hpp"
 #include "MyProt/Core/ByteView.hpp"
+#include "MyProt/Core/Config.hpp"
 #include "MyProt/Engine/ResponseParser.hpp"
 #include "MiniTest.hpp"
 
@@ -60,4 +61,83 @@ TEST(ResponseParserTest, ResolveByteOrderProtocolLevelNotHardcoded) {
 
     EXPECT_TRUE(ResponseParser::ResolveByteOrder(proto, Optional<ByteOrder>())
                 == ByteOrder::WordBigByteLittle);
+}
+
+// ── v5 (C1) 读后换算链 ──
+// 本地帧: 6 字节, dataStartIndex=4 起 2 字节 = 0x0A 0x00 → 小端 UInt16 = 10
+static Bytes ConvFrame() {
+    Bytes b;
+    b.push_back(0x01);
+    b.push_back(0x03);
+    b.push_back(0x02);
+    b.push_back(0x00);
+    b.push_back(0x0A);
+    b.push_back(0x00);
+    return b;
+}
+
+TEST(ResponseParserTest, ConvertersScaleAppliedInOrder) {
+    const Bytes respBytes = ConvFrame();
+    const ByteView resp(respBytes);
+
+    ResponseParserConfig cfg;
+    cfg.dataStartIndex = 4;
+
+    TagDefinition tag;
+    tag.name = "T1";
+    tag.finalType = "UInt16";
+    tag.variables[ByteCountVariableName()] = 2;
+    ScaleConverter c1; c1.k = 0.1; c1.b = 0.0;    // 10 -> 1.0
+    ScaleConverter c2; c2.k = 1.0; c2.b = -5.0;   // 1.0 -> -4.0 (链式: 先乘 k 后加 b)
+    tag.converters.push_back(c1);
+    tag.converters.push_back(c2);
+
+    ResponseParser rp;
+    const Expected<TagValue> tv = rp.Parse(resp, cfg, tag, ByteOrder::LittleEndian);
+    ASSERT_TRUE(tv.has_value());
+    EXPECT_TRUE(tv.value().typedValue.type == ValueType::Double);
+    EXPECT_TRUE(tv.value().typedValue.d > -4.0001 && tv.value().typedValue.d < -3.9999);
+    EXPECT_TRUE(tv.value().quality == QualityCode::Good);
+}
+
+// 空链 = 行为与旧版完全一致 (UInt16 原样)
+TEST(ResponseParserTest, ConvertersEmptyChainUnchanged) {
+    const Bytes respBytes = ConvFrame();
+    const ByteView resp(respBytes);
+
+    ResponseParserConfig cfg;
+    cfg.dataStartIndex = 4;
+
+    TagDefinition tag;
+    tag.name = "T2";
+    tag.finalType = "UInt16";
+    tag.variables[ByteCountVariableName()] = 2;
+
+    ResponseParser rp;
+    const Expected<TagValue> tv = rp.Parse(resp, cfg, tag, ByteOrder::LittleEndian);
+    ASSERT_TRUE(tv.has_value());
+    EXPECT_TRUE(tv.value().typedValue.type == ValueType::UInt16);
+    EXPECT_TRUE(tv.value().typedValue.u == 10);
+}
+
+// 非数值 finalType (Bool) — 声明 converters 被校验器拦截; 引擎侧防御性跳过换算,
+// 类型保持 Bool (raw[0]=0x0A 非 0 -> true)
+TEST(ResponseParserTest, ConvertersNonNumericSkippedDefensively) {
+    const Bytes respBytes = ConvFrame();
+    const ByteView resp(respBytes);
+
+    ResponseParserConfig cfg;
+    cfg.dataStartIndex = 4;
+
+    TagDefinition tag;
+    tag.name = "T3";
+    tag.finalType = "Bool";
+    ScaleConverter c; c.k = 2.0; c.b = 1.0;
+    tag.converters.push_back(c);
+
+    ResponseParser rp;
+    const Expected<TagValue> tv = rp.Parse(resp, cfg, tag, ByteOrder::LittleEndian);
+    ASSERT_TRUE(tv.has_value());
+    EXPECT_TRUE(tv.value().typedValue.type == ValueType::Bool);
+    EXPECT_TRUE(tv.value().typedValue.b == true);
 }

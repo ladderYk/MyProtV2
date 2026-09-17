@@ -422,6 +422,17 @@ inline bool IsFrameReservedName(const std::string& name) {
 
 // ────────── 标签定义 ──────────
 
+/// 读后换算器 (C1, ROADMAP #8 提级项): 采集值 → 工程值, 按数组序依次应用.
+/// 仅读路径 (ResponseParser); 写路径不做逆向换算 (写语义歧义, 见 ROADMAP 备注).
+/// v1 仅 scale: value' = value * k + b. 典型: 温度 0.1°C/bit → k=0.1, b=0;
+///   4-20mA 标定 → k=(量程上限-下限)/27648, b=下限.
+struct ScaleConverter {
+    double k;   // 系数
+    double b;   // 偏移
+
+    ScaleConverter() : k(1.0), b(0.0) {}
+};
+
 struct TagDefinition {
     std::string name;                   // 全局唯一 (e.g. "PLC-001.Temperature")
     std::string deviceId;
@@ -469,11 +480,18 @@ struct TagDefinition {
     std::string writeBytesOperation;    // 变长写 (POST bytes) 用的操作模板名 (模板以 {Name:raw} 消费)
     std::unordered_map<std::string, uint32_t> writeVariables; // 写请求专用变量覆盖 (如 S7 写的 TransportSize/Length 与读不同)
 
+    // 读后换算链 (可选; 空 = 不换算, 行为与旧版完全一致).
+    //   仅对数值型 (整型/浮点) 结果生效; Bool/ByteArray/String 标签声明 converters 为校验错误.
+    //   换算后值统一为 Double (TypedValue::d) — 上报/快照/写回比对的消费方均可读.
+    std::vector<ScaleConverter> converters;
+
     TagDefinition()
         : scanRateMs(1000), finalType("UInt16")
         , coalesce(true)
         , direction("read"), writeVariable(kDefaultWriteValueVariable)
-        , bitOffset(-1) {}
+        , bitOffset(-1) {
+        // converters 无内置实例 — 默认空链 = 不换算
+    }
 };
 
 // ────────── 配置根 (对应 tags.json) ──────────

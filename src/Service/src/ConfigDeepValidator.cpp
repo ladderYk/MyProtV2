@@ -1158,6 +1158,37 @@ bool ParseRootDocImpl(const json& doc, int defaultVer,
             if (tj.contains("coalesce")) {
                 if (!OptBool(tj, "coalesce", tag.coalesce, err)) return false;
             }
+            // v5 (C1): 读后换算链 — 数组, 每项 {kind:"scale", k:number, b:number}.
+            //   解析期 fail-fast: kind 不支持 / k、b 缺失或非数值即拒绝加载.
+            if (tj.contains("converters")) {
+                if (!tj.at("converters").is_array()) {
+                    err = "标签 " + tag.name + " converters 须为数组"; return false;
+                }
+                for (const auto& cj : tj.at("converters")) {
+                    if (!cj.is_object() || !cj.contains("kind") || !cj.at("kind").is_string()) {
+                        err = "标签 " + tag.name + " converters 项须为含 kind 的对象"; return false;
+                    }
+                    const std::string kind = cj.at("kind").get<std::string>();
+                    if (kind != "scale") {
+                        err = "标签 " + tag.name + " converters.kind 取值非法: \"" + kind
+                            + "\" (当前仅支持 scale)";
+                        return false;
+                    }
+                    Core::ScaleConverter conv;
+                    if (!cj.contains("k") || !cj.at("k").is_number()
+                            || !cj.contains("b") || !cj.at("b").is_number()) {
+                        err = "标签 " + tag.name + " converters.scale 须含数值 k 与 b";
+                        return false;
+                    }
+                    conv.k = cj.at("k").get<double>();
+                    conv.b = cj.at("b").get<double>();
+                    if (conv.k == 0.0) {
+                        err = "标签 " + tag.name + " converters.scale.k 不可为 0 (值域塌缩)";
+                        return false;
+                    }
+                    tag.converters.push_back(conv);
+                }
+            }
             // §4 设备级变量回退合并: map::insert 不覆盖已有键 → 标签显式声明优先
             std::map<std::string, std::map<std::string, uint32_t> >::const_iterator dv =
                 devVarsById.find(tag.deviceId);
@@ -1663,6 +1694,22 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     if (!isAllowedFinalType(tag.finalType)) {
         r.addError("标签 " + ctx + " finalType 取值非法: \"" + tag.finalType
                    + "\" (规则13, 见 Config_Schema §6)");
+    }
+
+        // v5 (C1): converters 校验 — 仅读标签 + 仅数值型 finalType.
+    //   Bool/ByteArray/String 无"乘加"语义; 写标签值由调用方给定, 不经换算.
+    if (!tag.converters.empty()) {
+        if (isWriteTag) {
+            r.addError("标签 " + ctx + " 写标签 (direction=write) 不可声明 converters (规则13)");
+        }
+        const std::string& ft = tag.finalType;
+        const bool numeric =
+            ft == "UInt16" || ft == "Int16" || ft == "UInt32" || ft == "Int32"
+            || ft == "UInt64" || ft == "Int64" || ft == "Float" || ft == "Double";
+        if (!numeric) {
+            r.addError("标签 " + ctx + " converters 仅支持数值型 finalType, 当前: \""
+                       + ft + "\" (规则13)");
+        }
     }
 
         // 位粒度: BitOffset 约定键校验 (语义 = 字节内位偏移 0-7).
