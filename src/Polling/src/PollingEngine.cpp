@@ -38,6 +38,7 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
     _running.store(true);
     _generation.fetch_add(1);   // 新装配代际 — 旧代 in-flight 组不得再续排 (热重载防护)
     _groups.clear();
+    _protocolCache.clear();     // 协议快照随重装配刷新 (热重载后取新配置)
     _onResults = std::move(onResults);
 
     // 构建 deviceId → protocolName / requestTimeoutMs / 生效韧性 映射
@@ -65,6 +66,11 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
 
     auto tagGroups = _gateway.GetTagGrouper().GroupByScanRate(pollTags);
 
+    // 标签表全部组共享一份 (原实现每组拷贝全量 pollTags — O(组数×标签数) 内存);
+    // in-flight 异步链经 PollGroup shared_ptr 持有旧表快照, 热重载替换不悬垂
+    auto sharedTags = std::make_shared<const std::vector<Core::TagDefinition>>(
+        std::move(pollTags));
+
     // 设备级 PollGroup: 以 (scanRateMs, deviceId) 为键 — 每设备独立 timer +
     // 独立 deadline 预算, 避免同扫描周期下某设备连接故障重试耗尽共享预算,
     // 拖累其他设备 (ADR-0004 预算模型由"组级"细化为"设备级")。
@@ -77,7 +83,7 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
             pg = std::make_shared<PollGroup>(_io);
             pg->scanRateMs = tg.scanRateMs;
             pg->generation = _generation.load();
-            pg->allTags = pollTags; // 保存完整原始数组 (tagIndices 引用此数组)
+            pg->tags = sharedTags;
         }
                 // 合并跨度来自协议级配置 (不能写死 — 早期写死的 125 语义是 Modbus 的
                 //   寄存器上限, 且地址单位改为字节后该值未同步,
@@ -85,11 +91,12 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
         //   协议查找失败时回退 Core::kDefaultMaxSpanBytes.
         int maxSpan = Core::kDefaultMaxSpanBytes;
         {
-            std::shared_ptr<Core::ProtocolConfig> proto =
+            std::shared_ptr<const Core::ProtocolConfig> proto =
                 GetProtocolForDevice(tg.deviceId);
             if (proto && proto->maxSpanBytes > 0) maxSpan = proto->maxSpanBytes;
         }
-        auto merged = _gateway.GetTagGrouper().CoalesceAdjacent(tg, pollTags, maxSpan);
+        auto merged = _gateway.GetTagGrouper().CoalesceAdjacent(tg, *sharedTags,
+                                                                maxSpan);
         pg->mergedRequests.insert(
             pg->mergedRequests.end(), merged.begin(), merged.end());
     }
@@ -98,7 +105,7 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
         _groups.push_back(pair.second);
     }
 
-    _stats.activeTags.store(static_cast<int64_t>(pollTags.size()));
+    _stats.activeTags.store(static_cast<int64_t>(sharedTags->size()));
 
     for (auto& pg : _groups) {
         ScheduleNext(pg);
@@ -271,7 +278,7 @@ void PollingEngine::PollBatchChain(
         size_t deviceIdx,
         size_t curIdx,
         Gateway::TagReader* reader,
-        std::shared_ptr<Core::ProtocolConfig> protocol,
+        std::shared_ptr<const Core::ProtocolConfig> protocol,
         std::shared_ptr<Transport::IChannel> channel,
         std::shared_ptr<Service::SessionContext> session,
         std::shared_ptr<std::vector<Core::TagValue>> allResults,
@@ -295,14 +302,6 @@ void PollingEngine::PollBatchChain(
     }
 
     const auto& merged = group->mergedRequests[curIdx];
-
-    // 收集本批次标签定义
-    std::vector<Core::TagDefinition> batchTags;
-    for (size_t idx : merged.tagIndices) {
-        if (idx < group->allTags.size()) {
-            batchTags.push_back(group->allTags[idx]);
-        }
-    }
 
     // 设备级请求超时 (2026-08-24 收敛为唯一配置点)
     int requestTimeoutMs = 3000;
@@ -333,8 +332,8 @@ void PollingEngine::PollBatchChain(
     // 插入点标记: 重试前回滚本次部分结果
     const size_t mark = allResults->size();
 
-    // 异步批量读取
-    reader->ReadBatch(merged, batchTags, *protocol, *channel,
+    // 异步批量读取 — 不再拷 batchTags; 传共享标签表 + tagIndices
+    reader->ReadBatch(merged, group->tags, protocol, *channel,
                       effectiveTimeoutMs,
         [this, group, deviceIdx, curIdx, reader, protocol, channel, session,
          allResults, mark, res, attempt](std::vector<Core::TagValue> batchResults) {
@@ -443,10 +442,11 @@ void PollingEngine::AppendBadValues(std::shared_ptr<PollGroup> group,
     int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 
+    const std::vector<Core::TagDefinition>& allTags = *group->tags;
     for (size_t idx : group->mergedRequests[deviceIdx].tagIndices) {
-        if (idx >= group->allTags.size()) continue;
+        if (idx >= allTags.size()) continue;
         Core::TagValue tv;
-        tv.tagName = group->allTags[idx].name;
+        tv.tagName = allTags[idx].name;
         tv.deviceId = group->mergedRequests[deviceIdx].deviceId;
         tv.quality = Core::QualityCode::Bad;
         tv.lastError = error;
@@ -455,15 +455,24 @@ void PollingEngine::AppendBadValues(std::shared_ptr<PollGroup> group,
     }
 }
 
-std::shared_ptr<Core::ProtocolConfig>
+std::shared_ptr<const Core::ProtocolConfig>
 PollingEngine::GetProtocolForDevice(const std::string& deviceId) {
     auto it = _deviceProtocolMap.find(deviceId);
     if (it == _deviceProtocolMap.end()) return nullptr;
 
+    // 协议快照缓存: 每协议名仅首访 lookup+拷贝一次, 稳态轮询零拷贝。
+    // (原实现每设备每轮询周期 lookup 按值返回 + make_shared 再深拷一次)
+    auto cit = _protocolCache.find(it->second);
+    if (cit != _protocolCache.end()) return cit->second;
+
     auto result = _gateway.GetProtocolLookup()(it->second);
     if (!result.has_value()) return nullptr;
 
-    return std::make_shared<Core::ProtocolConfig>(result.value());
+    std::shared_ptr<const Core::ProtocolConfig> snapshot =
+        std::make_shared<const Core::ProtocolConfig>(
+            std::move(result.value()));
+    _protocolCache[it->second] = snapshot;
+    return snapshot;
 }
 
 // ──────────────────── 韧性 / 重试辅助 ────────────────────

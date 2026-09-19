@@ -302,12 +302,11 @@ function importFields(file) {
 // 验证字段完整性
 const validationErrors = computed(() => {
   const errors = []
-  const seenVars = new Set()
   fields.value.forEach((f, i) => {
     if (f.type === 'var' || f.type === 'raw') {
       if (!f.name) errors.push(`第 ${i+1} 字段: 变量名不能为空`)
-      if (seenVars.has(f.name)) errors.push(`第 ${i+1} 字段: 变量名 "${f.name}" 重复`)
-      seenVars.add(f.name)
+      // 同一变量多次出现是合法的 (每处渲染同一值) —
+      // 如 ADS AMS 头 targetNetId/sourceNetId 复用同一 NetID 变量
       // 检查变量是否在 availableVars 中定义
       if (!props.availableVars.some(v => v.name === f.name)) {
         errors.push(`第 ${i+1} 字段: 变量 "${f.name}" 未在协议 inputs/outputs 中声明`)

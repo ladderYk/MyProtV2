@@ -106,26 +106,38 @@ std::string MergeOpAutoComputeJson(const Core::ProtocolConfig& protocol,
     return Engine::RequestBuilder::MergeOpAutoComputeJson(protocol, op);
 }
 
+/// 批次第 i 个标签 — merged.tagIndices[i] 指向共享标签表;
+/// 越界返回 nullptr (与原 batchTags 子集按下标一一对应的语义等价)
+const Core::TagDefinition* BatchTagAt(
+    const MergedRequest& merged,
+    const std::shared_ptr<const std::vector<Core::TagDefinition>>& tagsArray,
+    size_t i) {
+    if (i >= merged.tagIndices.size()) return nullptr;
+    const size_t idx = merged.tagIndices[i];
+    if (idx >= tagsArray->size()) return nullptr;
+    return &(*tagsArray)[idx];
+}
+
 TagReader::TagReader() {}
 
 // ── 批量读取 ──
 
 void TagReader::ReadBatch(const MergedRequest& merged,
-                          const std::vector<Core::TagDefinition>& tags,
-                          const Core::ProtocolConfig& protocol,
+                          std::shared_ptr<const std::vector<Core::TagDefinition>> tagsArray,
+                          std::shared_ptr<const Core::ProtocolConfig> protocol,
                           Transport::IChannel& channel,
                           int requestTimeoutMs,
                           BatchHandler handler) {
     // 1. 查找操作配置
-    auto opIt = protocol.operations.find(merged.operation);
-    if (opIt == protocol.operations.end()) {
+    auto opIt = protocol->operations.find(merged.operation);
+    if (opIt == protocol->operations.end()) {
         // 操作未找到 → 为每个 tag 生成错误值
-        // 注意: merged.tagIndices 是全局标签表索引, tags 是本批次子集
-        // (两者按下标一一对应, 不可用 tagIndices 下标 tags — 越界)
         std::vector<Core::TagValue> results;
-        for (size_t i = 0; i < merged.tagIndices.size() && i < tags.size(); ++i) {
+        for (size_t i = 0; i < merged.tagIndices.size(); ++i) {
+            const Core::TagDefinition* t = BatchTagAt(merged, tagsArray, i);
+            if (!t) continue;
             Core::TagValue tv;
-            tv.tagName = tags[i].name;
+            tv.tagName = t->name;
             tv.deviceId = merged.deviceId;
             tv.quality = Core::QualityCode::Bad;
             tv.lastError = Core::Error::Make(Core::Error::Code::TagNotFound,
@@ -135,7 +147,10 @@ void TagReader::ReadBatch(const MergedRequest& merged,
         handler(std::move(results));
         return;
     }
-    const Core::OperationConfig op = opIt->second;  // 按值持有 — 回调异步执行
+    // op 零拷贝 — 别名 shared_ptr 指向协议快照内成员, 所有权与协议快照共享
+    // (原实现按值拷贝整个 OperationConfig, 每请求一次深拷贝)
+    const std::shared_ptr<const Core::OperationConfig> op(protocol,
+                                                          &opIt->second);
 
     // 2. 构建合并请求的变量表
         //    协议 static 变量为基, 首个 tag 的 variables 覆盖同名键
@@ -145,21 +160,23 @@ void TagReader::ReadBatch(const MergedRequest& merged,
     //          S7 协议 JSON 直接在 op.outputs 声明 outputs.ByteCount (或直接读 tag.variables.ByteCount).
     //          引擎零协议族假设, RegisterCount 完全由协议 JSON 通过 derivedLength 派生.
     std::unordered_map<std::string, uint32_t> variables =
-        Engine::RequestBuilder::CollectStaticVariables(protocol);
-    if (!tags.empty()) {
+        Engine::RequestBuilder::CollectStaticVariables(*protocol);
+    const Core::TagDefinition* t0 =
+        merged.tagIndices.empty() ? nullptr : BatchTagAt(merged, tagsArray, 0);
+    if (t0) {
         variables = Engine::RequestBuilder::MergeVariables(
-            variables, OpStaticVariables(op), tags[0].variables);
+            variables, OpStaticVariables(*op), t0->variables);
     } else {
         // 没有标签时也合 op (例如纯写 op 没绑定 tag) — 优先级仍是 op > 协议
         variables = Engine::RequestBuilder::MergeVariables(
-            variables, OpStaticVariables(op),
+            variables, OpStaticVariables(*op),
             std::unordered_map<std::string, uint32_t>{});
     }
     variables[Core::StartByteAddressVariableName()] = merged.startByteAddress;
         variables[Core::ByteCountVariableName()]      = merged.byteCount;  // 跨协议字节单位
         // 位偏移为标签一等字段 — 注入 expr 作用域 (供协议 outputs derivedLength 引用)
-    if (!tags.empty() && tags[0].bitOffset >= 0) {
-        variables[Core::kBitOffsetExprVariable] = static_cast<uint32_t>(tags[0].bitOffset);
+    if (t0 && t0->bitOffset >= 0) {
+        variables[Core::kBitOffsetExprVariable] = static_cast<uint32_t>(t0->bitOffset);
     }
 
         // ReadBatch 路径调用 InjectDerivedLengthVariables (与 WriteBytes 路径一致).
@@ -168,23 +185,27 @@ void TagReader::ReadBatch(const MergedRequest& merged,
     //   读 op 无 raw 字节流 → totalBytes = 0; 仅标量 derivedLength (依赖 {Name} 变量) 求值.
     {
         const Engine::TemplateLayout layout =
-            Engine::RequestBuilder::BuildTemplateLayout(op.requestTemplate);
+            Engine::RequestBuilder::BuildTemplateLayout(op->requestTemplate);
         Engine::RequestBuilder::InjectDerivedLengthVariables(
-            variables, protocol.outputs, op.outputs, /*totalBytes=*/0, layout);
+            variables, protocol->outputs, op->outputs, /*totalBytes=*/0, layout);
     }
 
     // 3. 构建请求字节 (同步; 失败即为所有 tag 标记 Bad)
         //    同步协议 autoCompute 规则 (空 = 不动)
         //    同时合并 op.inputs 中 source=auto 的覆盖项
-    SyncAutoComputeRules(_autoProvider, protocol, op);
+    SyncAutoComputeRules(_autoProvider, *protocol, *op);
         // 参数层预解析 — autoIncrement 渲染前进参数表 (帧感知 frameSlice/expr/crc 除外)
-    ResolveAutoIncrementParameters(variables, protocol.inputs, op.inputs, _autoProvider);
-    auto buildResult = _requestBuilder.Build(op, variables, protocol.varAliasMap, _autoProvider);
+    ResolveAutoIncrementParameters(variables, protocol->inputs, op->inputs,
+                                   _autoProvider);
+    auto buildResult = _requestBuilder.Build(*op, variables,
+                                             protocol->varAliasMap, _autoProvider);
     if (!buildResult.has_value()) {
         std::vector<Core::TagValue> results;
-        for (size_t i = 0; i < merged.tagIndices.size() && i < tags.size(); ++i) {
+        for (size_t i = 0; i < merged.tagIndices.size(); ++i) {
+            const Core::TagDefinition* t = BatchTagAt(merged, tagsArray, i);
+            if (!t) continue;
             Core::TagValue tv;
-            tv.tagName = tags[i].name;
+            tv.tagName = t->name;
             tv.deviceId = merged.deviceId;
             tv.quality = Core::QualityCode::Bad;
             tv.lastError = buildResult.error();
@@ -198,21 +219,23 @@ void TagReader::ReadBatch(const MergedRequest& merged,
     //    默认大端整型混在同一合并批), 不可用首标签 byteOrder 整批统一, 否则
     //    非首标签的 byteOrder 覆盖被吞掉 → 高低字颠倒。
     std::vector<Core::ByteOrder> tagOrders;
-    tagOrders.reserve(tags.size());
-    for (size_t i = 0; i < tags.size(); ++i) {
-        tagOrders.push_back(
-            Engine::ResponseParser::ResolveByteOrder(protocol, tags[i].byteOrder));
+    tagOrders.reserve(merged.tagIndices.size());
+    for (size_t i = 0; i < merged.tagIndices.size(); ++i) {
+        const Core::TagDefinition* t = BatchTagAt(merged, tagsArray, i);
+        tagOrders.push_back(Engine::ResponseParser::ResolveByteOrder(
+            *protocol,
+            t ? t->byteOrder : Core::Optional<Core::ByteOrder>()));
     }
 
     // 5. 异步发送/接收
-    //    注意: 回调与 async_write 均为异步完成 — tags/request 必须按值捕获保活
-    //    (batchTags 是 PollBatchChain 的局部向量, 按引用捕获将在返回后悬垂)
+    //    注意: 回调与 async_write 均为异步完成 — tagsArray/op/请求字节均经
+    //    shared_ptr 保活 (op 为别名指针, 与协议快照共享所有权)
     //    超时: 统一取 device.requestTimeoutMs (2026-08-24 收敛为唯一配置点)
-    auto framing = std::make_shared<Core::FramingConfig>(protocol.framing);
+    auto framing = std::make_shared<Core::FramingConfig>(protocol->framing);
     auto requestShared = std::make_shared<Core::Bytes>(std::move(buildResult.value()));
     channel.SendReceive(*requestShared, framing,
                         std::chrono::milliseconds(requestTimeoutMs),
-        [this, merged, tags, op, tagOrders, handler, requestShared](
+        [this, merged, tagsArray, op, tagOrders, handler, requestShared](
             Core::Expected<Core::Bytes> result) {
 
             std::vector<Core::TagValue> results;
@@ -220,9 +243,11 @@ void TagReader::ReadBatch(const MergedRequest& merged,
 
             if (!result.has_value()) {
                 // 通信失败 → 所有 tag 标记 Bad
-                for (size_t i = 0; i < merged.tagIndices.size() && i < tags.size(); ++i) {
+                for (size_t i = 0; i < merged.tagIndices.size(); ++i) {
+                    const Core::TagDefinition* t = BatchTagAt(merged, tagsArray, i);
+                    if (!t) continue;
                     Core::TagValue tv;
-                    tv.tagName = tags[i].name;
+                    tv.tagName = t->name;
                     tv.deviceId = merged.deviceId;
                     tv.quality = Core::QualityCode::Bad;
                     tv.lastError = result.error();
@@ -234,8 +259,10 @@ void TagReader::ReadBatch(const MergedRequest& merged,
 
             // 6. 为每个 tag 解析响应
             Core::ByteView response(result.value());
-            for (size_t i = 0; i < merged.tagIndices.size() && i < tags.size(); ++i) {
-                const auto& tag = tags[i];
+            for (size_t i = 0; i < merged.tagIndices.size(); ++i) {
+                const Core::TagDefinition* tp = BatchTagAt(merged, tagsArray, i);
+                if (!tp) continue;
+                const Core::TagDefinition& tag = *tp;
 
                 // 调整 dataStartIndex: 批量响应中该 tag 的字节偏移.
                                 //   字节地址差 = tag.StartAddress (协议 JSON derivedLength 派生前已是字节)
@@ -247,8 +274,9 @@ void TagReader::ReadBatch(const MergedRequest& merged,
                 int offset = static_cast<int>(tagAddr - merged.startByteAddress);
 
                 // 创建调整后的解析配置
-                Core::ResponseParserConfig adjustedConfig = op.responseParser;
-                adjustedConfig.dataStartIndex = op.responseParser.dataStartIndex + offset;
+                Core::ResponseParserConfig adjustedConfig = op->responseParser;
+                adjustedConfig.dataStartIndex =
+                    op->responseParser.dataStartIndex + offset;
 
                 auto parseResult = _responseParser.Parse(
                     response, adjustedConfig, tag, tagOrders[i]);
@@ -275,7 +303,7 @@ void TagReader::ReadBatch(const MergedRequest& merged,
 // ── 单寄存器写 (/write) ──
 
 void TagReader::WriteOnce(const Core::TagDefinition& tag,
-                          Core::ProtocolConfig protocol,
+                          std::shared_ptr<const Core::ProtocolConfig> protocol,
                           const std::string& writeOperation,
                           std::uint32_t value,
                           const std::string& valueVariable,
@@ -298,16 +326,18 @@ void TagReader::WriteOnce(const Core::TagDefinition& tag,
     }
 
     // 0. 查找写操作配置
-    auto opIt = protocol.operations.find(writeOperation);
-    if (opIt == protocol.operations.end()) {
+    auto opIt = protocol->operations.find(writeOperation);
+    if (opIt == protocol->operations.end()) {
         writeSlot.store(false);  // 失败路径释放在途位
         handler(Core::Unexpected(Core::Error::Code::ConfigError,
             "写操作未找到: " + writeOperation
-                + " (protocol: " + protocol.protocolName + ")"));
+                + " (protocol: " + protocol->protocolName + ")"));
         return;
     }
-    // 按值持有 — 回调异步执行, 不能引用局部 opIt
-    const Core::OperationConfig op = opIt->second;
+    // op 零拷贝 — 别名 shared_ptr 指向协议快照内成员 (回调异步执行期间
+    // 与协议快照共享所有权, 不悬垂)
+    const std::shared_ptr<const Core::OperationConfig> op(protocol,
+                                                          &opIt->second);
 
     // 2. 变量表 = 协议 defaultVariables + op.inputs.static + tag.variables + StartByteAddress + {valueVariable}
         //    协议 static 变量为基, 标签级 variables 覆盖同名键
@@ -317,8 +347,8 @@ void TagReader::WriteOnce(const Core::TagDefinition& tag,
     //           寄存器号) 由下方 InjectDerivedLengthVariables 按协议 JSON outputs 派生.
     std::unordered_map<std::string, uint32_t> variables =
         Engine::RequestBuilder::MergeVariables(
-            Engine::RequestBuilder::CollectStaticVariables(protocol),
-            OpStaticVariables(op),
+            Engine::RequestBuilder::CollectStaticVariables(*protocol),
+            OpStaticVariables(*op),
             tag.variables);
     variables[Core::StartByteAddressVariableName()] = TagGrouper::GetStartAddress(tag);
     variables[valueVariable.empty() ? Core::kDefaultWriteValueVariable : valueVariable] = value;
@@ -332,16 +362,17 @@ void TagReader::WriteOnce(const Core::TagDefinition& tag,
     //   标签显式提供的同名变量保持优先 (Inject 内部已实现).
     {
         const Engine::TemplateLayout layout =
-            Engine::RequestBuilder::BuildTemplateLayout(op.requestTemplate);
+            Engine::RequestBuilder::BuildTemplateLayout(op->requestTemplate);
         Engine::RequestBuilder::InjectDerivedLengthVariables(
-            variables, protocol.outputs, op.outputs, /*totalBytes=*/0, layout);
+            variables, protocol->outputs, op->outputs, /*totalBytes=*/0, layout);
     }
 
     // 3. 构建请求字节 (同步; 失败即快速返回)
         //    同步协议 autoCompute 规则 (空 = 不动)
         //    同时合并 op.inputs 中 source=auto 的覆盖项
-    SyncAutoComputeRules(_autoProvider, protocol, op);
-    auto buildResult = _requestBuilder.Build(op, variables, protocol.varAliasMap, _autoProvider);
+    SyncAutoComputeRules(_autoProvider, *protocol, *op);
+    auto buildResult = _requestBuilder.Build(*op, variables,
+                                             protocol->varAliasMap, _autoProvider);
     if (!buildResult.has_value()) {
         writeSlot.store(false);  // 失败路径释放在途位
         handler(Core::VoidExpected(Core::UnexpectedType{buildResult.error()}));
@@ -354,7 +385,7 @@ void TagReader::WriteOnce(const Core::TagDefinition& tag,
     //    P1 C (ADR-0011 §3.1): 单一 callback 路径 (成功/失败/超时 终态)
     //    释放在途位. wrapped 是 SendReceive 终态的**唯一**出口; 内部
     //    read-back 子链也走 wrapped 触发释放.
-    auto framing = std::make_shared<Core::FramingConfig>(protocol.framing);
+    auto framing = std::make_shared<Core::FramingConfig>(protocol->framing);
     auto requestShared = std::make_shared<Core::Bytes>(std::move(buildResult.value()));
     auto releaseSlot = [&writeSlot](Core::VoidExpected r) {
         writeSlot.store(false);
@@ -376,9 +407,9 @@ void TagReader::WriteOnce(const Core::TagDefinition& tag,
             // 写应答只校验 validCondition (echo 帧), 不解析数据区
             Core::ByteView response(result.value());
             if (!Engine::ResponseParser::CheckCondition(
-                    response, op.responseParser.validCondition)) {
+                    response, op->responseParser.validCondition)) {
                 writeRelease(Core::Unexpected(Core::Error::Code::WriteFailed,
-                    "写应答校验失败: " + op.responseParser.validCondition));
+                    "写应答校验失败: " + op->responseParser.validCondition));
                 return;
             }
                         // read-back: 读 op/期望字节由调用方组装,
@@ -388,7 +419,8 @@ void TagReader::WriteOnce(const Core::TagDefinition& tag,
                 writeRelease(Core::VoidExpected());
                 return;
             }
-            RunReadBack(channel, framing, requestTimeoutMs, backCheck, protocol.varAliasMap, writeRelease);
+            RunReadBack(channel, framing, requestTimeoutMs, backCheck,
+                        protocol->varAliasMap, writeRelease);
         });
 }
 
@@ -397,7 +429,7 @@ void TagReader::WriteOnce(const Core::TagDefinition& tag,
 // variableBytesHex 表中的 hex 字符串解析为字节流, 由 {Name:raw} 占位符
 // 直插到请求帧中 (如 Modbus FC16 的数据区、IEC104 ASDU 等变长载荷)。
 void TagReader::WriteBytes(const Core::TagDefinition& tag,
-                           Core::ProtocolConfig protocol,
+                           std::shared_ptr<const Core::ProtocolConfig> protocol,
                            const std::string& writeOperation,
                            const std::unordered_map<std::string, std::string>& variableBytesHex,
                            const std::shared_ptr<const WriteBackCheck>& backCheck,
@@ -416,16 +448,17 @@ void TagReader::WriteBytes(const Core::TagDefinition& tag,
     }
 
     // 0. 查找写操作配置
-    auto opIt = protocol.operations.find(writeOperation);
-    if (opIt == protocol.operations.end()) {
+    auto opIt = protocol->operations.find(writeOperation);
+    if (opIt == protocol->operations.end()) {
         writeSlot.store(false);
         handler(Core::Unexpected(Core::Error::Code::ConfigError,
             "写操作未找到: " + writeOperation
-                + " (protocol: " + protocol.protocolName + ")"));
+                + " (protocol: " + protocol->protocolName + ")"));
         return;
     }
-    // 按值持有 — 回调异步执行, 不能引用局部 opIt
-    const Core::OperationConfig op = opIt->second;
+    // op 零拷贝 — 别名 shared_ptr 指向协议快照内成员 (同 WriteOnce)
+    const std::shared_ptr<const Core::OperationConfig> op(protocol,
+                                                          &opIt->second);
 
     // 2. 标量变量表 = 协议 defaultVariables + op.inputs.static + tag.variables + StartByteAddress;
     //    变长变量表直接采用调用方注入
@@ -434,8 +467,8 @@ void TagReader::WriteBytes(const Core::TagDefinition& tag,
         //    注入跨协议字节单位 StartByteAddress (协议族地址由 outputs 派生, 见下方 Inject).
     std::unordered_map<std::string, uint32_t> variables =
         Engine::RequestBuilder::MergeVariables(
-            Engine::RequestBuilder::CollectStaticVariables(protocol),
-            OpStaticVariables(op),
+            Engine::RequestBuilder::CollectStaticVariables(*protocol),
+            OpStaticVariables(*op),
             tag.variables);
     variables[Core::StartByteAddressVariableName()] = TagGrouper::GetStartAddress(tag);
         // 位偏移为标签一等字段 — 注入 expr 作用域 (供位寻址派生, 如 Modbus FC05/FC15)
@@ -453,18 +486,19 @@ void TagReader::WriteBytes(const Core::TagDefinition& tag,
             totalBytes += HexByteCount(kv.second);
         }
         const Engine::TemplateLayout layout =
-            Engine::RequestBuilder::BuildTemplateLayout(op.requestTemplate);
+            Engine::RequestBuilder::BuildTemplateLayout(op->requestTemplate);
         Engine::RequestBuilder::InjectDerivedLengthVariables(
-            variables, protocol.outputs, op.outputs, totalBytes, layout);
+            variables, protocol->outputs, op->outputs, totalBytes, layout);
     }
 
     // 3. 构建请求字节 (P1 A 路径: BuildBytes)
         //    同步协议 autoCompute 规则 (空 = 不动)
         //    同时合并 op.inputs 中 source=auto 的覆盖项
-    SyncAutoComputeRules(_autoProvider, protocol, op);
-    ResolveAutoIncrementParameters(variables, protocol.inputs, op.inputs, _autoProvider);
+    SyncAutoComputeRules(_autoProvider, *protocol, *op);
+    ResolveAutoIncrementParameters(variables, protocol->inputs, op->inputs,
+                                   _autoProvider);
     auto buildResult = _requestBuilder.BuildBytes(
-        op, variables, variableBytesHex, protocol.varAliasMap, _autoProvider);
+        *op, variables, variableBytesHex, protocol->varAliasMap, _autoProvider);
     if (!buildResult.has_value()) {
         writeSlot.store(false);
         handler(Core::VoidExpected(Core::UnexpectedType{buildResult.error()}));
@@ -473,7 +507,7 @@ void TagReader::WriteBytes(const Core::TagDefinition& tag,
 
     // 4. 异步发送 — tag/op/请求字节均按值或 shared_ptr 保活
     //    P1 C (ADR-0011 §3.1): 单一 callback 路径释放在途位
-    auto framing = std::make_shared<Core::FramingConfig>(protocol.framing);
+    auto framing = std::make_shared<Core::FramingConfig>(protocol->framing);
     auto requestShared = std::make_shared<Core::Bytes>(std::move(buildResult.value()));
     auto releaseSlot = [&writeSlot](Core::VoidExpected r) {
         writeSlot.store(false);
@@ -495,9 +529,9 @@ void TagReader::WriteBytes(const Core::TagDefinition& tag,
             // 写应答只校验 validCondition (echo 帧), 不解析数据区
             Core::ByteView response(result.value());
             if (!Engine::ResponseParser::CheckCondition(
-                    response, op.responseParser.validCondition)) {
+                    response, op->responseParser.validCondition)) {
                 writeRelease(Core::Unexpected(Core::Error::Code::WriteFailed,
-                    "写应答校验失败: " + op.responseParser.validCondition));
+                    "写应答校验失败: " + op->responseParser.validCondition));
                 return;
             }
                         // read-back: 与 WriteOnce 一致 — 读 op/期望
@@ -508,7 +542,8 @@ void TagReader::WriteBytes(const Core::TagDefinition& tag,
                 writeRelease(Core::VoidExpected());
                 return;
             }
-            RunReadBack(channel, framing, requestTimeoutMs, backCheck, protocol.varAliasMap, writeRelease);
+            RunReadBack(channel, framing, requestTimeoutMs, backCheck,
+                        protocol->varAliasMap, writeRelease);
         });
 }
 

@@ -58,7 +58,9 @@ private:
     struct PollGroup {
         int scanRateMs;
         std::uint64_t generation;   // 装配代际 — 热重载后旧代 in-flight 组不得续排
-        std::vector<Core::TagDefinition> allTags;      // 原始标签数组 (tagIndices 引用此数组)
+        // 原始标签数组 — 全部组共享同一份 (tagIndices 引用此数组);
+        // shared_ptr 保证在飞异步链持有旧代标签表快照, 热重载替换不悬垂
+        std::shared_ptr<const std::vector<Core::TagDefinition>> tags;
         std::vector<Gateway::MergedRequest> mergedRequests;
         asio::steady_timer timer;
         bool busy;     // 背压标志
@@ -81,6 +83,10 @@ private:
     std::unordered_map<std::string, int> _deviceTimeoutMap;           // deviceId → requestTimeoutMs
     std::unordered_map<std::string, Core::ResilienceConfig>
         _deviceResilienceMap;    // deviceId → 生效韧性 (设备级覆盖 > 全局 > 默认)
+    // 协议快照缓存 (protocolName → shared_ptr) — 每协议仅首访做一次 lookup+拷贝;
+    // Start() 时清空, 热重载重装配后自然刷新 (在飞批次持旧快照, 快照语义)
+    std::unordered_map<std::string, std::shared_ptr<const Core::ProtocolConfig>>
+        _protocolCache;
     std::vector<std::shared_ptr<PollGroup>> _groups;
 
     /// 调度下一轮定时器
@@ -103,7 +109,7 @@ private:
                         size_t deviceIdx,
                         size_t curIdx,
                         Gateway::TagReader* reader,
-                        std::shared_ptr<Core::ProtocolConfig> protocol,
+                        std::shared_ptr<const Core::ProtocolConfig> protocol,
                         std::shared_ptr<Transport::IChannel> channel,
                         std::shared_ptr<Service::SessionContext> session,
                         std::shared_ptr<std::vector<Core::TagValue>> allResults,
@@ -131,7 +137,8 @@ private:
                     std::shared_ptr<std::vector<Core::TagValue>> results);
 
     /// 通过 deviceId 查找协议配置 (经 _deviceProtocolMap + ProtocolLookup)
-    std::shared_ptr<Core::ProtocolConfig>
+    /// 返回协议快照 (缓存于 _protocolCache, 稳态轮询零拷贝)
+    std::shared_ptr<const Core::ProtocolConfig>
     GetProtocolForDevice(const std::string& deviceId);
 
     /// 生效韧性配置: 设备级覆盖 > 全局 > 内置默认 (struct 仅 6 int, 按值返回)

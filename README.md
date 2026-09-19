@@ -77,6 +77,26 @@ MyProt.App.exe --config configs_write_test
 
 配置 Schema 的唯一事实来源：[docs/Config_Schema.md](docs/Config_Schema.md)。
 
+## 运行原理
+
+系统启动时装载配置，运行期由引擎按模板**解释执行**——全部通信行为由 `configs/*.json` 定义，引擎零协议硬编码（"定义即执行"）：
+
+```mermaid
+flowchart LR
+    ROOT(["MyProt 运行原理"]) --> A["① 配置装载<br/>三类 JSON → 深度校验<br/>Fail-Fast · 热重载"]
+    ROOT --> B["② 核心引擎 Gateway<br/>连接池 · 重连 · 熔断<br/>TagGrouper 请求合并"]
+    ROOT --> C["③ 请求构建<br/>模板渲染 Xn/XnLE<br/>自增 ID / 长度派生 / CRC"]
+    ROOT --> D["④ 响应解析<br/>validCondition 表达式校验<br/>字节序四模式 · converters"]
+    ROOT --> E["⑤ 轮询数据流<br/>分组周期轮询<br/>最新值缓存 → /latest · SSE"]
+    ROOT --> F["⑥ 线程模型<br/>单 io_context 串行执行<br/>WebApi 独立线程 io.post 桥接"]
+    ROOT --> G["⑦ 管理面 WebApi<br/>REST 热更新 · token 鉴权<br/>限流 · Vue3 WebUI"]
+    ROOT --> H["⑧ 仿真与门禁<br/>配置驱动仿真从站<br/>E2E 297 断言 · ci.ps1"]
+    classDef root fill:#1B4DDB,stroke:#1B4DDB,color:#ffffff;
+    class ROOT root
+```
+
+> 线程模型与数据流全景细节见 [docs/architecture/03_Threading_and_DataFlow.md](docs/architecture/03_Threading_and_DataFlow.md)；配置文法唯一事实来源见 [docs/Config_Schema.md](docs/Config_Schema.md)。
+
 ---
 
 ## 已支持的协议

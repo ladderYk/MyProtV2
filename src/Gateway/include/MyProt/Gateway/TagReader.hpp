@@ -56,10 +56,11 @@ public:
     TagReader();
 
     /// 批量读取合并后的标签组
-    /// 构建一次请求 → 发送 → 按各 tag 拆分响应
+    /// 构建一次请求 → 发送 → 按 merged.tagIndices 从共享标签表拆分响应。
+    /// tagsArray/protocol 均为共享快照 — 异步回调经 shared_ptr 保活, 零拷贝。
     void ReadBatch(const MergedRequest& merged,
-                   const std::vector<Core::TagDefinition>& tags,
-                   const Core::ProtocolConfig& protocol,
+                   std::shared_ptr<const std::vector<Core::TagDefinition>> tagsArray,
+                   std::shared_ptr<const Core::ProtocolConfig> protocol,
                    Transport::IChannel& channel,
                    int requestTimeoutMs,
                    BatchHandler handler);
@@ -76,7 +77,7 @@ public:
     /// 空指针 = 不做读回。
     // 注: 原 P1 D busStrand 参数于 2026-08-29 撤回,见 ADR-0011 §3.2
     void WriteOnce(const Core::TagDefinition& tag,
-                   Core::ProtocolConfig protocol,
+                   std::shared_ptr<const Core::ProtocolConfig> protocol,
                    const std::string& writeOperation,
                    std::uint32_t value,
                    const std::string& valueVariable,
@@ -93,7 +94,7 @@ public:
         /// backCheck 语义同 WriteOnce (读回不复用写 op 模板 —
         /// 由调用方显式给读 op + 期望字节 — 复用写模板会发出错误请求)。
     void WriteBytes(const Core::TagDefinition& tag,
-                    Core::ProtocolConfig protocol,
+                    std::shared_ptr<const Core::ProtocolConfig> protocol,
                     const std::string& writeOperation,
                     const std::unordered_map<std::string, std::string>& variableBytesHex,
                     const std::shared_ptr<const WriteBackCheck>& backCheck,

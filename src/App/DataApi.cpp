@@ -430,12 +430,13 @@ namespace MyProt { namespace App {
                     "设备未找到: " + tag->deviceId));
                 return;
             }
-            // 3. 按值拷贝协议 — GOC/WriteOnce 异步期间热重载可能替换 *protosPtr
+            // 3. 协议快照 (shared_ptr<const>) — GOC/WriteOnce/WriteBytes 异步期间
+            //    热重载可能替换 *protosPtr, 按值拷贝一次后经 shared_ptr 保活
             bool foundProto = false;
-            MyProt::Core::ProtocolConfig proto;
+            MyProt::Core::ProtocolConfig protoCopy;
             for (size_t i = 0; i < protosPtr->size(); ++i) {
                 if ((*protosPtr)[i].protocolName == protoName) {
-                    proto = (*protosPtr)[i];
+                    protoCopy = (*protosPtr)[i];
                     foundProto = true;
                     break;
                 }
@@ -446,6 +447,9 @@ namespace MyProt { namespace App {
                     "协议未找到: " + protoName));
                 return;
             }
+            const std::shared_ptr<const MyProt::Core::ProtocolConfig> proto =
+                std::make_shared<const MyProt::Core::ProtocolConfig>(
+                    std::move(protoCopy));
             // 4. 获取通道 (已连接 fast-path 同步回调; 首次异步连接)
             //    tag 按值拷贝: GOC 异步连接期间热重载可能替换 *tagsPtr,
             //    指针将指向被换出的旧向量元素 (悬垂)。
@@ -462,7 +466,7 @@ namespace MyProt { namespace App {
             if (hasTagWrite) {
                 writeOpName = isWriteTag ? tagCopy.operation
                                          : tagCopy.writeOperation;
-                if (proto.operations.find(writeOpName) == proto.operations.end()) {
+                if (proto->operations.find(writeOpName) == proto->operations.end()) {
                     promise->set_value(MyProt::Core::Unexpected(
                         MyProt::Core::Error::Code::ConfigError,
                         "写操作未找到: " + writeOpName
@@ -515,7 +519,7 @@ namespace MyProt { namespace App {
                     if (readBack) {
                         MyProt::Gateway::WriteBackCheck check;
                         std::string cbErr;
-                        if (!BuildWriteBackCheck(*tagsPtr, proto, tagCopy,
+                        if (!BuildWriteBackCheck(*tagsPtr, *proto, tagCopy,
                                 value, bytesCopy, check, cbErr)) {
                             Core::metrics::CounterInc(
                                 Core::metrics::kWriteFailuresTotal,
@@ -542,10 +546,10 @@ namespace MyProt { namespace App {
                     if (hasTagWrite) {
                         std::unordered_map<std::string,
                             MyProt::Core::OperationConfig>::const_iterator wOpIt =
-                            proto.operations.find(writeOpName);
-                        if (wOpIt != proto.operations.end()) {
+                            proto->operations.find(writeOpName);
+                        if (wOpIt != proto->operations.end()) {
                             opNeedsBytePath = OpNeedsBytePath(
-                                proto, wOpIt->second, tagCopy.writeVariable);
+                                *proto, wOpIt->second, tagCopy.writeVariable);
                         }
                     }
                     if (!bytesCopy.empty()
@@ -557,7 +561,7 @@ namespace MyProt { namespace App {
                             std::string encErr;
                             if (!EncodeFinalTypeToBytes(tagCopy.finalType, value,
                                 MyProt::Engine::ResponseParser::ResolveByteOrder(
-                                    proto, tagCopy.byteOrder),
+                                    *proto, tagCopy.byteOrder),
                                 payload, encErr)) {
                                 Core::metrics::CounterInc(
                                     Core::metrics::kWriteFailuresTotal,
@@ -589,7 +593,7 @@ namespace MyProt { namespace App {
                                 MyProt::Core::Error::Code::ConfigError,
                                 "标签 " + tagCopy.name
                                     + " 未声明 writeBytesOperation, 变长写不可用 (protocol: "
-                                    + proto.protocolName + "); 请在标签上声明"
+                                    + proto->protocolName + "); 请在标签上声明"
                                     + " writeBytesOperation (标签级写能力)"));
                             return;
                         }
@@ -639,7 +643,7 @@ namespace MyProt { namespace App {
                         MyProt::Core::Error::Code::ConfigError,
                         "标签 " + tagCopy.name
                             + " 未声明 writeOperation, 标量写不可用 (protocol: "
-                            + proto.protocolName + "); 请在标签上声明"
+                            + proto->protocolName + "); 请在标签上声明"
                             + " writeOperation (读写标签) 或 writeBytesOperation"
                             + ", 或配置写标签 (direction=write)"));
                 });
