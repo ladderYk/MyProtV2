@@ -86,6 +86,7 @@ Single source of truth for the config schema: [docs/en/Config_Schema.md](docs/en
 At startup the system loads its configuration; at runtime the engine **interprets** templates — every communication behavior comes from `configs/*.json`, with zero protocol hardcoding in the engine ("definition is execution"):
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryTextColor': '#1B1B1B', 'lineColor': '#5B6B8C'}}}%%
 flowchart LR
     ROOT(["MyProt How It Works"]) --> A["1. Config Loading<br/>3 JSON kinds → deep validation<br/>Fail-Fast · hot reload"]
     ROOT --> B["2. Gateway Engine<br/>connection pool · reconnect · breaker<br/>TagGrouper request merging"]
@@ -95,6 +96,8 @@ flowchart LR
     ROOT --> F["6. Threading Model<br/>single io_context, serialized handlers<br/>WebApi thread via io.post"]
     ROOT --> G["7. Management Plane<br/>REST hot-reload · token auth<br/>rate limiting · Vue3 WebUI"]
     ROOT --> H["8. Simulation & Gates<br/>config-driven protocol simulator<br/>297 E2E assertions · ci.ps1"]
+    classDef step fill:#F5F7FB,stroke:#5B6B8C,color:#1B1B1B;
+    class A,B,C,D,E,F,G,H step;
     classDef root fill:#1B4DDB,stroke:#1B4DDB,color:#ffffff;
     class ROOT root
 ```

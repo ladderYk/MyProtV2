@@ -86,6 +86,7 @@ MyProt.App.exe --config configs_write_test
 系统启动时装载配置，运行期由引擎按模板**解释执行**——全部通信行为由 `configs/*.json` 定义，引擎零协议硬编码（"定义即执行"）：
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryTextColor': '#1B1B1B', 'lineColor': '#5B6B8C'}}}%%
 flowchart LR
     ROOT(["MyProt 运行原理"]) --> A["① 配置装载<br/>三类 JSON → 深度校验<br/>Fail-Fast · 热重载"]
     ROOT --> B["② 核心引擎 Gateway<br/>连接池 · 重连 · 熔断<br/>TagGrouper 请求合并"]
@@ -95,6 +96,8 @@ flowchart LR
     ROOT --> F["⑥ 线程模型<br/>单 io_context 串行执行<br/>WebApi 独立线程 io.post 桥接"]
     ROOT --> G["⑦ 管理面 WebApi<br/>REST 热更新 · token 鉴权<br/>限流 · Vue3 WebUI"]
     ROOT --> H["⑧ 仿真与门禁<br/>配置驱动仿真从站<br/>E2E 297 断言 · ci.ps1"]
+    classDef step fill:#F5F7FB,stroke:#5B6B8C,color:#1B1B1B;
+    class A,B,C,D,E,F,G,H step;
     classDef root fill:#1B4DDB,stroke:#1B4DDB,color:#ffffff;
     class ROOT root
 ```
