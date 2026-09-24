@@ -1,7 +1,7 @@
 // src/Gateway/include/MyProt/Gateway/TagReader.hpp
-// 标签读取器 — Gateway 层唯一管线持有者 (modules/05_Gateway.md §5.3)
-// 单读/批量读/写共用同一套 RequestBuilder → IChannel::SendReceive →
-// ResponseParser 装配 (Engine 模块提供无状态原语)。
+// Tag reader - the sole pipeline holder in the Gateway layer (modules/05_Gateway.md §5.3)
+// Single-read / batch-read / write share the same RequestBuilder -> IChannel::SendReceive ->
+// ResponseParser assembly (the Engine module provides stateless primitives).
 
 #pragma once
 #include <asio.hpp>
@@ -22,32 +22,32 @@
 
 namespace MyProt { namespace Gateway {
 
-/// 写后读回校验参数 — 由调用方 (App 装配层) 解析组装:
-///   readOp/readVars  构建读回请求的操作模板与变量表 (含地址/长度语义)
-///   expectedBytes    期望数据字节 (标量按 finalType 编码; 变长 = 写入字节)
-///   tagLabel         诊断上下文 (Error.context)
-/// 数据区起点取 readOp.responseParser.dataStartIndex (≤0 视为配置缺失)。
+/// Write-then-read-back verification parameters - parsed and assembled by the caller (the App assembly layer):
+///   readOp/readVars  the operation template and variable table for building the read-back request (incl. address/length semantics)
+///   expectedBytes    the expected data bytes (scalars encoded per finalType; variable-length = the written bytes)
+///   tagLabel         diagnostic context (Error.context)
+/// The data-region start is readOp.responseParser.dataStartIndex (<=0 is treated as a missing config).
 struct WriteBackCheck {
     Core::OperationConfig readOp;
     std::unordered_map<std::string, std::uint32_t> readVars;
     std::vector<std::uint8_t> expectedBytes;
     std::string tagLabel;
-        // 读回 Build 同步 autoCompute 规则用 (空 = 不动).
-    //   RuntimeGlue::BuildWriteBackCheck 快照协议 autoCompute 段 (经 MergeOpAutoComputeJson) 传入.
-        //   该字段已合并操作 inputs 中 source=auto 的覆盖项 (BuildWriteBackCheck 在
-    //   装入 readOp 之后调用 MergeOpAutoComputeJson 处理, 不再只是 protocol 快照).
+        // Used to sync autoCompute rules for the read-back Build (empty = no-op).
+    //   RuntimeGlue::BuildWriteBackCheck passes a snapshot of the protocol autoCompute section (via MergeOpAutoComputeJson).
+        //   This field already merges the source=auto overrides from the operation inputs (BuildWriteBackCheck
+    //   calls MergeOpAutoComputeJson after loading readOp, so it is no longer just a protocol snapshot).
     std::string autoComputeJson;
 };
 
-/// 协议级 + op 级 autoCompute 合并 (公开给 App 层 RuntimeGlue 用).
-///   协议级由 RequestBuilder::CollectAutoComputeJson 重建 (运行时从 inputs 提取,
-///   排除了 outputs 派生输出 — 那由 WriteBytes 阶段特判注入).
-///   op 级覆盖从 op.inputs 中 source=auto 的条目累加 (字段级覆盖同名变量).
-///   协议级同名键被 op 级覆盖 (后键覆盖前键).
+/// Protocol-level + op-level autoCompute merge (exposed to the App-layer RuntimeGlue).
+///   The protocol level is rebuilt by RequestBuilder::CollectAutoComputeJson (extracted from inputs at runtime,
+///   excluding outputs derived outputs - those are special-cased and injected at the WriteBytes stage).
+///   The op-level override accumulates from op.inputs entries with source=auto (field-level override of same-named variables).
+///   A protocol-level same-named key is overridden by the op-level one (later key overrides earlier key).
 std::string MergeOpAutoComputeJson(const Core::ProtocolConfig& protocol,
                                    const Core::OperationConfig& op);
 
-/// 标签读取器 — 单读 / 批量读 / 单写
+/// Tag reader - single read / batch read / single write
 class TagReader {
 public:
     using BatchHandler = std::function<void(std::vector<Core::TagValue>)>;
@@ -55,9 +55,9 @@ public:
 
     TagReader();
 
-    /// 批量读取合并后的标签组
-    /// 构建一次请求 → 发送 → 按 merged.tagIndices 从共享标签表拆分响应。
-    /// tagsArray/protocol 均为共享快照 — 异步回调经 shared_ptr 保活, 零拷贝。
+    /// Batch-read a merged tag group
+    /// Build one request -> send -> split the response from the shared tag table per merged.tagIndices.
+    /// tagsArray/protocol are both shared snapshots - the async callback is kept alive via shared_ptr, zero-copy.
     void ReadBatch(const MergedRequest& merged,
                    std::shared_ptr<const std::vector<Core::TagDefinition>> tagsArray,
                    std::shared_ptr<const Core::ProtocolConfig> protocol,
@@ -65,17 +65,16 @@ public:
                    int requestTimeoutMs,
                    BatchHandler handler);
 
-        /// 单寄存器写 (/write): 按协议写操作模板构建请求 → 发送 →
-    /// 校验 echo (validCondition), 不解析数据区。
-    /// 写操作名约定 "WriteSingleRegister"; 变量表 = tag.variables +
-        /// StartAddress + {valueVariable}=value (变量名由调用方指定,
-    /// 写标签用 tag.writeVariable, legacy 固定 "WriteValue")。
-        /// backCheck 非空: 写 echo 校验通过后立即按
-    /// backCheck->readOp/readVars 构建读请求, 以
-    /// readOp.responseParser.dataStartIndex 为数据区起点,
-    /// 逐字节比较 expectedBytes; 不一致回调 ReadBackMismatch。
-    /// 空指针 = 不做读回。
-    // 注: 原 P1 D busStrand 参数于 2026-08-29 撤回,见 ADR-0011 §3.2
+        /// Single-register write (/write): build the request per the protocol write-operation template -> send ->
+    /// verify the echo (validCondition), without parsing the data region.
+    /// Write-operation name convention "WriteSingleRegister"; variable table = tag.variables +
+        /// StartAddress + {valueVariable}=value (the variable name is given by the caller;
+    /// write tags use tag.writeVariable, legacy fixed "WriteValue").
+        /// backCheck non-null: right after the write-echo check passes, build a read request per
+    /// backCheck->readOp/readVars, using readOp.responseParser.dataStartIndex as the data-region start,
+    /// comparing expectedBytes byte by byte; on mismatch, call back ReadBackMismatch.
+    /// A null pointer = do not read back.
+    // Note: the original P1 D busStrand parameter was withdrawn on 2026-08-29, see ADR-0011 §3.2
     void WriteOnce(const Core::TagDefinition& tag,
                    std::shared_ptr<const Core::ProtocolConfig> protocol,
                    const std::string& writeOperation,
@@ -86,13 +85,13 @@ public:
                    int requestTimeoutMs,
                    WriteHandler handler);
 
-    /// 变长字节写 (P1 A, ADR-0007 §3 销账项 /write bytes):
-    /// 复用与 WriteOnce 同一管线; 额外接受 hex 字符串表注入到
-    /// {Name:raw} 占位符 (如 Modbus FC16 多寄存器写、S7 ANY 指针)。
-    /// 写操作名由调用方指定 (如 "WriteMultipleRegisters");
-    /// 变量表 = tag.variables + StartAddress + variableBytesHex 内容。
-        /// backCheck 语义同 WriteOnce (读回不复用写 op 模板 —
-        /// 由调用方显式给读 op + 期望字节 — 复用写模板会发出错误请求)。
+    /// Variable-length byte write (P1 A, ADR-0007 §3 written-off item /write bytes):
+    /// reuses the same pipeline as WriteOnce; additionally accepts a hex-string table injected into
+    /// {Name:raw} placeholders (e.g. Modbus FC16 multi-register write, S7 ANY pointer).
+    /// The write-operation name is given by the caller (e.g. "WriteMultipleRegisters");
+    /// variable table = tag.variables + StartAddress + the contents of variableBytesHex.
+        /// backCheck semantics are the same as WriteOnce (the read-back does not reuse the write-op template -
+        /// the caller explicitly supplies the read op + expected bytes; reusing the write template would emit a wrong request).
     void WriteBytes(const Core::TagDefinition& tag,
                     std::shared_ptr<const Core::ProtocolConfig> protocol,
                     const std::string& writeOperation,
@@ -103,19 +102,19 @@ public:
                     WriteHandler handler);
 
 private:
-        /// 写后读回统一执行体: 构建 check->readOp 读请求 → 发送 →
-    /// 以 readOp.responseParser.dataStartIndex 为数据区起点,
-    /// 逐字节比较 check->expectedBytes。终态恰好回调 done 一次。
+        /// Unified write-then-read-back executor: build the check->readOp read request -> send ->
+    /// using readOp.responseParser.dataStartIndex as the data-region start, compare check->expectedBytes byte by byte.
+    /// The terminal state calls back done exactly once.
     void RunReadBack(Transport::IChannel& channel,
                      const std::shared_ptr<const Core::FramingConfig>& framing,
                      int requestTimeoutMs,
                      const std::shared_ptr<const WriteBackCheck>& check,
                      const std::unordered_map<std::string, std::string>& varAliasMap,
                      const WriteHandler& done);
-    /// P1 C (ADR-0011): per-device 写互斥位.
-    /// 同一 device 上写与写互斥; 读不参与. 入口抢位; 单一 callback
-    /// 路径 (成功/失败/超时 终态) 释放. 不依赖 io 线程模型,未来
-    /// 切多 io_context 线程 run 也生效.
+    /// P1 C (ADR-0011): per-device write mutex bit.
+    /// On the same device, writes are mutually exclusive with writes; reads do not participate. Grab the slot on entry;
+    /// a single callback path (success/failure/timeout terminal states) releases it. Independent of the io thread model,
+    /// still effective if switched to multiple io_context run threads in the future.
     std::unordered_map<std::string, std::atomic<bool>> _writingInFlight;
 
     Engine::RequestBuilder _requestBuilder;

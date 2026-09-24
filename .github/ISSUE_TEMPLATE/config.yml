@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "📖 Docs / 文档"
+    url: https://github.com/ladderYk/MyProt/tree/main/docs
+    about: "Read before opening an issue / 提问前先查阅文档（Config_Schema, architecture, protocols）"
+  - name: "💬 Questions / 使用咨询"
+    url: https://github.com/ladderYk/MyProt/discussions
+    about: "Usage questions go to Discussions / 使用类问题请到 Discussions 讨论"

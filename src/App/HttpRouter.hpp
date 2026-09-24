@@ -1,8 +1,8 @@
-// src/App/HttpRouter.hpp — WebApi 扩展路由注册表 (header-only)
-// 新增接口 = 一行 Add(prefix, handler)。分发按注册顺序前缀匹配:
-//   - 先注册者优先 ("​/api/data/write" 须先于 "/api/data")
-//   - 方法不匹配 (405) 由各 handler 自行判定 — 与既有行为一致
-//   - 无命中返回统一 404 {"error":"not found"}
+// src/App/HttpRouter.hpp - WebApi extension-route registry (header-only)
+// Adding an interface = one line Add(prefix, handler). Dispatch matches prefixes in registration order:
+//   - earlier-registered wins ("/api/data/write" must be registered before "/api/data")
+//   - method mismatch (405) is decided by each handler itself - consistent with existing behavior
+//   - no hit returns a unified 404 {"error":"not found"}
 #ifndef MYPROT_APP_HTTPROUTER_HPP
 #define MYPROT_APP_HTTPROUTER_HPP
 
@@ -22,7 +22,7 @@ public:
     typedef std::function<HttpResponse(const AppContext&, const HttpRequest&)>
         RouteHandler;
 
-    /// 注册路由 (前缀匹配, 先注册者优先)
+    /// Register a route (prefix match, earlier-registered wins)
     void Add(const std::string& pathPrefix, RouteHandler handler) {
         Route r;
         r.prefix = pathPrefix;
@@ -30,7 +30,7 @@ public:
         _routes.push_back(r);
     }
 
-    /// 按注册顺序分发; 无命中 → 404
+    /// Dispatch in registration order; no hit -> 404
     HttpResponse Dispatch(const AppContext& ctx, const HttpRequest& req) const {
         for (std::size_t i = 0; i < _routes.size(); ++i) {
             if (req.path.rfind(_routes[i].prefix, 0) == 0) {

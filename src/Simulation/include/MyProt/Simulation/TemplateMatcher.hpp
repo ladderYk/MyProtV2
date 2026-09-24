@@ -1,18 +1,18 @@
 // src/Simulation/include/MyProt/Simulation/TemplateMatcher.hpp
-// 请求模板匹配器 — requestTemplate 的反向复用 (配置驱动仿真 L2 层)
+// Request-template matcher - reverse reuse of requestTemplate (config-driven simulation L2 layer)
 //
-// 客户端用 requestTemplate 构造请求; 仿真器把同一模板编译为"字节形状模式",
-// 对收到的完整请求帧做反向识别: 得到操作名 + 从占位符位置提取变量值。
+// The client builds requests with requestTemplate; the simulator compiles the same template into a "byte-shape pattern",
+// recognizing a received complete request frame in reverse: yielding the operation name + extracting variable values at placeholder positions.
 //
-// 文法与 RequestBuilder 一致 (Config_Schema §3.2 实际实现子集):
-//   - 十六进制字面量行: 偶数长度 hex 字符串, 每 2 字符 1 字节 (忽略空格)
-//   - 占位符 {Name:Xn}      → 定宽变量段, 匹配时提取大端数值
-//   - 占位符 {Name:auto:Xn} → 定宽通配段 (自增字段如 TransactionId), 跳过内容
-//   - 占位符 {Name:raw}     → 变长尾段 (仅允许作为模板最后一行): 匹配时消耗
-//     帧内剩余全部字节, 内容不捕获; 写场景数据提取由 server.json dataOffset
-//     承担。变长写 (如 Modbus FC16 {WriteValue:raw}) 由此可被仿真器反向识别。
-//   Xn: hex 字符宽度, 偶数 2..16 → n/2 字节。
-//   其余格式 (校验和函数占位符等) 编译期跳过该操作 — 与构建器未实现的文法保持一致。
+// The grammar matches RequestBuilder (Config_Schema §3.2, the actually-implemented subset):
+//   - hex-literal line: an even-length hex string, every 2 chars = 1 byte (spaces ignored)
+//   - placeholder {Name:Xn}      -> fixed-width variable segment, extracts a big-endian value on match
+//   - placeholder {Name:auto:Xn} -> fixed-width wildcard segment (auto-increment fields like TransactionId), content skipped
+//   - placeholder {Name:raw}     -> variable-length tail segment (only allowed as the template's last line): on match it
+//     consumes all remaining bytes of the frame, capturing nothing; data extraction for write scenarios is
+//     handled by server.json dataOffset. Variable-length writes (e.g. Modbus FC16 {WriteValue:raw}) can thus be recognized in reverse by the simulator.
+//   Xn: hex-digit width, even 2..16 -> n/2 bytes.
+//   Other formats (checksum-function placeholders etc.) are skipped at compile time - kept consistent with the grammar the builder does not implement.
 
 #pragma once
 
@@ -26,47 +26,47 @@
 
 namespace MyProt { namespace Simulation {
 
-/// 匹配结果
+/// Match result
 struct TemplateMatch {
     bool matched;
-    std::string operation;                      ///< 命中的操作名
-    std::map<std::string, std::uint32_t> variables; ///< 从占位符位置提取的变量
-    std::size_t frameLength;                    ///< 期望帧长 (字节)
+    std::string operation;                      ///< the matched operation name
+    std::map<std::string, std::uint32_t> variables; ///< variables extracted at placeholder positions
+    std::size_t frameLength;                    ///< expected frame length (bytes)
 
     TemplateMatch() : matched(false), frameLength(0) {}
 };
 
 class TemplateMatcher {
 public:
-    /// protocol 须在生命周期内保持有效 (持有其引用)
+    /// protocol must remain valid for the lifetime (a reference to it is held)
     explicit TemplateMatcher(const Core::ProtocolConfig& protocol);
 
-    /// 编译全部操作模板; 协议内容变更后需重新调用
+    /// Compile all operation templates; must be called again after the protocol content changes
     void Compile();
 
-    /// 对完整请求帧做匹配; 多操作命中时按协议声明序返回首个。
-    /// frame 须是已切帧的完整请求 (TCP 由 FrameParser 切帧)。
+    /// Match against a complete request frame; when multiple operations hit, return the first in protocol declaration order.
+    /// frame must be a framing-split complete request (TCP split by FrameParser).
     TemplateMatch Match(const Core::ByteView& frame) const;
 
-    /// 编译期歧义报告 (上次 Compile() 的结果):
-    /// 总长相同且逐字节约束兼容的操作对 — 存在可同时命中两者的帧,
-    /// Match 只返回编译序首个, 实际路由可能违背配置意图 (仅告警不阻断)
+    /// Compile-time ambiguity report (the result of the last Compile()):
+    /// operation pairs with the same total length and byte-wise-compatible constraints - a frame can hit both,
+    /// Match returns only the first in compile order, so actual routing may defy config intent (warning only, does not block)
     const std::vector<std::string>& Ambiguities() const { return _ambiguities; }
 
 private:
     struct Segment {
         enum Kind { Literal, Variable, Wildcard, Raw } kind;
-        std::vector<std::uint8_t> literal; ///< Literal: 期望字节序列
-        std::string varName;               ///< Variable: 变量名; Raw: 尾段变量名 (不捕获)
-        int widthBytes;                    ///< Variable/Wildcard: 定宽字节数; Raw 恒 0
+        std::vector<std::uint8_t> literal; ///< Literal: expected byte sequence
+        std::string varName;               ///< Variable: variable name; Raw: tail-segment variable name (not captured)
+        int widthBytes;                    ///< Variable/Wildcard: fixed-width byte count; Raw always 0
         Segment() : kind(Literal), widthBytes(0) {}
     };
     struct CompiledOp {
         std::string name;
         std::vector<Segment> segments;
-        std::size_t totalSize; ///< 定长模式: 模式总字节长 (帧长须精确相等);
-                               ///< 变长尾段模式 (hasTail): 定长前缀最小字节长
-        bool hasTail;          ///< 末段为 {Name:raw} 变长尾段
+        std::size_t totalSize; ///< fixed-length pattern: total pattern byte length (frame length must match exactly);
+                               ///< variable-length-tail pattern (hasTail): the minimum byte length of the fixed prefix
+        bool hasTail;          ///< the last segment is a {Name:raw} variable-length tail
         CompiledOp() : totalSize(0), hasTail(false) {}
     };
 

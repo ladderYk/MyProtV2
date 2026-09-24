@@ -1,5 +1,5 @@
 // src/Transport/include/MyProt/Transport/IFrameParser.hpp
-// 帧解析器接口 — 从字节流中提取完整帧 (C++11, ADR-0010 §4)
+// Frame-parser interface - extracts complete frames from a byte stream (C++11, ADR-0010 §4)
 
 #pragma once
 #include <vector>
@@ -10,37 +10,37 @@
 
 namespace MyProt { namespace Transport {
 
-// 接口签名直接使用 Core 层类型; using 声明使派生类实现无需再限定
+// The interface signature uses Core-layer types directly; the using declarations let derived-class implementations avoid re-qualifying
 using Core::ByteView;
 using Core::Expected;
 using Core::Unexpected;
 using Core::Error;
 
-/// 帧解析结果
+/// Frame-parse result
 struct FrameParseResult {
-    std::vector<uint8_t> frame;      // 完整帧数据
-    size_t consumedBytes;             // 已消耗的字节数
-    bool needMoreData;               // 是否需要更多数据
+    std::vector<uint8_t> frame;      // complete frame data
+    size_t consumedBytes;             // number of bytes consumed
+    bool needMoreData;               // whether more data is needed
 };
 
-/// 帧解析器接口
+/// Frame-parser interface
 class IFrameParser {
 public:
     virtual ~IFrameParser() = default;
 
-    /// 尝试从缓冲区解析帧
-    /// @param data 输入数据缓冲区
-    /// @param startPos 开始解析的位置
-    /// @return 解析结果，包含帧数据和消耗的字节数
+    /// Attempt to parse a frame from the buffer
+    /// @param data the input data buffer
+    /// @param startPos the position to begin parsing
+    /// @return the parse result, containing the frame data and the number of bytes consumed
     virtual Expected<FrameParseResult> Parse(const ByteView& data, size_t startPos = 0) = 0;
 
-    /// 检查缓冲区开头是否有完整帧
-    /// @param data 输入数据缓冲区
-    /// @return true 如果缓冲区开头有完整帧
+    /// Check whether a complete frame exists at the head of the buffer
+    /// @param data the input data buffer
+    /// @return true if a complete frame exists at the head of the buffer
     virtual bool HasCompleteFrame(const ByteView& data) = 0;
 };
 
-/// 帧解析器智能指针
+/// Frame-parser smart pointer
 using IFrameParserPtr = std::shared_ptr<IFrameParser>;
 
 }} // namespace MyProt::Transport

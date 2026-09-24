@@ -1,5 +1,5 @@
 // src/Transport/include/MyProt/Transport/TcpChannel.hpp
-// TCP 通道 — asio 异步回调模型 (C++11, ADR-0010 §2)
+// TCP channel - asio async callback model (C++11, ADR-0010 §2)
 
 #pragma once
 #include "IChannel.hpp"
@@ -11,8 +11,8 @@
 
 namespace MyProt { namespace Transport {
 
-/// TCP 通道 — 基于 asio::ip::tcp::socket
-/// 超时由 steady_timer 看门狗实现: 到期关闭套接字, 挂起操作以 operation_aborted 结束
+/// TCP channel - based on asio::ip::tcp::socket
+/// Timeouts are implemented by a steady_timer watchdog: on expiry it closes the socket, and pending operations end with operation_aborted
 class TcpChannel : public IChannel,
                    public std::enable_shared_from_this<TcpChannel> {
 public:
@@ -33,7 +33,7 @@ public:
     Core::Error GetLastError() const override;
 
 private:
-    /// 收流操作状态 (回调链共享保活)
+    /// Stream-receive operation state (shared keep-alive across the callback chain)
     struct RxOp {
         explicit RxOp(ReceiveHandler h)
             : handler(std::move(h)), done(false), maxFrameSize(1024) {}
@@ -45,10 +45,10 @@ private:
         bool done;
     };
 
-    /// 追加读取一块数据; 每次到达后按成帧规则判定完整性
+    /// Append-read a block of data; after each arrival judge completeness per the framing rules
     void ReadChunk(const std::shared_ptr<RxOp>& op);
 
-    /// 记录最近错误 (线程安全)
+    /// Record the most recent error (thread-safe)
     void SetError(Core::Error::Code code, const std::string& msg);
 
     asio::io_context& _io;
@@ -56,17 +56,17 @@ private:
     std::unique_ptr<asio::ip::tcp::socket> _socket;
     asio::ip::tcp::resolver _resolver;
     std::atomic<bool> _connected;
-    // 单通道单请求守卫: 同一时刻仅允许一笔在途 SendReceive
-    // (socket 不支持并发读写; 第二笔立即 Busy 快速失败)
+    // One-channel-one-request guard: only one in-flight SendReceive at a time
+    // (the socket does not support concurrent read/write; a second one fails fast as Busy)
     std::atomic<bool> _inFlight;
     mutable std::mutex _errorMutex;
     Core::Error _lastError;
 
-    // 注: _lastEndpoint / _lastConnectTimeout 已撤回 (2026-08-31)。
-    // 原 SendReceive 内部"借一次重发"会与 ChannelManager 端 GetOrCreateChannel
-        // 形成双重 Connect 风暴; 重连职责在 ChannelManager, 本类不缓存
+    // Note: _lastEndpoint / _lastConnectTimeout were withdrawn (2026-08-31).
+    // The original "borrow one re-send" inside SendReceive would form a double Connect storm with
+    //        ChannelManager's GetOrCreateChannel; reconnection is ChannelManager's responsibility, this class does not cache.
 
-    // 禁止拷贝
+    // Disallow copying
     TcpChannel(const TcpChannel&) = delete;
     TcpChannel& operator=(const TcpChannel&) = delete;
 };

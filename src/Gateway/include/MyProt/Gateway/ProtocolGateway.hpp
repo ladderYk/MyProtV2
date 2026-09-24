@@ -1,5 +1,5 @@
 // src/Gateway/include/MyProt/Gateway/ProtocolGateway.hpp
-// 协议网关门面 — 上层 (PollingEngine / WebApi) 通过此对象访问设备 (modules/05_Gateway.md §5.1)
+// Protocol gateway facade - upper layers (PollingEngine / WebApi) access devices through this object (modules/05_Gateway.md §5.1)
 
 #pragma once
 #include <memory>
@@ -15,30 +15,30 @@
 
 namespace MyProt { namespace Gateway {
 
-/// 协议网关门面 — 封装 ChannelManager + TagReader + TagGrouper
-/// 上层模块 (Polling / WebApi) 的唯一交互入口
+/// Protocol gateway facade - wraps ChannelManager + TagReader + TagGrouper
+/// The sole interaction entry point for upper modules (Polling / WebApi)
 class ProtocolGateway {
 public:
     ProtocolGateway(asio::io_context& io,
                     ProtocolLookup lookup,
                     ChannelFactory factory);
 
-    /// 注册设备 (从 ConfigRoot 导入设备配置到 ChannelManager)
+    /// Register devices (import device configs from ConfigRoot into ChannelManager)
     void RegisterDevices(const std::vector<Core::DeviceConfig>& devices);
 
-    /// 获取 ChannelManager
+    /// Get the ChannelManager
     ChannelManager& GetChannelManager() { return *_channelMgr; }
 
-    /// 获取 TagReader
+    /// Get the TagReader
     TagReader& GetTagReader() { return *_tagReader; }
 
-    /// 获取 TagGrouper
+    /// Get the TagGrouper
     TagGrouper& GetTagGrouper() { return *_tagGrouper; }
 
-    /// 获取协议查找函数
+    /// Get the protocol lookup function
     const ProtocolLookup& GetProtocolLookup() const { return _lookup; }
 
-    /// 优雅关闭所有通道
+    /// Gracefully shut down all channels
     void Shutdown();
 
 private:

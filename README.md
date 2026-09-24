@@ -1,128 +1,135 @@
-# MyProt — 通用协议网关
+# MyProt — Config-Driven Protocol Gateway
 
-[简体中文](README.md) | **English**
+**English** | [简体中文](README.zh.md)
 
-**纯配置驱动的工业协议网关**，所有通信行为由 JSON 配置文件定义，引擎仅负责解释执行，不含任何特定协议的硬编码。通过加载不同的 JSON 配置，即可支持 ModbusTCP、S7、SEER（仙工）及任意二进制/文本协议，真正做到 **"定义即执行"**。
+📖 Docs: [English](docs/en/README.md) · [中文](docs/README.md) ｜ Contributing: [Guide](CONTRIBUTING.en.md) · [参与贡献](CONTRIBUTING.md)
 
-> 详细设计文档见 [docs/README.md](docs/README.md)（架构、模块、ADR 决策记录）。
-> 第一代单项目原型已归档至 [archive/MyProtCpp/](archive/MyProtCpp/)，不再维护。
+A **pure config-driven industrial protocol gateway** in C++11. Every communication behavior is defined by JSON configuration files — the engine only interprets and executes, with zero protocol-specific hardcoding. Loading a different JSON config adds support for Modbus TCP, Siemens S7, SEER, or any binary/text protocol: **"definition is execution"**.
+
+> Design docs (architecture, modules, ADRs) live in [docs/en/README.md](docs/en/README.md) — an English mirror of the authoritative Chinese docs; architecture, protocols and the config schema are translated, while some deep-dive pages (modules, ADRs) are still Chinese-only (marked *zh* in the index).
+> The first-generation prototype is archived under [archive/MyProtCpp/](archive/MyProtCpp/) and no longer maintained.
 
 ---
 
-## 项目结构
+## Project Layout
 
 ```
 MyProt-master/
-├── MyProt.sln          # VS 解决方案（主构建入口）
+├── MyProt.sln          # Visual Studio solution (main build entry)
 ├── src/
-│   ├── Core/           # Expected<T,E>/Optional/ByteView/ByteOrder 值类型与配置 POCO
-│   ├── Transport/      # IChannel 抽象 + TCP/TLS/串口通道、LengthField/Silence 成帧
-│   ├── Engine/         # RequestBuilder / ResponseParser / ExpressionEvaluator（类型转换下沉至 ResponseParser::Parse）
-│   ├── Service/        # 配置存储、深度校验、目录加载、会话熔断
-│   ├── Gateway/        # ProtocolGateway 门面、ChannelManager 连接池、TagReader、TagGrouper
-│   ├── Polling/        # 分组轮询引擎、最新值缓存（结果回调直送消费者）
-│   ├── WebApi/         # REST 管理面（鉴权中间件）
-│   ├── Simulation/     # 协议仿真从站（响应合成、模板匹配）
-│   └── App/            # main.cpp 入口与生产/测试共享胶水层 RuntimeGlue
-├── tests/              # 单元测试工程（Core/Engine/Transport.Tests）
-├── src/Tests/          # MyProt.E2E — 端到端测试独立进程
-├── configs/            # 运行配置：protocols/*.json + tags.json
-├── scripts/            # 构建与环境脚本
-├── third_party/        # asio（VS2015 兼容版）等第三方库
-├── docs/               # 设计文档、模块说明、ADR
-└── archive/            # 已归档项：第一代原型 (MyProtCpp)、旧版协议样本 (protocols-legacy)
+│   ├── Core/           # Expected<T,E>/Optional/ByteView/ByteOrder value types + config POCOs
+│   ├── Transport/      # IChannel abstraction + TCP/TLS/serial channels, LengthField/Silence framing
+│   ├── Engine/         # RequestBuilder / ResponseParser / ExpressionEvaluator (type conversion lives in ResponseParser::Parse)
+│   ├── Service/        # Config store, deep validation, directory loading, session circuit breaker
+│   ├── Gateway/        # ProtocolGateway facade, ChannelManager pool, TagReader, TagGrouper
+│   ├── Polling/        # Grouped polling engine, latest-value cache (results go straight to consumers)
+│   ├── WebApi/         # REST management plane (auth middleware)
+│   ├── Simulation/     # Config-driven protocol simulator (response synthesis, template matching)
+│   └── App/            # main.cpp entry + RuntimeGlue shared by production and tests
+├── tests/              # Unit test projects (Core/Engine/Transport.Tests)
+├── src/Tests/          # MyProt.E2E — end-to-end tests as a separate process
+├── configs/            # Runtime config: protocols/*.json + tags.json
+├── scripts/            # Build & environment scripts
+├── third_party/        # asio (VS2015-compatible build) and other third-party libraries
+├── docs/               # Design docs, module references, ADRs
+└── archive/            # Archived: first-gen prototype (MyProtCpp), legacy protocol samples
 ```
 
 ---
 
-## 快速开始
+## Quick Start
 
-### 环境要求
+### Requirements
 
-- Visual Studio 2015 或更高版本（v140 工具集，C++11）
+- Visual Studio 2015 or newer (v140 toolset, C++11)
 - Windows SDK 8.1+
 
-### 编译运行
+### Build & Run
 
-1. 用 Visual Studio 打开 `MyProt.sln`，选择 Debug/Release × x64 编译整个解决方案
-2. 运行 `build\Debug\x64\bin\MyProt.App.exe`
-   - 无参数 = 使用默认 `configs/` 目录启动网关（WebApi 监听 8080）
-   - `--config <目录>` 指定配置目录；`--port N` 指定 WebApi 端口
-3. 运行端到端测试：执行同目录下的 `MyProt.E2E.exe`
-4. 一键回归门禁（编译 Release x64 + 4 个单元测试 + E2E，任一失败即非零退出，见 [ADR-0013](docs/adr/0013-infrastructure-admission.md)）：
+1. Open `MyProt.sln` in Visual Studio, build the full solution for Debug/Release × x64
+2. Run `build\Debug\x64\bin\MyProt.App.exe`
+   - No arguments = start the gateway with the default `configs/` directory (Web API on port 8080)
+   - `--config <dir>` selects a config directory; `--port N` sets the Web API port
+3. Run end-to-end tests: execute `MyProt.E2E.exe` from the same directory
+4. One-shot regression gate (Release x64 build + 4 unit test suites + E2E; any failure exits non-zero — see [ADR-0013](docs/adr/0013-infrastructure-admission.md)):
    ```bat
    powershell -ExecutionPolicy Bypass -File scripts\ci.ps1
    ```
 
-### 仿真测试
+### Simulation Testing
 
 ```bash
-# 终端 1：启动协议仿真从站（随 App 一同构建）
+# Terminal 1: start the protocol simulator slave (built together with the App)
 MyProt.App.exe --config configs_write_test
 
-# 终端 2：通过 WebApi 触发写入链路验证
-# 详见 docs/architecture/06_Extension_and_Simulation.md
+# Terminal 2: exercise the write path through the Web API
+# See docs/en/architecture/06_Extension_and_Simulation.md
 ```
 
 ---
 
-## 核心能力
+## Core Capabilities
 
-| 能力 | 说明 |
+| Capability | Description |
 |------|------|
-| **请求构建** | 固定十六进制、变量占位符、内置函数（自增 ID、长度计算、字符串模板 `${...}`） |
-| **通道抽象** | 统一 TCP/TLS/串口，LengthField / Fixed 两种帧解析模式 |
-| **响应验证** | 表达式校验（如 `resp[7] == 0x03`），递归下降求值器 |
-| **数据提取** | 动态截取数据段，支持字节序四模式（ABCD/DCBA/CDAB/BADC）与类型转换 |
-| **并发控制** | 每设备连接池 + 会话熔断（Closed/Open/HalfOpen），超时重试时间预算模型 |
-| **管理面** | REST API 支持配置热更新、指标查询，token 鉴权 |
+| **Request building** | Fixed hex, variable placeholders, built-in functions (auto-increment IDs, length computation, string templates `${...}`) |
+| **Channel abstraction** | Unified TCP/TLS/serial, LengthField / Fixed framing modes |
+| **Response validation** | Expression checks (e.g. `resp[7] == 0x03`) via a recursive-descent evaluator |
+| **Data extraction** | Dynamic segment extraction with four byte orders (ABCD/DCBA/CDAB/BADC) and type conversion |
+| **Concurrency control** | Per-device connection pool + session circuit breaker (Closed/Open/HalfOpen), timeout-retry time budget |
+| **Management plane** | REST API with config hot-reload, metrics, token auth |
 
-配置 Schema 的唯一事实来源：[docs/Config_Schema.md](docs/Config_Schema.md)。
+Single source of truth for the config schema: [docs/en/Config_Schema.md](docs/en/Config_Schema.md).
 
-## 运行原理
+## How It Works
 
-系统启动时装载配置，运行期由引擎按模板**解释执行**——全部通信行为由 `configs/*.json` 定义，引擎零协议硬编码（"定义即执行"）：
+At startup the system loads its configuration; at runtime the engine **interprets** templates — every communication behavior comes from `configs/*.json`, with zero protocol hardcoding in the engine ("definition is execution"):
 
 ```mermaid
 flowchart LR
-    ROOT(["MyProt 运行原理"]) --> A["① 配置装载<br/>三类 JSON → 深度校验<br/>Fail-Fast · 热重载"]
-    ROOT --> B["② 核心引擎 Gateway<br/>连接池 · 重连 · 熔断<br/>TagGrouper 请求合并"]
-    ROOT --> C["③ 请求构建<br/>模板渲染 Xn/XnLE<br/>自增 ID / 长度派生 / CRC"]
-    ROOT --> D["④ 响应解析<br/>validCondition 表达式校验<br/>字节序四模式 · converters"]
-    ROOT --> E["⑤ 轮询数据流<br/>分组周期轮询<br/>最新值缓存 → /latest · SSE"]
-    ROOT --> F["⑥ 线程模型<br/>单 io_context 串行执行<br/>WebApi 独立线程 io.post 桥接"]
-    ROOT --> G["⑦ 管理面 WebApi<br/>REST 热更新 · token 鉴权<br/>限流 · Vue3 WebUI"]
-    ROOT --> H["⑧ 仿真与门禁<br/>配置驱动仿真从站<br/>E2E 297 断言 · ci.ps1"]
+    ROOT(["MyProt How It Works"]) --> A["1. Config Loading<br/>3 JSON kinds → deep validation<br/>Fail-Fast · hot reload"]
+    ROOT --> B["2. Gateway Engine<br/>connection pool · reconnect · breaker<br/>TagGrouper request merging"]
+    ROOT --> C["3. Request Building<br/>template rendering Xn/XnLE<br/>auto-increment / derived length / CRC"]
+    ROOT --> D["4. Response Parsing<br/>validCondition expressions<br/>4 byte orders · converters chain"]
+    ROOT --> E["5. Polling Data Flow<br/>grouped periodic polling<br/>latest-value cache → /latest · SSE"]
+    ROOT --> F["6. Threading Model<br/>single io_context, serialized handlers<br/>WebApi thread via io.post"]
+    ROOT --> G["7. Management Plane<br/>REST hot-reload · token auth<br/>rate limiting · Vue3 WebUI"]
+    ROOT --> H["8. Simulation & Gates<br/>config-driven protocol simulator<br/>297 E2E assertions · ci.ps1"]
     classDef root fill:#1B4DDB,stroke:#1B4DDB,color:#ffffff;
     class ROOT root
 ```
 
-> 线程模型与数据流全景细节见 [docs/architecture/03_Threading_and_DataFlow.md](docs/architecture/03_Threading_and_DataFlow.md)；配置文法唯一事实来源见 [docs/Config_Schema.md](docs/Config_Schema.md)。
+> Threading and data-flow details: [docs/en/architecture/03_Threading_and_DataFlow.md](docs/en/architecture/03_Threading_and_DataFlow.md); config grammar: [docs/en/Config_Schema.md](docs/en/Config_Schema.md).
 
 ---
 
-## 已支持的协议
+## Supported Protocols
 
-| 协议 | 传输层 | 帧解析 | 配置文件 |
+| Protocol | Transport | Framing | Config file |
 |------|--------|--------|----------|
-| ModbusTCP | TCP | LengthField (2B 大端) | `configs/protocols/modbus-tcp.json` |
-| S7 (Siemens) | TCP | 握手 COTP + LengthField | `configs/protocols/s7-1200.json` |
-| SEER (仙工) | TCP | LengthField | `configs/protocols/seer-robot.json` |
-| 欧姆龙 FINS/TCP | TCP | LengthField (4B 大端 @0) | `configs/protocols/omron-fins-tcp.json` |
-| 三菱 MC 3E | TCP | LengthField (2B 小端 @7) | `configs/protocols/mitsubishi-mc-3e.json` |
-| 倍福 ADS/AMS | TCP | LengthField (4B 小端 @2) | `configs/protocols/twincat-ads.json` |
-| SEER（仙工 AGV） | TCP | LengthField (4B) + JSON 数据 | `configs/protocols/seer.json`（教学文档 [docs/protocols/seer.md](docs/protocols/seer.md)） |
+| Modbus TCP | TCP | LengthField (2B big-endian) | `configs/protocols/modbus-tcp.json` |
+| S7 (Siemens) | TCP | COTP handshake + LengthField | `configs/protocols/s7-1200.json` |
+| Omron FINS/TCP | TCP | LengthField (4B big-endian @0) | `configs/protocols/omron-fins-tcp.json` |
+| Mitsubishi MC 3E | TCP | LengthField (2B little-endian @7) | `configs/protocols/mitsubishi-mc-3e.json` |
+| Beckhoff ADS/AMS | TCP | LengthField (4B little-endian @2) | `configs/protocols/twincat-ads.json` |
+| SEER (AGV, JSON payload) | TCP | LengthField (4B) + JSON data | `configs/protocols/seer.json` (tutorial: [docs/en/protocols/seer.md](docs/en/protocols/seer.md)) |
 
-添加新协议只需在 `configs/protocols/` 新增 JSON 定义并在 `tags.json` 引用，重启即生效——无需改动代码。小端字段用 `{Name:XnLE}` 占位符直配（LSB 在前），无需手写反转公式（E2E Test 22 对 FINS/MC 3E/ADS 三协议做了逐字节断言验证）。
+Adding a protocol = dropping a JSON file into `configs/protocols/` and referencing it from `tags.json` — a restart makes it live, no code changes. Little-endian fields use the `{Name:XnLE}` placeholder directly (LSB first, no hand-written byte-swap formulas; E2E Test 22 verifies FINS/MC 3E/ADS byte-for-byte).
 
 ---
 
-## 技术栈
+## Tech Stack
 
-- **语言**：C++11（硬约束 VS2015/v140，见 ADR-0010）
-- **网络**：asio（third_party 内置 VS2015 兼容版）
-- **JSON**：nlohmann/json（单头文件）
-- **基础设施**：自研 `Expected<T,E>` / `Optional<T>` / `ByteView` 替代 C++17 设施
+- **Language**: C++11 (hard-constrained to VS2015/v140 — see ADR-0010)
+- **Networking**: asio (VS2015-compatible copy bundled in third_party)
+- **JSON**: nlohmann/json (header-only)
+- **Infrastructure**: in-house `Expected<T,E>` / `Optional<T>` / `ByteView` replacing C++17 facilities
+
+---
+
+## Trademarks
+
+MODBUS® (Schneider Electric), SIEMENS / S7 (Siemens AG), OMRON (Omron Corporation), Mitsubishi / MELSEC (Mitsubishi Electric Corporation), TwinCAT / ADS (Beckhoff Automation), and SEER are trademarks of their respective owners. This project is not affiliated with, endorsed by, or certified by any of these vendors; the names are used solely to describe interoperability with their published or de-facto-standard communication protocols. Provenance notes for each protocol's byte conventions live in the `_provenance` field of the corresponding config file.
 
 ---
 

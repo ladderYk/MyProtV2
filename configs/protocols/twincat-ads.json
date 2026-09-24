@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "protocolName": "twincat-ads",
+  "_provenance": "报文约定依据倍福 (Beckhoff) 免费公开的 ADS/AMS 协议规范整理, 未复制规范文档原文。TwinCAT/ADS 为 Beckhoff Automation GmbH & Co. KG 注册商标。",
   "transport": { "type": "Tcp", "defaultPort": 48898 },
   "framing": {
     "type": "LengthField",

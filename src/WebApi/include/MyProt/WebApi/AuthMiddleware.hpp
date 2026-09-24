@@ -1,5 +1,5 @@
 // src/WebApi/include/MyProt/WebApi/AuthMiddleware.hpp
-// 认证中间件 — token 校验 + 限流 (ADR-0008)
+// Auth middleware - token check + rate limiting (ADR-0008)
 
 #pragma once
 #include <string>
@@ -8,13 +8,13 @@
 
 namespace MyProt { namespace WebApi {
 
-/// 令牌桶限流器
+/// Token-bucket rate limiter
 class RateLimiter {
 public:
     RateLimiter(int rps, int burst);
 
-    /// 尝试获取一个令牌
-    /// @return true = 允许, false = 429 Too Many Requests
+    /// Try to acquire one token
+    /// @return true = allowed, false = 429 Too Many Requests
     bool TryAcquire();
 
 private:
@@ -25,13 +25,13 @@ private:
     std::mutex _mutex;
 };
 
-/// 认证中间件 — token 常量时间比较 (ADR-0008 §3)
+/// Auth middleware - constant-time token comparison (ADR-0008 §3)
 class AuthMiddleware {
 public:
-    /// @param expectedToken 从环境变量 MYPROT_API_TOKEN 读取
+    /// @param expectedToken read from the environment variable MYPROT_API_TOKEN
     explicit AuthMiddleware(const std::string& expectedToken);
 
-    /// 验证请求 token (常量时间比较, 防时序攻击)
+    /// Validate a request token (constant-time comparison, guards against timing attacks)
     bool Validate(const std::string& providedToken) const;
 
 private:

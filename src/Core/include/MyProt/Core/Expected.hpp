@@ -1,6 +1,6 @@
 // src/Core/include/MyProt/Core/Expected.hpp
-// 自写 Expected<T> — monadic error handling, C++11, 零依赖 (ADR-0010 §3)
-// 约束: T 可默认构造
+// Hand-written Expected<T> — monadic error handling, C++11, zero dependencies (ADR-0010 §3)
+// Constraint: T must be default-constructible
 
 #pragma once
 #include <cassert>
@@ -9,42 +9,43 @@
 
 namespace MyProt { namespace Core {
 
-/// 错误类型 — 全项目唯一事实来源 (Single Source of Truth)。
-/// architecture/04 仅以注解表引用本定义，不再重复定义 enum。
+/// Error type — the Single Source of Truth for the whole project.
+/// architecture/04 references this definition only via an annotation table; it no
+/// longer re-declares the enum.
 struct Error {
     enum class Code {
-        // ──── 可重试 + 幂等安全 (仅读操作触发重试, 见 IsRetryable) ────
-        Timeout,              // 网络/设备超时 → 退避重试
-        ConnectionRefused,    // 连接被拒 → 等待重连
-        ConnectionClosed,     // 连接中断 → 自动重连
-        Busy,                 // 设备正忙 → 稍后重试
+        // ──── Retryable + idempotent-safe (only read ops trigger retry, see IsRetryable) ────
+        Timeout,              // network/device timeout → retry with backoff
+        ConnectionRefused,    // connection refused → wait and reconnect
+        ConnectionClosed,     // connection dropped → auto-reconnect
+        Busy,                 // device busy → retry later
 
-        // ──── 不可重试 (标记 Bad Quality) ────
-        InvalidResponse,      // 响应不符合 validCondition
-        ParseError,           // 响应解析失败
-        BuildError,           // 请求构建失败 (Fail-Fast, 记录日志)
-        TypeConversionError,  // 原始字节 → finalType 转换失败
+        // ──── Not retryable (mark Bad quality) ────
+        InvalidResponse,      // response fails validCondition
+        ParseError,           // response parse failed
+        BuildError,           // request build failed (Fail-Fast, logged)
+        TypeConversionError,  // raw bytes → finalType conversion failed
 
-        // ──── 写操作错误 (不可重试, 写非幂等) ────
-        WriteTimeout,         // 写超时 → 不重试, 避免重复写入
-        WriteFailed,          // 写失败 → 不重试
-        ReadBackMismatch,     // P1 B 写后读回不一致 → 不可重试 (避免重复写入)
+        // ──── Write-op errors (not retryable; writes are non-idempotent) ────
+        WriteTimeout,         // write timeout → no retry, avoid duplicate write
+        WriteFailed,          // write failed → no retry
+        ReadBackMismatch,     // P1 B post-write read-back mismatch → no retry (avoid duplicate write)
 
-        // ──── 配置错误 (启动期 Fail-Fast) ────
-        ConfigError,          // JSON 解析/校验失败
-        DeviceNotFound,       // 设备配置不存在
-        TagNotFound,          // 标签未找到
-        ProtocolNotFound,     // 协议名无效
-        CircuitOpen,          // 熔断器打开 → 拒绝请求
+        // ──── Config errors (Fail-Fast at startup) ────
+        ConfigError,          // JSON parse/validation failed
+        DeviceNotFound,       // device config missing
+        TagNotFound,          // tag not found
+        ProtocolNotFound,     // invalid protocol name
+        CircuitOpen,          // circuit breaker open → reject request
 
-        // ──── 内部错误 ────
-        InternalError,        // 不应发生的内部错误
-        NotImplemented        // 未实现的功能 (现仅 TlsChannel stub 使用; 写路径已实现, 见 ADR-0007 实现销账)
+        // ──── Internal errors ────
+        InternalError,        // internal error that should never happen
+        NotImplemented        // unimplemented feature (now only the TlsChannel stub; write path is implemented, see ADR-0007)
     };
 
     Code code;
     std::string message;
-    std::string context;   // 附加上下文 (如 "tag=Temperature, device=PLC1")
+    std::string context;   // extra context (e.g. "tag=Temperature, device=PLC1")
 
     static Error Make(Code c, const std::string& msg = "", const std::string& ctx = "") {
         Error e;
@@ -55,7 +56,7 @@ struct Error {
     }
 };
 
-/// 判断错误码是否可重试 (读操作 Timeout/ConnectionRefused/ConnectionClosed/Busy)
+/// Whether an error code is retryable (read ops: Timeout/ConnectionRefused/ConnectionClosed/Busy)
 inline bool IsRetryable(Error::Code c) {
     switch (c) {
         case Error::Code::Timeout:
@@ -68,23 +69,23 @@ inline bool IsRetryable(Error::Code c) {
     }
 }
 
-/// KI-04: 判断错误是否触发设备生命周期 Degraded 迁移 (连接级故障)
-/// 协议级 / 业务级 (InvalidResponse/ParseError/BuildError/TagNotFound/
-/// ProtocolNotFound/DeviceNotFound/CircuitOpen) 不动生命周期。
+/// KI-04: whether an error triggers a Degraded device-lifecycle transition (connection-level faults).
+/// Protocol/business-level errors (InvalidResponse/ParseError/BuildError/TagNotFound/
+/// ProtocolNotFound/DeviceNotFound/CircuitOpen) do not touch the lifecycle.
 inline bool IsLifecycleDegrading(Error::Code c) {
     switch (c) {
         case Error::Code::Timeout:
         case Error::Code::ConnectionRefused:
         case Error::Code::ConnectionClosed:
         case Error::Code::Busy:
-        case Error::Code::InternalError:  // 工厂未注入/通道创建失败 — 视为连接层
+        case Error::Code::InternalError:  // factory not injected / channel creation failed — treated as connection-layer
             return true;
         default:
             return false;
     }
 }
 
-/// Unexpected 标记 — 从 Error 隐式构造任意 Expected<T>
+/// Unexpected marker — implicitly builds any Expected<T> from an Error
 struct UnexpectedType { Error error; };
 
 inline UnexpectedType Unexpected(Error::Code code,
@@ -95,8 +96,8 @@ inline UnexpectedType Unexpected(Error::Code code,
     return u;
 }
 
-/// 自写 Expected (取代 tl::expected / std::expected; ADR-0010 §3)。
-/// 约束: T 可默认构造。
+/// Hand-written Expected (replaces tl::expected / std::expected; ADR-0010 §3).
+/// Constraint: T must be default-constructible.
 template <typename T>
 class Expected {
 public:
@@ -115,23 +116,23 @@ public:
 
     T value_or(const T& fallback) const { return _hasValue ? _value : fallback; }
 
-    // ── monadic 组合子 (C++11; lambda 参数类型须显式书写, 禁泛型 lambda) ──
+    // ── monadic combinators (C++11; lambda parameter types must be written explicitly, no generic lambdas) ──
 
-    /// F: (T&) -> Expected<U>; 出错则短路传递错误
+    /// F: (T&) -> Expected<U>; on error, short-circuits and propagates the error
     template <typename F>
     auto and_then(F f) -> decltype(f(std::declval<T&>())) {
         if (_hasValue) { return f(_value); }
         return UnexpectedType{_error};
     }
 
-    /// F: (T&) -> T; 仅变换值, 错误短路
+    /// F: (T&) -> T; transforms the value only, errors short-circuit
     template <typename F>
     Expected<T> map(F f) {
         if (_hasValue) { return Expected<T>(f(_value)); }
         return UnexpectedType{_error};
     }
 
-    /// 出错时替换为降级值
+    /// On error, replace with a fallback value
     Expected<T> or_else(const T& fallback) const {
         if (_hasValue) { return *this; }
         return Expected<T>(fallback);
@@ -139,11 +140,11 @@ public:
 
 private:
     bool _hasValue;
-    T _value;      // _hasValue 时有效
-    Error _error;  // !_hasValue 时有效
+    T _value;      // valid when _hasValue
+    Error _error;  // valid when !_hasValue
 };
 
-/// void 特化
+/// void specialization
 template <>
 class Expected<void> {
 public:
@@ -161,7 +162,7 @@ private:
     Error _error;
 };
 
-// 便捷别名
+// convenience alias
 using VoidExpected = Expected<void>;
 
 }} // namespace MyProt::Core

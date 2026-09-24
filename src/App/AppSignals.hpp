@@ -1,15 +1,15 @@
-// src/App/AppSignals.hpp — 进程停止信号与运行标志
-// 方案1-S1: 从 RuntimeGlue.cpp 原样搬移 (零行为变更); RuntimeGlue.hpp 仍转发声明, main.cpp 无需改动。
+// src/App/AppSignals.hpp - process stop signal and running flag
+// Plan-1-S1: moved verbatim from RuntimeGlue.cpp (zero behavior change); RuntimeGlue.hpp still forward-declares, main.cpp needs no change.
 
 #ifndef MYPROT_APP_APPSIGNALS_HPP
 #define MYPROT_APP_APPSIGNALS_HPP
 
 namespace MyProt { namespace App {
 
-/// 进程是否应继续运行 (Ctrl+C / 关窗 → false)
+/// Whether the process should keep running (Ctrl+C / window close -> false)
 bool IsRunning();
 
-/// 安装 SIGINT/SIGTERM 处理 (Ctrl+C / 关窗)
+/// Install SIGINT/SIGTERM handling (Ctrl+C / window close)
 void InstallStopSignals();
 
 }} // namespace MyProt::App

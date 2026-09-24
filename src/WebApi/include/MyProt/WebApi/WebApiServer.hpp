@@ -1,7 +1,7 @@
 // src/WebApi/include/MyProt/WebApi/WebApiServer.hpp
-// WebApi 服务器 — 管理面 REST API (modules/07_WebApi.md, ADR-0008)
-// 说明: cpp-httplib 0.14.3 需 C++14 (与 v140/C++11 不兼容), 故基于 standalone Asio
-//       自实现最小 HTTP/1.1 服务; TLS 暂缓 (v1 决策), token 认证 + 限流见 AuthMiddleware。
+// WebApi server - management-plane REST API (modules/07_WebApi.md, ADR-0008)
+// Note: cpp-httplib 0.14.3 needs C++14 (incompatible with v140/C++11), so a minimal HTTP/1.1 service is
+//       self-implemented on standalone Asio; TLS deferred (v1 decision); token auth + rate limiting see AuthMiddleware.
 
 #pragma once
 #include <string>
@@ -17,48 +17,48 @@
 
 namespace MyProt { namespace WebApi {
 
-/// WebApi 服务器 — 标签查询 + 配置 CRUD + 热重载管理接口
-/// 安全加固: token 认证 + 限流 (ADR-0008); TLS 待后续版本
-/// 端点:
-///   GET  /health                      健康检查 (免认证)
-///   GET  /metrics                     Prometheus 指标暴露 (免认证, text/plain v0.0.4)
-///   GET  /api/config/schema          字段注册表下发 (UI 动态表单供数)
-///   GET  /api/config/{scope}          列出配置项 (protocols | tags)
-///   GET  /api/config/{scope}/{name}   读取配置原文
-///   PUT  /api/config/{scope}/{name}   保存配置 (body = JSON 原文, 触发热重载)
-///   DEL  /api/config/{scope}/{name}   删除协议配置 (仅 protocols)
-///   GET  /api/config/{scope}/{name}/backups           列出备份标签
-///   POST /api/config/{scope}/{name}/backups/{tag}/restore   回滚到指定备份
-///   POST /api/config/reload           手动热重载
-///   /api/sim/*                        扩展路由 (SetExtHandler 注入, Phase 2 仿真数据面)
-///   GET  /*                           静态前端托管 (webRoot, Vue 构建产物)
+/// WebApi server - tag query + config CRUD + hot-reload management interface
+/// Security hardening: token auth + rate limiting (ADR-0008); TLS deferred to a later version
+/// Endpoints:
+///   GET  /health                      health check (no auth)
+///   GET  /metrics                     Prometheus metrics exposure (no auth, text/plain v0.0.4)
+///   GET  /api/config/schema          field-registry delivery (feeds the UI's dynamic forms)
+///   GET  /api/config/{scope}          list config items (protocols | tags)
+///   GET  /api/config/{scope}/{name}   read the raw config
+///   PUT  /api/config/{scope}/{name}   save config (body = raw JSON, triggers a hot reload)
+///   DEL  /api/config/{scope}/{name}   delete a protocol config (protocols only)
+///   GET  /api/config/{scope}/{name}/backups           list backup tags
+///   POST /api/config/{scope}/{name}/backups/{tag}/restore   roll back to a specified backup
+///   POST /api/config/reload           manual hot reload
+///   /api/sim/*                        extension routes (injected via SetExtHandler, Phase 2 simulation data plane)
+///   GET  /*                           static frontend hosting (webRoot, Vue build output)
 class WebApiServer {
 public:
-    /// 外部域扩展路由回调 — 依赖倒置: App 层注入业务 handler
-    /// (/api/sim/*、/api/data/*), WebApi 不反向依赖 Simulation 等模块。
-    /// 返回 (HTTP status, JSON body)。
+    /// External-domain extension-route callback - dependency inversion: the App layer injects the business handler
+    /// (/api/sim/*, /api/data/*); WebApi does not reverse-depend on Simulation or other modules.
+    /// Returns (HTTP status, JSON body).
     typedef std::function<std::pair<int, std::string>(
         const std::string& method, const std::string& path,
         const std::string& body)> ExtHandler;
 
-    /// SSE 流式快照提供者 — 每 tick 回调一次, 返回待推送的 JSON 文本;
-    /// 返回空串 = 本轮无数据可推 (跳过, 不发空 data 帧)。
-    /// 依赖倒置: 与 ExtHandler 一致, App 层注入业务快照, WebApi 不依赖业务模块
+    /// SSE streaming-snapshot provider - called back once per tick, returning the JSON text to push;
+    /// returning an empty string = no data to push this round (skip, do not send an empty data frame).
+    /// Dependency inversion: like ExtHandler, the App layer injects the business snapshot, WebApi does not depend on business modules
     typedef std::function<std::string(const std::string& path)> SnapshotProvider;
 
-    /// @param config 管理面安全配置 (ConfigRoot.webApi);
-    ///               bindAddress 支持 "host[:port]" 形式, 缺省端口 8080
-    /// @param store  配置读写服务 (ConfigStore), 持有引用, 生命周期由调用方保证
-    /// @throws std::runtime_error 当 requireAuth=true 且环境变量 MYPROT_API_TOKEN 缺失时 Fail-Fast
+    /// @param config management-plane security config (ConfigRoot.webApi);
+    ///               bindAddress supports the "host[:port]" form, default port 8080
+    /// @param store  config read/write service (ConfigStore), held by reference; its lifetime is guaranteed by the caller
+    /// @throws std::runtime_error when requireAuth=true and the environment variable MYPROT_API_TOKEN is missing (Fail-Fast)
     WebApiServer(const Core::WebApiConfig& config, Service::ConfigStore& store);
 
-    /// 注册扩展路由 handler (须在 Start 前调用; 未注册时 /api/sim/* → 404)
+    /// Register the extension-route handler (must be called before Start; when unregistered /api/sim/* -> 404)
     void SetExtHandler(ExtHandler h) { _ext = h; }
 
-    /// 注册 SSE 流式路由 (须在 Start 前调用; 未注册时不启用流式分支)
-    /// GET <pathPrefix>[?query] 建连后立即推首帧, 此后每 intervalMs 推一次快照;
-    /// 帧格式 "data: {json}\n\n" (text/event-stream), 客户端断开/Stop 时清理
-    /// 典型用途: /api/data/stream 实时标签快照 (modules/07_WebApi.md)
+    /// Register the SSE streaming route (must be called before Start; when unregistered the streaming branch is not enabled)
+    /// GET <pathPrefix>[?query] pushes the first frame immediately after connecting, then a snapshot every intervalMs;
+    /// frame format "data: {json}\n\n" (text/event-stream), cleaned up on client disconnect/Stop
+    /// Typical use: /api/data/stream real-time tag snapshots (modules/07_WebApi.md)
     void SetStreamRoute(const std::string& pathPrefix, int intervalMs,
                         SnapshotProvider fn) {
         _streamPrefix = pathPrefix;
@@ -66,42 +66,42 @@ public:
         _streamProvider = fn;
     }
 
-    /// 启动 HTTP 服务器并阻塞监听 (内部 io_context.run(); 由调用方决定线程)
+    /// Start the HTTP server and block on listening (internally io_context.run(); the caller decides the thread)
     void Start();
 
-    /// 停止服务器 (线程安全, 可从其他线程调用)
+    /// Stop the server (thread-safe, can be called from another thread)
     void Stop();
 
 private:
-    /// HTTP 响应
+    /// HTTP response
     struct Response {
         int status;
         std::string contentType;
         std::string body;
-        bool cacheable;     // 静态资源 true (Vite 文件名带 hash 可安全缓存); API 一律 no-store
+        bool cacheable;     // static resources true (Vite hashed file names can be safely cached); API always no-store
 
         Response() : status(200), cacheable(false) {}
         Response(int s, const std::string& ct, const std::string& b, bool c = false)
             : status(s), contentType(ct), body(b), cacheable(c) {}
     };
 
-    /// 路由分发 (已解析请求 → 响应)
+    /// Route dispatch (parsed request -> response)
     Response Route(const std::string& method,
                    const std::string& path,
                    const std::string& body,
                    const std::string& authToken);
 
-    /// 静态文件服务 (webRoot 下; 防路径穿越; 按扩展名给 Content-Type)
+    /// Static file serving (under webRoot; guards against path traversal; sets Content-Type by extension)
     Response ServeStatic(const std::string& path);
 
-    /// 路由 + 序列化 + 异步写回 + 关闭连接
+    /// Route + serialize + async write-back + close connection
     void FinishRequest(const std::shared_ptr<asio::ip::tcp::socket>& socket,
                        const std::string& method,
                        const std::string& path,
                        const std::string& authToken,
                        const std::string& body);
 
-    /// 直接发送简单响应并关闭连接 (畸形请求 / 超限等无需路由的场景)
+    /// Directly send a simple response and close the connection (malformed request / over-limit etc., no routing needed)
     void RespondAndClose(const std::shared_ptr<asio::ip::tcp::socket>& socket,
                          int status, const std::string& contentType,
                          const std::string& body);
@@ -109,34 +109,34 @@ private:
     void DoAccept();
     void HandleConnection(const std::shared_ptr<asio::ip::tcp::socket>& socket);
 
-    /// SSE 流式会话状态包 — 连接存续期由异步回调链持有 (socket+timer 同生共死)
+    /// SSE streaming session state bundle - held by the async callback chain for the connection's life (socket+timer live and die together)
     struct StreamSession {
         StreamSession(asio::io_context& io, const std::string& p)
             : timer(new asio::steady_timer(io)), path(p) {}
-        std::shared_ptr<asio::ip::tcp::socket> socket;   // 握手时回填
+        std::shared_ptr<asio::ip::tcp::socket> socket;   // filled back at handshake
         std::shared_ptr<asio::steady_timer> timer;
-        std::string path;                                // 含 query (device/token)
-        std::shared_ptr<std::string> payload;            // 在途帧缓冲 (保活至写完)
+        std::string path;                                // includes query (device/token)
+        std::shared_ptr<std::string> payload;            // in-flight frame buffer (kept alive until written)
     };
 
-    /// SSE 握手: 限流+认证(含 ?token= 兜底) → 响应头+首帧 → 进入周期推送循环
+    /// SSE handshake: rate-limit + auth (with ?token= fallback) -> response headers + first frame -> enter the periodic-push loop
     void HandleStream(const std::shared_ptr<StreamSession>& session,
                       const std::string& authToken);
-    /// 等待下一推送周期 (Stop/取消时关闭会话)
+    /// Wait for the next push cycle (close the session on Stop/cancel)
     void StreamWait(const std::shared_ptr<StreamSession>& session);
-    /// 推送一帧快照 (provider 异常/写失败即断开; 空快照跳过本轮)
+    /// Push one snapshot frame (a provider exception/write failure disconnects; an empty snapshot skips this round)
     void StreamPush(const std::shared_ptr<StreamSession>& session);
-    /// 关闭 SSE 会话 (cancel timer + shutdown socket)
+    /// Close an SSE session (cancel timer + shutdown socket)
     static void StreamClose(const std::shared_ptr<StreamSession>& session);
 
     Core::WebApiConfig _config;
     Service::ConfigStore& _store;
-    std::string _token;             // 来自 MYPROT_API_TOKEN; requireAuth 时不得为空
+    std::string _token;             // from MYPROT_API_TOKEN; must not be empty when requireAuth
     AuthMiddleware _auth;
     RateLimiter _limiter;
     ExtHandler _ext;
     SnapshotProvider _streamProvider;
-    std::string _streamPrefix;      // SSE 路径前缀 (未注册时 _streamProvider 为空)
+    std::string _streamPrefix;      // SSE path prefix (when unregistered _streamProvider is empty)
     int _streamIntervalMs;
     asio::io_context _io;
     asio::ip::tcp::acceptor _acceptor;

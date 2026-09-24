@@ -1,6 +1,6 @@
 // src/Polling/include/MyProt/Polling/LatestValueStore.hpp
-// 最新值快照存储 — 保存每个标签最近一次采集结果, 供 /api/data/latest 查询
-// 线程安全: PollingEngine io 线程写入 (Update), WebApi 线程读取 (Snapshot)
+// Latest-value snapshot store - keeps each tag's most recent acquisition result, queried by /api/data/latest
+// Thread safety: written by the PollingEngine io thread (Update), read by the WebApi thread (Snapshot)
 
 #pragma once
 #include <map>
@@ -14,26 +14,26 @@ namespace MyProt { namespace Polling {
 
 class LatestValueStore {
 public:
-    /// 批量更新最新值 (PollingEngine 回调线程调用; 同名标签后写覆盖先写)
+    /// Batch-update the latest values (called on the PollingEngine callback thread; for same-named tags a later write overrides an earlier one)
     void Update(const std::vector<Core::TagValue>& values);
 
-    /// 全量快照 (按 tagName 排序); deviceFilter 非空时按 deviceId 前缀过滤
+    /// Full snapshot (sorted by tagName); when deviceFilter is non-empty, filter by deviceId prefix
     std::vector<Core::TagValue> Snapshot(
         const std::string& deviceFilter = std::string()) const;
 
-        /// 单标签查询: 设备离线期间用上次值替代 Bad 输出
-    /// @return true 且 out 填充 — 存在; false — 标签从未有值
+        /// Single-tag lookup: while a device is offline, use the last value instead of emitting Bad
+    /// @return true and out filled - present; false - the tag never had a value
     bool Lookup(const std::string& tagName, Core::TagValue& out) const;
 
-    /// 当前标签数
+    /// Current tag count
     size_t Count() const;
 
-    /// 清空快照 (配置热重载后调用, 丢弃旧标签集的陈旧数据)
+    /// Clear the snapshot (called after a config hot reload, discarding stale data of the old tag set)
     void Clear();
 
 private:
     mutable std::mutex _mutex;
-    std::map<std::string, Core::TagValue> _latest;   // tagName → 最近值
+    std::map<std::string, Core::TagValue> _latest;   // tagName -> latest value
 };
 
 }} // namespace MyProt::Polling

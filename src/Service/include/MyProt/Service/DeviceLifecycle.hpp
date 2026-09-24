@@ -1,52 +1,52 @@
 // src/Service/include/MyProt/Service/DeviceLifecycle.hpp
-// 设备生命周期状态机 (KI-04)
+// Device lifecycle state machine (KI-04)
 //
-// 设计要点 — 与熔断器正交:
-//   * 熔断器 (SessionContext::CircuitState) 是流量层瞬态许可, 影响
-//     "请求是否放行", 可恢复 (HalfOpen 探测闭合)。
-//   * 生命周期 (DeviceLifecycleState) 是设备级持久维度, 表示
-//     "设备当前是否可用 / 正在做什么", 由连接/握手/重连/热重载触发。
-//   * 两者并存: Degraded 设备熔断可仍 Closed, Open 熔断下设备仍可 Connected
-//     (只是没流量过)。Cancel 替代关系不存在。
+// Design points - orthogonal to the circuit breaker:
+//   * The circuit breaker (SessionContext::CircuitState) is a transient traffic-layer permission, affecting
+//     "whether a request is let through", and is recoverable (HalfOpen probe closes it).
+//   * The lifecycle (DeviceLifecycleState) is a device-level persistent dimension, expressing
+//     "whether the device is currently usable / what it is doing", triggered by connect/handshake/reconnect/hot-reload.
+//   * Both coexist: a Degraded device's breaker may still be Closed, and under an Open breaker a device can still be Connected
+//     (just no traffic passing through). No cancel/replace relationship exists.
 //
-// 状态机迁移表 (modules/04_Service.md §3, ADR-0004 §6):
+// State-machine transition table (modules/04_Service.md §3, ADR-0004 §6):
 //
-//                  ┌────────── Disabled (协议/握手 BuildError 即时禁用;
-//                  │            "N 次 Degraded 累积禁用" 未实装 — KI-04)
+//                  ┌────────── Disabled (disabled immediately on protocol/handshake BuildError;
+//                  │            "N cumulative Degraded -> disable" not implemented - KI-04)
 //                  ▲
-//   New ──(GOC)──► Connecting ──(握手+连接成功)──► Connected
+//   New ──(GOC)──► Connecting ──(handshake+connect OK)──► Connected
 //                    │                                │
-//                    │                                │(连接级故障/通道死)
+//                    │                                │(conn-level fault / channel dead)
 //                    │                                ▼
-//                    └─(连接/握手失败)──► Degraded ◄──┘
+//                    └─(connect/handshake fail)──► Degraded ◄──┘
 //                                                  │
-//                              (下一轮 GOC)───────┘
+//                              (next GOC round)────┘
 //                                                  │
-//                            (重连成功)────────────► Connected
+//                            (reconnect OK)────────► Connected
 //
-// 触发者表:
-//   New → Connecting            ChannelManager::GetOrCreateChannel 入口
-//   Connecting → Connected      PerformConnect OK + 握手序列完成
-//   Connecting → Degraded       PerformConnect 失败 或 PerformHandshake 失败
-//                                或 handshake 模板 BuildError
-//   Connected → Degraded        PollingEngine 整设备段 Bad 且属连接级故障
-//                                (网络/超时/通道死) — 协议级不迁移
-//   Degraded → Connecting       下一轮 timer 触发 GOC
-//   Degraded → Connected        GOC 成功完成
-//   * → Disabled                协议/握手 BuildError (即时)
-//                                注: DeviceConfig 尚无 enabled 字段, 无配置级
-//                                停用开关 (KI-04 待定项)
-//   Disabled → Connecting       配置热重载 (ResetDevices 重建)
+// Trigger table:
+//   New -> Connecting            ChannelManager::GetOrCreateChannel entry
+//   Connecting -> Connected      PerformConnect OK + handshake sequence complete
+//   Connecting -> Degraded       PerformConnect fails or PerformHandshake fails
+//                                or handshake template BuildError
+//   Connected -> Degraded        PollingEngine marks the whole device segment Bad and it is a connection-level fault
+//                                (network/timeout/channel dead) - protocol-level does not transition
+//   Degraded -> Connecting       the next-round timer triggers GOC
+//   Degraded -> Connected        GOC completes successfully
+//   * -> Disabled                protocol/handshake BuildError (immediate)
+//                                Note: DeviceConfig has no enabled field yet, no config-level
+//                                disable switch (KI-04 pending item)
+//   Disabled -> Connecting       config hot reload (ResetDevices rebuild)
 //
-// 故障分类 (PollingEngine 侧):
-//   连接级 (→ Degraded): ConnectFailure / Timeout / NetworkError /
-//                        ChannelDead (读写返回 ConnectionLost 类)
-//   协议级 (不动生命周期): InvalidResponse / ParseError /
+// Fault classification (on the PollingEngine side):
+//   Connection-level (-> Degraded): ConnectFailure / Timeout / NetworkError /
+//                        ChannelDead (read/write returns a ConnectionLost class)
+//   Protocol-level (does not move the lifecycle): InvalidResponse / ParseError /
 //                          ProtocolNotFound / TagNotFound
-//   业务级 (不动生命周期): Bad 数据值但已收到响应
+//   Business-level (does not move the lifecycle): a Bad data value but a response was received
 //
-// 指标:
-//   gauge   myprot_device_lifecycle_state{device,state}   当前态 (0/1)
+// Metrics:
+//   gauge   myprot_device_lifecycle_state{device,state}   current state (0/1)
 //   counter myprot_device_lifecycle_transitions_total{device,from,to}
 
 #pragma once
@@ -54,16 +54,16 @@
 
 namespace MyProt { namespace Service {
 
-/// 设备生命周期状态 — 持久维度, 描述设备"是否能用 / 正在做什么"
+/// Device lifecycle state - a persistent dimension, describing "whether the device is usable / what it is doing"
 enum class DeviceLifecycleState {
-    New = 0,        // 已注册, 从未连接
-    Connecting = 1, // 物理连接/握手中
-    Connected = 2,  // 物理通道+握手均已建立, 业务可用
-    Degraded = 3,   // 通道死了或正在重连, 未到永久禁用门槛
-    Disabled = 4    // 永久禁用 (不可恢复构建错误; enabled 配置开关 KI-04 待定)
+    New = 0,        // registered, never connected
+    Connecting = 1, // physical connection/handshake in progress
+    Connected = 2,  // physical channel + handshake both established, business usable
+    Degraded = 3,   // channel dead or reconnecting, not yet at the permanent-disable threshold
+    Disabled = 4    // permanently disabled (unrecoverable build error; enabled config switch KI-04 pending)
 };
 
-/// 状态名 (供指标 label / 日志使用)
+/// State name (for metric labels / logging)
 inline const char* DeviceLifecycleName(DeviceLifecycleState s) {
     switch (s) {
         case DeviceLifecycleState::New:        return "New";
@@ -75,8 +75,8 @@ inline const char* DeviceLifecycleName(DeviceLifecycleState s) {
     }
 }
 
-/// gauge 值: 用单条 gauge + state 标签还是按状态各一条?
-/// 此处采用每设备单 gauge: value = state 编号, label 仅 device。
+/// gauge value: use a single gauge + state label, or one gauge per state?
+/// Here a single gauge per device is used: value = state number, label = device only.
 inline int DeviceLifecycleGaugeValue(DeviceLifecycleState s) {
     return static_cast<int>(s);
 }

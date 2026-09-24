@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "protocolName": "mitsubishi-mc-3e",
+  "_provenance": "报文约定依据三菱电机公开发布的 MC 协议手册 (MELSEC Communication Protocol Reference Manual) 独立整理, 未复制手册原文或任何第三方实现代码。Mitsubishi/MELSEC 为各自权利人的商标。",
   "transport": { "type": "Tcp", "defaultPort": 5007 },
   "framing": {
     "type": "LengthField",

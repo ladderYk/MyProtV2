@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "protocolName": "seer",
+  "_provenance": "报文约定依据 SEER (仙工) 公开提供的设备对接协议手册整理, 仅提取字节布局定义, 未复制手册文档文字。SEER 为其权利人商标。",
   "transport": {
     "type": "Tcp"
   },

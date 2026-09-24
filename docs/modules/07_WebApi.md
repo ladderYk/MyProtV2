@@ -159,7 +159,7 @@ public:
 
 ### 7.3.1 只读校验 /api/validate
 
-用途：WebUI 保存前「自检」、保存被拒后解释原因（见 [docs/webui.md](../../webui.md)）。
+用途：WebUI 保存前「自检」、保存被拒后解释原因（见 [docs/webui.md](../webui.md)）。
 
 | 方法 | 语义 |
 |------|------|

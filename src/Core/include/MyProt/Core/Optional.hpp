@@ -1,15 +1,15 @@
 // src/Core/include/MyProt/Core/Optional.hpp
-// 自研 Optional<T> 容器 — C++11 兼容, 替代 std::optional (v140 不支持)
+// In-house Optional<T> container - C++11 compatible, replaces std::optional (not supported by v140)
 //
-// 历史:
-//   2026-08-29 曾撤回改用 std::optional, 编译时 vcxproj v140/C++11 无 <optional> 头
-//   2026-08-29 立即回退: 恢复自研 Core::Optional<T> (本文件)
+// History:
+//   2026-08-29 briefly withdrew in favor of std::optional; at compile time the vcxproj v140/C++11 had no <optional> header
+//   2026-08-29 rolled back immediately: restored the in-house Core::Optional<T> (this file)
 //
-// 设计:
-//   - 存储 T + bool has_value_; 空实例不构造 T (用 union + placement new)
-//   - 提供 value() / operator*() / operator bool() / reset() / emplace()
-//   - Core::nullopt 静态空标记, 显式语义
-//   - 与 std::optional API 高度一致, 调用方零认知负担
+// Design:
+//   - stores T + bool has_value_; an empty instance does not construct T (uses union + placement new)
+//   - provides value() / operator*() / operator bool() / reset() / emplace()
+//   - Core::nullopt is a static empty marker, explicit semantics
+//   - closely mirrors the std::optional API, zero cognitive load for callers
 
 #pragma once
 #include <stdexcept>
@@ -132,17 +132,17 @@ public:
     }
 
 private:
-    // storage union: 容纳 trivially/non-trivially 构造的 T
+    // storage union: hosts a T with either trivial or non-trivial construction
     union Storage {
         char dummy_;
         T value_;
         Storage() : dummy_() {}
-        ~Storage() {}  // 实际析构由 Optional 控制
+        ~Storage() {}  // actual destruction is controlled by Optional
     } storage_;
     bool has_value_;
 };
 
-// 比较运算符 (便于 EXPECT_EQ 等测试)
+// comparison operators (convenient for tests such as EXPECT_EQ)
 template <typename T>
 bool operator==(const Optional<T>& a, const Optional<T>& b) {
     if (a.has_value() != b.has_value()) return false;

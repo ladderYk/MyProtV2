@@ -1,5 +1,5 @@
 // src/Transport/include/MyProt/Transport/NativeSocket.hpp
-// 原生 socket 句柄跨平台抽象 (2026-08-29 实装, 配合 SocketKeepAlive.hpp)
+// Cross-platform abstraction for the native socket handle (implemented 2026-08-29, pairs with SocketKeepAlive.hpp)
 // Windows: SOCKET (UINT_PTR) | Linux/BSD: int
 
 #pragma once

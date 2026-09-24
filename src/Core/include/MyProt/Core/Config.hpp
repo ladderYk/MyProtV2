@@ -1,6 +1,6 @@
 // src/Core/include/MyProt/Core/Config.hpp
-// Config POCO — tagged struct 强类型配置 (C++11, ADR-0010 §3)
-// 取代 std::variant; 判别联合体以 type 枚举 + 平铺字段表达
+// Config POCO - strongly-typed config via tagged structs (C++11, ADR-0010 §3)
+// Replaces std::variant; the discriminated union is expressed with a type enum + flat fields
 
 #pragma once
 #include <string>
@@ -8,24 +8,24 @@
 #include <map>
 #include <unordered_map>
 #include <cstdint>
-#include "MyProt/Core/Optional.hpp"    // 自研 Core::Optional<T> (C++11 兼容, 取代 std::optional, 2026-08-29 回退 v140 不支持 <optional>)
+#include "MyProt/Core/Optional.hpp"    // in-house Core::Optional<T> (C++11 compatible, replaces std::optional; rolled back 2026-08-29 as v140 lacks <optional>)
 
-#include "MyProt/Core/ByteOrder.hpp"   // LengthFieldConfig 依赖 ByteOrder 枚举
-#include "MyProt/Core/SimulationConfig.hpp" // ServerConfig / 引用方 (ConfigDeepValidator) 仍需此头
+#include "MyProt/Core/ByteOrder.hpp"   // LengthFieldConfig depends on the ByteOrder enum
+#include "MyProt/Core/SimulationConfig.hpp" // ServerConfig / referrers (ConfigDeepValidator) still need this header
 
 namespace MyProt { namespace Core {
 
-// ────────── 帧结构配置 (discriminated union) ──────────
+// ────────── framing config (discriminated union) ──────────
 
 struct LengthFieldConfig {
-    int lengthFieldOffset;          // 长度字段在帧内的字节偏移 (≥0, 典型 2-4)
-    int lengthFieldLength;          // 长度字段字节数 (1/2/4)
-    bool lengthIncludesHeader;      // true: 长度值含 header 字节; false: 仅 body
-    ByteOrder byteOrder;            // 长度字段字节序 (Modbus=BE, S7=LE, ...)
-    int headerLength;               // 固定 header 字节数 (用于 body 起点定位)
+    int lengthFieldOffset;          // byte offset of the length field within the frame (>=0, typically 2-4)
+    int lengthFieldLength;          // length-field byte count (1/2/4)
+    bool lengthIncludesHeader;      // true: the length value includes header bytes; false: body only
+    ByteOrder byteOrder;            // length-field byte order (Modbus=BE, S7=LE, ...)
+    int headerLength;               // fixed header byte count (used to locate the body start)
     int lengthAdjustment;           // bodyLen = parsedLen + lengthAdjustment
-                                    // (用于协议帧长≠实际数据长度时, e.g. 含 CRC 尾字节)
-    int maxFrameSize;               // 运行时帧长度安全上限 (默认 1024, 防恶意超大帧)
+                                    // (used when the protocol frame length != actual data length, e.g. trailing CRC)
+    int maxFrameSize;               // runtime frame-length safety cap (default 1024, guards against oversized frames)
 
     LengthFieldConfig()
         : lengthFieldOffset(0), lengthFieldLength(0), lengthIncludesHeader(false)
@@ -38,39 +38,39 @@ struct FixedConfig {
     FixedConfig() : fixedLength(0) {}
 };
 
-struct SilenceConfig {               // 串口/RTU 静默成帧 (v1; 成帧由通道读循环驱动)
-    int charTimeUs;                  // 单字符时间(微秒); 0 = 按协议级波特率/数据位自动折算 (仅诊断参考)
-        int frameGapUs;                  // 帧间静默阈值(微秒); 须 > 0 显式配置 — 引擎不内置协议约定, 不自动折算 charTimeUs
+struct SilenceConfig {               // serial/RTU silence framing (v1; framing is driven by the channel read loop)
+    int charTimeUs;                  // single-character time (microseconds); 0 = auto-derived from the protocol-level baud rate/data bits (diagnostic reference only)
+        int frameGapUs;                  // inter-frame silence threshold (microseconds); must be explicitly configured > 0 - the engine does not bake in protocol conventions and does not auto-derive it from charTimeUs
     int maxFrameSize;
 
     SilenceConfig() : charTimeUs(0), frameGapUs(0), maxFrameSize(256) {}
 };
 
-struct MessageConfig {               // CAN 消息成帧 (预留; v1 校验器报名称错误)
-    int maxFrameSize;                // 经典 CAN 8 / CAN FD 64
-    int idFieldLength;               // 伪字节流头部 CAN ID 占用字节数
+struct MessageConfig {               // CAN message framing (reserved; the v1 validator reports a name error)
+    int maxFrameSize;                // classic CAN 8 / CAN FD 64
+    int idFieldLength;               // bytes the CAN ID occupies in the pseudo byte-stream header
 
     MessageConfig() : maxFrameSize(8), idFieldLength(2) {}
 };
 
-enum class FramingType { LengthField, Fixed, Silence, Message };  // 对应 JSON 判别字段 "type"
+enum class FramingType { LengthField, Fixed, Silence, Message };  // maps to the JSON discriminator field "type"
 
-/// 帧结构配置 — tagged struct (取代 std::variant, ADR-0010 §3);
-/// type 决定生效分支, 不得读取未生效分支字段。
+/// Framing config - tagged struct (replaces std::variant, ADR-0010 §3);
+/// type selects the active branch; fields of an inactive branch must not be read.
 struct FramingConfig {
     FramingType type;
-    LengthFieldConfig lengthField;   // type == LengthField 时有效
-    FixedConfig fixed;               // type == Fixed 时有效
-    SilenceConfig silence;           // type == Silence 时有效
-    MessageConfig message;           // type == Message 时有效 (预留)
+    LengthFieldConfig lengthField;   // valid when type == LengthField
+    FixedConfig fixed;               // valid when type == Fixed
+    SilenceConfig silence;           // valid when type == Silence
+    MessageConfig message;           // valid when type == Message (reserved)
 
     FramingConfig() : type(FramingType::LengthField) {}
 };
 
-// ────────── 传输配置 ──────────
+// ────────── transport config ──────────
 
 struct TcpTransportConfig {
-    uint16_t defaultPort;         // 与 adl_serializer 缺省值一致 (Modbus TCP)
+    uint16_t defaultPort;         // consistent with the adl_serializer default (Modbus TCP)
     TcpTransportConfig() : defaultPort(502) {}
 };
 
@@ -96,206 +96,207 @@ struct SerialTransportConfig {
     SerialTransportConfig() : baudRate(9600), dataBits(8), parity(Parity::None), stopBits(StopBits::One) {}
 };
 
-enum class TransportType { Tcp, Tls, Serial };  // 对应 JSON 判别字段 "type"; CAN 预留不建模 (v1 校验器报名称错误)
+enum class TransportType { Tcp, Tls, Serial };  // maps to the JSON discriminator field "type"; CAN is reserved and not modeled (the v1 validator reports a name error)
 
-/// 传输配置 — tagged struct (取代 std::variant, ADR-0010 §3);
-/// type 决定生效分支, 不得读取未生效分支字段。
+/// Transport config - tagged struct (replaces std::variant, ADR-0010 §3);
+/// type selects the active branch; fields of an inactive branch must not be read.
 struct TransportConfig {
     TransportType type;
-    TcpTransportConfig tcp;          // type == Tcp 时有效
-    TlsTransportConfig tls;          // type == Tls 时有效
-    SerialTransportConfig serial;    // type == Serial 时有效
+    TcpTransportConfig tcp;          // valid when type == Tcp
+    TlsTransportConfig tls;          // valid when type == Tls
+    SerialTransportConfig serial;    // valid when type == Serial
 
     TransportConfig() : type(TransportType::Tcp) {}
 };
 
-// ────────── 响应解析器配置 ──────────
+// ────────── response-parser config ──────────
 
-/// 解析器只输出原始字节; 最终类型转换由 tag.finalType 决定 (见 Config_Schema §6)
+/// The parser emits raw bytes only; the final type conversion is decided by tag.finalType (see Config_Schema §6)
 struct ResponseParserConfig {
-    std::string validCondition;        // e.g. "resp[1]==0x03"; 空 = 跳过校验
+    std::string validCondition;        // e.g. "resp[1]==0x03"; empty = skip validation
     int dataStartIndex;
-    std::string dataLengthExpr;        // e.g. "resp[2]"; 空 = 帧长 - dataStartIndex
+    std::string dataLengthExpr;        // e.g. "resp[2]"; empty = frame length - dataStartIndex
 
     ResponseParserConfig() : dataStartIndex(0) {}
 };
 
-// ────────── 操作配置 ──────────
+// ────────── operation config ──────────
 
-struct VariableConfig;   // 前置声明 — OperationConfig::variables 引用 (完整定义见下节)
+struct VariableConfig;   // forward declaration - OperationConfig::variables references it (full definition in the next section)
 
 struct OperationConfig {
-    std::string name;                  // 由加载器从 operations map 的 key 回填, JSON 中不写
+    std::string name;                  // backfilled by the loader from the operations map key; not written in JSON
     std::vector<std::string> requestTemplate;
     ResponseParserConfig responseParser;
-        // 操作语义标注 (可选, 空 = 未标注) — "read" | "write".
-    //   运行时不依赖 (写路径按引用区分), 用于 UI 表单过滤与配置校验
-    //   (标签 operation 应为 read 类, writeOperation 应为 write 类).
+        // operation semantic annotation (optional, empty = unannotated) - "read" | "write".
+    //   Not depended on at runtime (the write path distinguishes by reference); used for UI form filtering and config validation
+    //   (a tag's operation should be a read-class one, writeOperation a write-class one).
     std::string kind;
-        // 输入/输出参数分组 (inputs / outputs) — 配置中不存在单段 variables:
-    //   inputs : 操作者提供 / 运行时生成的输入 ( source=static 值或纯 UI 提示
-    //            + source=auto{autoIncrement,frameSlice,expr,crc} ). 同层合并入
-    //            RequestBuilder 扁平变量池供模板 {Name:Xn} 查表渲染.
-    //   outputs: 由输入算出的派生输出 ( source=auto strategy=derivedLength, expr 引用
-    //            "inputs ∪ {payload,count}" ). 参数层预解析按 expr 求值注入变量池, 模板仅查表.
-    //   - 同一操作域内 inputs 与 outputs 不得同名 (校验 Error, 防"一个名字串场").
-    //   - 跨操作允许角色变化: 同名变量在不同操作可以是 input 或 output
-    //     (如 RegisterCount: 读操作=输入 / 写操作=输出), 合法且各自声明可见.
-        //   - op.variables / op.placeholderHints 均不在当前 Schema 中 (代际变迁见 ADR-0005).
+        // input/output parameter grouping (inputs / outputs) - there is no single variables section in the config:
+    //   inputs : inputs provided by the operator / generated at runtime ( source=static value or pure UI hint
+    //            + source=auto{autoIncrement,frameSlice,expr,crc} ). Merged at the same level into
+    //            RequestBuilder's flat variable pool for template {Name:Xn} lookup-based rendering.
+    //   outputs: derived outputs computed from inputs ( source=auto strategy=derivedLength, expr references
+    //            "inputs ∪ {payload,count}" ). The parameter layer pre-parses by evaluating expr and injects into the variable pool; templates only look up.
+    //   - within the same operation scope, inputs and outputs must not share a name (validation Error, preventing "one name leaking across").
+    //   - role changes across operations are allowed: the same variable name can be an input or an output in different operations
+    //     (e.g. RegisterCount: read= input / write= output), legal and each declaration is visible.
+        //   - neither op.variables nor op.placeholderHints is in the current Schema (generation changes: see ADR-0005).
     std::unordered_map<std::string, VariableConfig> inputs;
     std::unordered_map<std::string, VariableConfig> outputs;
 
-    // 注: 单次请求-应答超时统一由 device.requestTimeoutMs 配置 (2026-08-24 收敛),
-    //     协议操作不再持有 timeoutMs — 避免协议/设备两处超时漂移。
+    // Note: the single request-response timeout is configured uniformly via device.requestTimeoutMs (converged 2026-08-24);
+    //       protocol operations no longer hold a timeoutMs - avoiding timeout drift across protocol/device.
 };
 
-// ────────── 握手步骤 ──────────
+// ────────── handshake steps ──────────
 
 struct HandshakeStep {
     std::string name;
     std::vector<std::string> requestTemplate;
-    Optional<FramingConfig> framingOverride;   // 该步独立帧格式 (JSON null/缺失 = 使用通道默认)
-    std::string validCondition;                     // 成功条件表达式
-    std::string sessionExtractExpr;                 // 会话变量提取表达式 e.g. "resp[5:9]"
-    std::string sessionVariable;                    // 提取后存入的变量名 e.g. "SessionID"
-    int timeoutMs;                                  // 0 = 继承 device.connection.timeoutMs
+    Optional<FramingConfig> framingOverride;   // this step's own framing (JSON null/absent = use the channel default)
+    std::string validCondition;                     // success-condition expression
+    std::string sessionExtractExpr;                 // session-variable extraction expression e.g. "resp[5:9]"
+    std::string sessionVariable;                    // variable name the extraction is stored under e.g. "SessionID"
+    int timeoutMs;                                  // 0 = inherit device.connection.timeoutMs
 
     HandshakeStep() : timeoutMs(0) {}
 };
 
-// ────────── 协议变量声明 (inputs / outputs 两组) ──────────
+// ────────── protocol variable declarations (inputs / outputs, two groups) ──────────
 
-/// 协议变量统一声明 — 一个变量在一处声明其来源 + 值/策略 + 展示元信息.
-/// 取代旧三段 (defaultVariables / autoComputeJson / metadata.placeholderHints).
+/// Unified protocol-variable declaration - a variable declares, in one place, its source + value/strategy + display meta info.
+/// Replaces the old three sections (defaultVariables / autoComputeJson / metadata.placeholderHints).
 //
-//   source 语义 (仅两种, 其余取值直接报错):
-//     "static" — 声明. 含 value → 运行时注入 ctx.variables (标签 variables 同名键覆盖);
-//                无 value → 纯展示元信息 (不进 ctx.variables, 仅渲染 UI 提示).
-//     "auto"   — 自动计算. 模板 {Name:Xn}/{Name:raw} 消费其"参数层已解析值"
-//                (计算下沉, 模板内无 :auto:/:calc: 令牌)
+//   source semantics (only two values; any other is a hard error):
+//     "static" - declaration. With value -> injected at runtime into ctx.variables (a same-named key in the tag variables overrides it);
+//                without value -> pure display meta info (not into ctx.variables, only renders a UI hint).
+//     "auto"   - auto-computed. Templates {Name:Xn}/{Name:raw} consume its "parameter-layer resolved value"
+//                (computation pushed down; no :auto:/:calc: tokens inside templates)
 //
-//   strategy (source=auto 时):
-//     autoIncrement / frameSlice / expr / crc — 调用即自动求值 (拼进 autoComputeJson 喂 AutoComputeProvider)
-//     derivedLength — 派生长度: 参数层按载荷字节数(payload) 的纯函数预解析,
-//       只用 expr (e.g. "{WriteValue:len} + 7" / "{WriteValue:len} * 8"); 取代旧硬编码名族 (PayloadPlus4/
-//       PayloadBits/FrameWithUnit 等已随 kind 字段一并移除).
+//   strategy (when source=auto):
+//     autoIncrement / frameSlice / expr / crc - evaluated automatically on invocation (folded into autoComputeJson to feed AutoComputeProvider)
+//     derivedLength - derived length: the parameter layer pre-parses it as a pure function of the payload byte count (payload),
+//       using only expr (e.g. "{WriteValue:len} + 7" / "{WriteValue:len} * 8"); replaces the old hardcoded name families (PayloadPlus4/
+//       PayloadBits/FrameWithUnit etc. removed together with the kind field).
 //
-//   source 必须显式声明. auto 需 strategy; static 需 value (uint32_t 或字符串 → 运行时按 size).
+//   source must be declared explicitly. auto requires strategy; static requires value (uint32_t or string -> at runtime by size).
 //
-//   变长写载荷无需特殊策略声明 — 引擎扫描模板 {Name:raw} 占位符自动识别载荷,
-//   把实际载荷字节数注入 {name:len} 解析表. inputs 中载荷名仅作 UI 展示 (source=static 无 value).
+//   A variable-length write payload needs no special strategy declaration - the engine scans the template for {Name:raw} placeholders to
+//   auto-detect the payload, injecting the actual payload byte count into the {name:len} resolution table. The payload name in inputs is
+//   for UI display only (source=static without value).
 //
-// JSON 形态(方案A: 参数分层，计算下沉):
+// JSON shape (option A: parameter layering, computation pushed down):
 //   "inputs": {
-//     "UnitID":        { "source": "static", "value": 1, "label": "从站地址", "enum": [1..10] },
+//     "UnitID":        { "source": "static", "value": 1, "label": "slave address", "enum": [1..10] },
 //     "TransactionID": { "source": "auto",   "strategy": "autoIncrement", "params": { "seed": 1 } }
 //   },
 //   "operations": {
 //     "WriteMultipleRegisters": {
-//       "inputs":  { "StartAddress": { "source": "static", "label": "起始寄存器地址" },
-//                    "WriteValue":   { "source": "static", "label": "写入载荷" } },  // 仅 UI 展示; 载荷由模板 {WriteValue:raw} 识别
-//       "outputs": { "PDULength": { "source": "auto", "strategy": "derivedLength", "expr": "{WriteValue:len} + 7", "label": "PDU 长度" },
-//                    "ByteCount": { "source": "auto", "strategy": "derivedLength", "expr": "{WriteValue:len}", "label": "数据字节数" } }
+//       "inputs":  { "StartAddress": { "source": "static", "label": "start register address" },
+//                    "WriteValue":   { "source": "static", "label": "write payload" } },  // UI display only; the payload is detected by template {WriteValue:raw}
+//       "outputs": { "PDULength": { "source": "auto", "strategy": "derivedLength", "expr": "{WriteValue:len} + 7", "label": "PDU length" },
+//                    "ByteCount": { "source": "auto", "strategy": "derivedLength", "expr": "{WriteValue:len}", "label": "data byte count" } }
 //     }
 //   }
 struct VariableConfig {
     std::string source;        // "static" | "auto"
-    // static 段: 有值 → 运行时注入 ctx.variables; 无值 → 纯 UI 展示
-    Optional<uint32_t> value;  // source=static 时可选 (有值才注入)
-    // auto 段
-    std::string strategy;      // source=auto 时必填: autoIncrement|frameSlice|expr|crc|derivedLength
-    std::string paramsJson;    // source=auto 时有效 (derivedLength 不使用): 策略参数 (AutoComputeProvider 消费)
-        // source=auto + strategy=derivedLength (唯一表达):
-    //   expr: 基于载荷字节数的轻量算术表达式 (e.g. "{WriteValue:len} + 7", "{WriteValue:len} * 8");
-    //   {name:len} 引用模板中变量的字节长度 (raw 载荷 = 实际字节数, 其余 = 模板渲染宽度);
-    //   不依赖内置名词，全公式自解释。
+    // static section: with value -> injected into ctx.variables at runtime; without value -> pure UI display
+    Optional<uint32_t> value;  // optional when source=static (injected only when a value is present)
+    // auto section
+    std::string strategy;      // required when source=auto: autoIncrement|frameSlice|expr|crc|derivedLength
+    std::string paramsJson;    // valid when source=auto (derivedLength does not use it): strategy params (consumed by AutoComputeProvider)
+        // source=auto + strategy=derivedLength (sole expression):
+    //   expr: a lightweight arithmetic expression over the payload byte count (e.g. "{WriteValue:len} + 7", "{WriteValue:len} * 8");
+    //   {name:len} references the byte length of a template variable (raw payload = actual byte count, others = template render width);
+    //   no reliance on built-in nouns - fully self-explanatory by formula.
     std::string expr;
-    // 展示元信息 (所有 source 通用)
-    std::string label;         // 显示名 (e.g. "从站地址")
-    std::string unit;          // 单位 (e.g. "字节", "Hz", "个")
-    /// 枚举候选成员: value = 实际参与渲染的值, label = 显示文本.
-    ///   JSON 形态 (Config_Schema §3.2): 元素可为裸数字 (简写, label 取十进制字面量)
-    ///   或 { "value": N, "label": "..." } 对象; 混合合法.
+    // display meta info (common to all source values)
+    std::string label;         // display name (e.g. "slave address")
+    std::string unit;          // unit (e.g. "bytes", "Hz", "count")
+    /// Enum candidate members: value = the value actually used in rendering, label = display text.
+    ///   JSON shape (Config_Schema §3.2): an element may be a bare number (shorthand, label takes the decimal literal)
+    ///   or a { "value": N, "label": "..." } object; mixing is legal.
     struct EnumMember {
         uint32_t value;
         std::string label;
         EnumMember() : value(0) {}
     };
-    std::vector<EnumMember> enumValues;   // 可选枚举候选 (UI 下拉; 空 = 不切换输入形态)
-    std::string placeholder;   // 占位提示 (UI 输入框 placeholder)
+    std::vector<EnumMember> enumValues;   // optional enum candidates (UI dropdown; empty = do not switch input form)
+    std::string placeholder;   // placeholder hint (UI input-box placeholder)
 
     bool isStatic() const { return source == "static"; }
     bool isAuto()   const { return source == "auto"; }
     bool isDerivedLength() const { return isAuto() && strategy == "derivedLength"; }
 };
 
-/// 仿真配置 (协议级可选节) ──────────
+/// Simulation config (optional protocol-level section) ──────────
 
-/// 仿真操作行为描述见 SimulationConfig.hpp.
+/// See SimulationConfig.hpp for the simulation operation behavior description.
 
-/// 协议级仿真配置; simulation 位于 server.json 顶层 ServerConfig.simulation.
-/// 协议层彻底与 listenPort / initialValues / packetLossRate 等服务端行为脱耦.
+/// Protocol-level simulation config; simulation lives at the top level of server.json under ServerConfig.simulation.
+/// The protocol layer is fully decoupled from server-behavior fields such as listenPort / initialValues / packetLossRate.
 
-/// ────────── 配置代际 ──────────
+/// ────────── config generation ──────────
 
-/// 受支持的配置代际号 (ADR-0005 版本门禁) — **单一真源**.
-///   协议文件 / tags.json 根 / server.json 三者的 schemaVersion 必须精确等于此值
-///   (缺省 = Warning + 假定为本值; 不符 = ConfigError Fail-Fast).
-/// 该值的唯一来源在此; 装配点 (main.cpp / RuntimeGlue.cpp /
-///   ConfigStoreOptions 默认值), 且 Core 注释引用了一个从未定义的常量
-///   kSupportedSchemaVersion — 现补齐该常量并统一引用.
-/// 变更此值须同步迁移 configs/ 下全部配置 (ADR-0005 迁移流程).
+/// Supported config generation number (ADR-0005 version gate) - **single source of truth**.
+///   The schemaVersion of all three - protocol file / tags.json root / server.json - must exactly equal this value
+///   (absent = Warning + assume this value; mismatch = ConfigError Fail-Fast).
+/// This value's sole source is here; assembly points (main.cpp / RuntimeGlue.cpp /
+///   ConfigStoreOptions defaults), and a Core comment referenced a never-defined constant
+///   kSupportedSchemaVersion - now the constant is provided and referenced uniformly.
+/// Changing this value requires migrating every config under configs/ (the ADR-0005 migration flow).
 const int kSupportedSchemaVersion = 2;
 
-/// ────────── 协议配置 ──────────
+/// ────────── protocol config ──────────
 
-/// 标签按地址邻近合并的最大字节跨度缺省值 (TagGrouper::CoalesceAdjacent 消费).
-///   这是"协议族单次读取上限"的通用表达: Modbus FC03 上限 125 寄存器 = 250 字节.
-///   语义: 早期写死的 125 指"125 个寄存器"; 地址单位改为字节后, 同一物理跨度必须
-///   字节 (StartByteAddress / ByteCount) 后该数值未同步调整, 实际只剩 125 字节
-///   (≈62 寄存器), 否则批读合并能力静默缩水一半. 现为协议级 maxSpanBytes
-///   并修正缺省值 (250 = 125 寄存器 × 2 字节).
+/// Default maximum byte span for address-proximity tag coalescing (consumed by TagGrouper::CoalesceAdjacent).
+///   This is the general expression of a protocol family's "single-read cap": Modbus FC03 caps at 125 registers = 250 bytes.
+///   Semantics: the early hardcoded 125 meant "125 registers"; after the address unit changed to bytes
+///   (StartByteAddress / ByteCount) the value was not adjusted in sync, effectively leaving only 125 bytes
+///   (=62 registers), otherwise batch-read coalescing capacity would silently halve. It is now the protocol-level maxSpanBytes
+///   with the default corrected (250 = 125 registers x 2 bytes).
 const int kDefaultMaxSpanBytes = 250;
 
 struct ProtocolConfig {
     std::string protocolName;
     TransportConfig transport;
     FramingConfig framing;
-    Optional<ByteOrder> dataByteOrder; // 协议级数据解码字节序; 标签未显式声明 byteOrder 时回退至此; 未设置 = BigEndian
+    Optional<ByteOrder> dataByteOrder; // protocol-level data-decode byte order; falls back here when a tag does not explicitly declare byteOrder; unset = BigEndian
     std::unordered_map<std::string, OperationConfig> operations;
-    std::vector<HandshakeStep> handshake;             // 填空数组 = 无握手 (Modbus)
-        // 协议级 writeOperation / writeBytesOperation 不属于 Schema —
-    //   写能力只在标签层声明 (标签级 writeOperation / writeBytesOperation /
-    //   direction=write 三形态); 协议级字段曾使只读标签隐式可写 (legacy 兜底),
-        //   与「配置即契约」相悖 (写声明点唯一: 标签).
-        // simulation 段在 ServerConfig (server.json); 协议层不承载服务端行为.
-        // 变量声明归一为 inputs / outputs 两组 (不存在 defaultVariables/autoComputeJson/placeholderHints 段).
-        // inputs / outputs 按 source 分流:
-    //     - inputs.source=static 有 value → 注入扁平变量池 (旧 static 语义); 无 value → 仅 UI (原 hint)
-    //     - inputs.source=auto          → 拼装为 autoComputeJson 喂 AutoComputeProvider (非 derivedLength)
-    //     - outputs.source=auto derivedLength → 参数层预解析按 expr 求值注入 (引用模板变量名, {name:len} 取字节长度)
-        //     - 变长写载荷: 模板 {Name:raw} 占位符自动识别, 无需 inputs 特殊声明
+    std::vector<HandshakeStep> handshake;             // empty array = no handshake (Modbus)
+        // protocol-level writeOperation / writeBytesOperation do not belong to the Schema -
+    //   write capability is declared only at the tag layer (tag-level writeOperation / writeBytesOperation /
+    //   direction=write, three forms); protocol-level fields once made read-only tags implicitly writable (legacy fallback),
+        //   contradicting "config-as-contract" (the sole write-declaration point: the tag).
+        // The simulation block lives in ServerConfig (server.json); the protocol layer carries no server behavior.
+        // Variable declarations normalize into two groups, inputs / outputs (no defaultVariables/autoComputeJson/placeholderHints sections).
+        // inputs / outputs split by source:
+    //     - inputs.source=static with value -> injected into the flat variable pool (old static semantics); without value -> UI only (former hint)
+    //     - inputs.source=auto          -> assembled into autoComputeJson to feed AutoComputeProvider (non-derivedLength)
+    //     - outputs.source=auto derivedLength -> the parameter layer pre-parses by evaluating expr and injects (references template variable names, {name:len} takes byte length)
+        //     - variable-length write payload: detected automatically from template {Name:raw} placeholders, no special inputs declaration needed
     std::unordered_map<std::string, VariableConfig> inputs;
     std::unordered_map<std::string, VariableConfig> outputs;
-    int schemaVersion;                        // 配置代际号 (ADR-0005); 须等于 kSupportedSchemaVersion
-        // 变量别名映射 (alias → internal name).
-    //   用户在协议 JSON 的 variableAliases 段自定义变量名, 引擎内部仍用契约名.
-        //   可映射目标仅 2 个 — StartByteAddress / ByteCount (引擎真正查表读取的
-    //     跨协议字节单位); 其余旧名已降级/移出契约, 见 Config_Schema.md §2.
-    //   注意: 全局 variable-aliases.json 文件尚未实装 — 加载器只读协议文件内的本段.
-    //   别名在加载期由 ConfigDirectoryLoader::ApplyVariableAliases 一次性归一化,
-    //   运行期消费点无需感知; 本表仅作直接构造 ProtocolConfig (不经加载器) 路径的兜底.
+    int schemaVersion;                        // config generation number (ADR-0005); must equal kSupportedSchemaVersion
+        // variable alias map (alias -> internal name).
+    //   Users customize variable names in the protocol JSON's variableAliases section; the engine still uses contract names internally.
+        //   Only 2 mapping targets exist - StartByteAddress / ByteCount (the cross-protocol byte units the engine actually looks up);
+    //     other legacy names have been demoted/removed from the contract, see Config_Schema.md §2.
+    //   Note: a global variable-aliases.json file is not yet implemented - the loader only reads this section within protocol files.
+    //   Aliases are normalized once at load time by ConfigDirectoryLoader::ApplyVariableAliases,
+    //   so runtime consumers need not be aware; this map is only a fallback for the direct-construction path (bypassing the loader).
     std::unordered_map<std::string, std::string> varAliasMap;
-        // 标签按地址邻近合并的最大字节跨度 (语义见 kDefaultMaxSpanBytes).
-    //   协议族"单次读取上限"在此统一表达, 引擎不再内建任何具体数字.
-    //   注: v1 不区分读操作类型 (Modbus FC01 线圈上限 2000 远大于 FC03 寄存器上限 125),
-    //       故协议作者应按其最紧的一类读操作取值.
+        // maximum byte span for address-proximity tag coalescing (semantics: see kDefaultMaxSpanBytes).
+    //   The protocol family's "single-read cap" is expressed uniformly here; the engine no longer bakes in any concrete number.
+    //   Note: v1 does not distinguish read-operation types (Modbus FC01 coil cap 2000 far exceeds FC03 register cap 125),
+    //       so a protocol author should set it to the tightest read-operation class.
     int maxSpanBytes;
 
     ProtocolConfig() : schemaVersion(kSupportedSchemaVersion)
                      , maxSpanBytes(kDefaultMaxSpanBytes) {}
 
-    /// 把用户自定义名解析为引擎内部名; 无别名时返回原名.
+    /// Resolve a user-defined name to the engine-internal name; returns the original name when there is no alias.
     std::string ResolveVariableName(const std::string& name) const {
         auto it = varAliasMap.find(name);
         if (it != varAliasMap.end()) return it->second;
@@ -303,42 +304,42 @@ struct ProtocolConfig {
     }
 };
 
-// ────────── 设备配置 ──────────
+// ────────── device config ──────────
 
-/// 连接参数 (扁平结构, 字段按协议 transport 类型取用; 适用性校验见 Config_Schema §7)
+/// Connection parameters (flat struct; fields are used per the protocol transport type; applicability validation: see Config_Schema §7)
 struct ConnectionConfig {
-    std::string host;              // Tcp/Tls: 主机名或 IP
-    uint16_t port;                 // Tcp/Tls: 0 = 使用协议 defaultPort
-    std::string portName;          // Serial: 覆盖协议级 portName
-    int timeoutMs;                 // 连接建立超时
+    std::string host;              // Tcp/Tls: hostname or IP
+    uint16_t port;                 // Tcp/Tls: 0 = use the protocol defaultPort
+    std::string portName;          // Serial: overrides the protocol-level portName
+    int timeoutMs;                 // connection-establishment timeout
 
     ConnectionConfig() : port(0), timeoutMs(3000) {}
 };
 
-/// 韧性策略 (Config_Schema §11 / ADR-0004)。全局块与设备级覆盖同构; 设备级省略字段回退全局值。
+/// Resilience policy (Config_Schema §11 / ADR-0004). The global block and the device-level override are isomorphic; an omitted device-level field falls back to the global value.
 struct ResilienceConfig {
-    int maxAttempts;           // 读操作总尝试次数(含首次); 写恒为 1
-    int backoffBaseMs;         // 指数退避基数
-    int backoffMaxMs;          // 单次退避上限
-    int failureThreshold;      // 连续逻辑读取失败(预算耗尽) → 熔断打开
-    int cooldownMs;            // 熔断打开持续时长, 期间 CircuitOpen 快速失败
-    int halfOpenProbes;        // 半开态探测次数
+    int maxAttempts;           // total read attempts (incl. the first); writes are always 1
+    int backoffBaseMs;         // exponential-backoff base
+    int backoffMaxMs;          // single-backoff cap
+    int failureThreshold;      // consecutive logical-read failures (budget exhausted) -> breaker opens
+    int cooldownMs;            // breaker-open duration; during it, CircuitOpen fails fast
+    int halfOpenProbes;        // half-open probe count
 
     ResilienceConfig()
         : maxAttempts(3), backoffBaseMs(100), backoffMaxMs(1000)
         , failureThreshold(5), cooldownMs(10000), halfOpenProbes(1) {}
 };
 
-/// 管理面安全 (Config_Schema §12 / ADR-0008)。ConfigRoot 顶层可选块; nullopt = 全取默认。
+/// Management-plane security (Config_Schema §12 / ADR-0008). An optional top-level block in ConfigRoot; nullopt = all defaults.
 struct WebApiConfig {
-    std::string bindAddress;       // 监听地址; 默认仅环回, 远程管理需显式改 0.0.0.0
-    std::string certFile;          // TLS 证书; 与 keyFile 齐备即启用 httplib::SSLServer
-    std::string keyFile;           // TLS 私钥; 与 certFile 齐备即启用 TLS
-    bool requireAuth;              // true 时 token 缺失即启动 Fail-Fast (生产建议 true)
-    int rateLimitRps;              // 敏感端点令牌桶每秒速率
-    int rateLimitBurst;            // 令牌桶突发上限; 超限 429
-    std::string webRoot;           // 静态前端根目录 (Vue 构建产物); 空 = 不托管静态页面
-    // 注: token 不入配置块, 取环境变量 MYPROT_API_TOKEN, 日志脱敏
+    std::string bindAddress;       // listen address; loopback-only by default, remote management requires explicitly setting 0.0.0.0
+    std::string certFile;          // TLS certificate; present together with keyFile enables httplib::SSLServer
+    std::string keyFile;           // TLS private key; present together with certFile enables TLS
+    bool requireAuth;              // when true, a missing token is a startup Fail-Fast (true recommended in production)
+    int rateLimitRps;              // sensitive-endpoint token-bucket rate (per second)
+    int rateLimitBurst;            // token-bucket burst cap; over limit -> 429
+    std::string webRoot;           // static front-end root (Vue build output); empty = do not serve static pages
+    // Note: the token is not in the config block; it is read from the environment variable MYPROT_API_TOKEN, masked in logs
 
     WebApiConfig()
         : bindAddress("127.0.0.1"), requireAuth(false)
@@ -349,62 +350,63 @@ struct DeviceConfig {
     std::string id;
     std::string protocol;
     ConnectionConfig connection;
-    int requestTimeoutMs;                  // 单次请求-应答超时(ms); 该设备所有操作共用 — 唯一配置点 (2026-08-24 收敛)
-    Optional<std::string> username;  // 协议级认证凭据: 握手阶段作为模板变量注入, 日志脱敏
+    int requestTimeoutMs;                  // single request-response timeout (ms); shared by all operations of this device - the sole config point (converged 2026-08-24)
+    Optional<std::string> username;  // protocol-level auth credentials: injected as a template variable during handshake, masked in logs
     Optional<std::string> password;
-    Optional<ResilienceConfig> resilience; // 逐设备韧性覆盖; 未设置 = 用全局 ConfigRoot.resilience
-    // 设备级模板变量缺省 (§4): 加载期合并入各标签有效变量集, 标签显式声明优先
+    Optional<ResilienceConfig> resilience; // per-device resilience override; unset = use the global ConfigRoot.resilience
+    // device-level template-variable defaults (§4): merged at load time into each tag's effective variable set, with the tag's explicit declaration taking precedence
     std::map<std::string, uint32_t> variables;
 
     DeviceConfig() : requestTimeoutMs(3000) {}
 };
 
-// ────────── 协议族约定键名 (引擎 ↔ 协议模板的接口约定) ──────────
-// 引擎中所有协议名字面量收敛于以下约定函数 (跨协议字节单位 2 个,
-//   另含 BitOffset 位偏移); 除此之外 Core 不含任何协议知识.
-//   {StartByteAddress/ByteCount} 是跨协议统一的字节单位 (引擎内部);
-//   {StartAddress/RegisterCount} 是协议族单位 (协议 JSON 模板按 derivedLength 从前两者推导;
-//   Modbus: {StartByteAddress}/2 = 寄存器号; S7: 直接字节地址;
-//   线圈类: StartByteAddress*8 + BitOffset = 线圈位地址).
+// ────────── protocol-family convention key names (the engine <-> protocol-template interface contract) ──────────
+// All protocol-name literals in the engine converge into the following convention functions (2 cross-protocol byte units,
+//   plus BitOffset); otherwise Core carries no protocol knowledge.
+//   {StartByteAddress/ByteCount} are the cross-protocol byte units (engine-internal);
+//   {StartAddress/RegisterCount} are protocol-family units (the protocol JSON template derives them from the former two via derivedLength;
+//   Modbus: {StartByteAddress}/2 = register number; S7: direct byte address;
+//   coil-class: StartByteAddress*8 + BitOffset = coil bit address).
 
-/// 起始字节地址变量名 — 跨协议字节单位
+/// start-byte-address variable name - cross-protocol byte unit
 inline std::string StartByteAddressVariableName() {
     return "StartByteAddress";
 }
 
-/// 数据区字节跨度变量名 — 跨协议字节单位
+/// data-area byte-span variable name - cross-protocol byte unit
 inline std::string ByteCountVariableName() {
     return "ByteCount";
 }
 
-// StartAddressVariableName / RegisterCountVariableName 不存在 —
-//   协议族单位名 (StartAddress/RegisterCount) 由协议 JSON outputs(derivedLength) 自行声明,
-//   引擎从不查表读取; 校验器的模板引用域白名单已改为从 protocol.outputs / op.outputs
-//   动态收集派生名 (ConfigDeepValidator), 不再假定任何具体名.
+// StartAddressVariableName / RegisterCountVariableName do not exist -
+//   the protocol-family unit names (StartAddress/RegisterCount) are declared by the protocol JSON outputs(derivedLength) itself;
+//   the engine never looks them up; the validator's template-reference-scope whitelist has been changed to collect
+//   derived names dynamically from protocol.outputs / op.outputs
+//   (ConfigDeepValidator), no longer assuming any concrete name.
 
-/// 写路径默认注入的变量名 — 非契约名, 仅作 TagDefinition::writeVariable 的缺省值
-///   (标签可用 writeVariable 覆盖; 模板按需用 {WriteValue:X4} 或 {WriteValue:raw} 消费).
+/// The variable name injected by default on the write path - not a contract name, only the default value of TagDefinition::writeVariable
+///   (a tag can override it via writeVariable; templates consume {WriteValue:X4} or {WriteValue:raw} as needed).
 const char* const kDefaultWriteValueVariable = "WriteValue";
 
-/// 位偏移在 derivedLength expr 中的作用域名 — 非契约名.
-///   协议 inputs 需声明同名 static 缺省 0 (满足 expr 引用域校验);
-///   标签侧的值来自 TagDefinition::bitOffset, 由 TagReader 注入本键以覆盖协议缺省.
+/// The scope domain a bit offset plays in a derivedLength expr - not a contract name.
+///   Protocol inputs must declare a same-named static default 0 (to satisfy the expr-reference-scope validation);
+///   the tag-side value comes from TagDefinition::bitOffset, injected under this key by TagReader to override the protocol default.
 const char* const kBitOffsetExprVariable = "BitOffset";
 
-// ────────── 帧结构保留名 (单一真源) ──────────
-//   这些名字由引擎内建解释 — 协议变量名 / 标签变量名 / variableAliases 别名均不得
-//   声明占用 (校验器报错, 见 ConfigDeepValidator 的保留名冲突检查).
-//   唯一来源在此; 禁止在 ConfigDeepValidator / AutoComputeProvider /
-//   FrameConsistencyCheck 的字面量集合; 现收敛于此, 并逐名常量化供各使用点直接引用.
+// ────────── framing reserved names (single source of truth) ──────────
+//   These names are interpreted by the built-in engine - protocol variable names / tag variable names / variableAliases
+//   must not declare them (the validator errors, see ConfigDeepValidator's reserved-name conflict check).
+//   Sole source is here; forbidden to keep literal sets in ConfigDeepValidator / AutoComputeProvider /
+//   FrameConsistencyCheck; now converged here, each name made a constant for direct reference at every use point.
 
-const char* const kFramePrimitiveName = "Frame";      // {Frame:fixed} 模板原语 (模板固定段总宽)
-const char* const kExprMagicFrameLen  = "__frameLen"; // expr 魔法变量 = 已生成字节数 (不含本段自身)
-const char* const kExprMagicFrameEnd  = "__frameEnd"; // 同 __frameLen, 语义更清晰
-const char* const kPropLength         = "len";        // {Name:len} 取变量字节宽度
-const char* const kPropOffset         = "offset";     // {Name:offset} 取占位符首现偏移
-const char* const kPropFixed          = "fixed";      // {Frame:fixed} 属性
+const char* const kFramePrimitiveName = "Frame";      // {Frame:fixed} template primitive (total width of the template's fixed segments)
+const char* const kExprMagicFrameLen  = "__frameLen"; // expr magic variable = bytes generated so far (excluding this segment itself)
+const char* const kExprMagicFrameEnd  = "__frameEnd"; // same as __frameLen, clearer semantics
+const char* const kPropLength         = "len";        // {Name:len} takes the variable's byte width
+const char* const kPropOffset         = "offset";     // {Name:offset} takes the offset of the placeholder's first occurrence
+const char* const kPropFixed          = "fixed";      // {Frame:fixed} property
 
-/// 全部保留名 — 校验器的变量名 / 别名冲突检查共用.
+/// All reserved names - shared by the validator's variable-name / alias conflict checks.
 const char* const kFrameReservedNames[] = {
     kFramePrimitiveName, kExprMagicFrameLen, kExprMagicFrameEnd,
     kPropLength, kPropOffset, kPropFixed
@@ -412,7 +414,7 @@ const char* const kFrameReservedNames[] = {
 const int kFrameReservedNameCount =
     static_cast<int>(sizeof(kFrameReservedNames) / sizeof(kFrameReservedNames[0]));
 
-/// 是否为帧结构保留名.
+/// Whether a name is a framing reserved name.
 inline bool IsFrameReservedName(const std::string& name) {
     for (int i = 0; i < kFrameReservedNameCount; ++i) {
         if (name == kFrameReservedNames[i]) return true;
@@ -420,69 +422,69 @@ inline bool IsFrameReservedName(const std::string& name) {
     return false;
 }
 
-// ────────── 标签定义 ──────────
+// ────────── tag definition ──────────
 
-/// 读后换算器 (C1, ROADMAP #8 提级项): 采集值 → 工程值, 按数组序依次应用.
-/// 仅读路径 (ResponseParser); 写路径不做逆向换算 (写语义歧义, 见 ROADMAP 备注).
-/// v1 仅 scale: value' = value * k + b. 典型: 温度 0.1°C/bit → k=0.1, b=0;
-///   4-20mA 标定 → k=(量程上限-下限)/27648, b=下限.
+/// Post-read converter (C1, ROADMAP #8 promotion item): acquired value -> engineering value, applied in array order.
+/// Read path only (ResponseParser); the write path does no reverse conversion (write semantics ambiguous, see the ROADMAP note).
+/// v1 supports only scale: value' = value * k + b. Typical: temperature 0.1°C/bit -> k=0.1, b=0;
+///   4-20mA calibration -> k=(range upper-lower)/27648, b=lower.
 struct ScaleConverter {
-    double k;   // 系数
-    double b;   // 偏移
+    double k;   // scale factor
+    double b;   // offset
 
     ScaleConverter() : k(1.0), b(0.0) {}
 };
 
 struct TagDefinition {
-    std::string name;                   // 全局唯一 (e.g. "PLC-001.Temperature")
+    std::string name;                   // globally unique (e.g. "PLC-001.Temperature")
     std::string deviceId;
-    std::string operation;              // 操作名 (e.g. "ReadHoldingRegisters")
-        // 标签变量表 — 跨协议字节单位:
-    //   StartByteAddress / ByteCount 为引擎契约名 (TagGrouper 取址 / 派生长度引用);
-    //   协议族单位 (Modbus 的 StartAddress/RegisterCount、S7 的 DB/偏移族) 不写在标签里 —
-    //   由协议 JSON 的 outputs(derivedLength) 派生. 标签显式声明同名键会覆盖派生值 (校验器告警).
+    std::string operation;              // operation name (e.g. "ReadHoldingRegisters")
+        // tag variable table - cross-protocol byte units:
+    //   StartByteAddress / ByteCount are engine contract names (TagGrouper takes the address / derived-length references);
+    //   protocol-family units (Modbus's StartAddress/RegisterCount, S7's DB/offset family) are not written in the tag -
+    //   they are derived by the protocol JSON's outputs(derivedLength). A tag explicitly declaring a same-named key overrides the derived value (validator warning).
     std::unordered_map<std::string, uint32_t> variables;
     int scanRateMs;
-        // registerCount 字段不存在 — 字节跨度由协议 outputs.ByteCount (derivedLength) 派生.
-    //   引擎零硬编码 (无"寄存器 = 2 字节"假设); 跨协议字节跨度统一在协议 JSON 内表达.
-    //   Modbus: variables.RegisterCount (协议族单位) → derivedLength.ByteCount = {RegisterCount} * 2
-    //   S7:     variables.ByteCount (字节单位) 直接
-    std::string finalType;              // 转换目标类型 (Config_Schema §6)
-    Optional<ByteOrder> byteOrder; // 未设置 = 回退链: 协议 dataByteOrder → BigEndian
-        // deadband / reportMode 不存在 — 上报过滤无消费落点 (唯一结果出口 onResults
-    //   直连 LatestValueStore, 在此过滤会让"最新值缓存"失真); 见 ROADMAP 上报过滤项.
-    bool coalesce;                      // 是否参与地址邻近合并; 单地址读(如 S7 ReadVar)设 false
-        // 位偏移 (0-7), 语义 = StartByteAddress 所指字节内的位偏移; -1 = 未声明.
-        //   一等字段 (不再用 variables["BitOffset"] 魔法键表达):
-    //     - ResponseParser 的 Bool 位提取直接读本字段 (不再查变量表);
-    //     - TagReader 在 bitOffset >= 0 时注入 expr 作用域键 kBitOffsetExprVariable,
-    //       供协议 outputs derivedLength 引用 (如 Modbus FC05/FC15 位寻址派生).
+        // the registerCount field does not exist - the byte span is derived by the protocol outputs.ByteCount (derivedLength).
+    //   The engine has zero hardcoding (no "register = 2 bytes" assumption); the cross-protocol byte span is expressed uniformly within the protocol JSON.
+    //   Modbus: variables.RegisterCount (protocol-family unit) -> derivedLength.ByteCount = {RegisterCount} * 2
+    //   S7:     variables.ByteCount (byte unit) directly
+    std::string finalType;              // conversion target type (Config_Schema §6)
+    Optional<ByteOrder> byteOrder; // unset = fallback chain: protocol dataByteOrder -> BigEndian
+        // deadband / reportMode do not exist - the reporting filter has no consumption landing point (the sole result
+    //   outlet onResults connects directly to LatestValueStore; filtering there would distort the "latest-value cache"); see the ROADMAP reporting-filter item.
+    bool coalesce;                      // whether it participates in address-proximity coalescing; a single-address read (e.g. S7 ReadVar) sets false
+        // bit offset (0-7), semantics = the bit offset within the byte pointed to by StartByteAddress; -1 = undeclared.
+        //   a first-class field (no longer expressed via the variables["BitOffset"] magic key):
+    //     - ResponseParser's Bool bit extraction reads this field directly (no longer consulting the variable table);
+    //     - TagReader, when bitOffset >= 0, injects the expr-scope key kBitOffsetExprVariable,
+    //       for protocol outputs derivedLength to reference (e.g. Modbus FC05/FC15 bit-addressing derivation).
     int bitOffset;
-        // ── 写标签: direction="write" 时本标签定义一次写入而非采集点 ──
-    // operation 直接指向写操作模板 (如 "WriteVar"/"WriteSingleRegister"),
-    // variables 携带完整写语义 (TransportSize/Length/DBNumber/AddrLo/...),
-    // 不参与轮询; /api/data/write 按 tag 名定向到本标签.
-    std::string direction;              // "read" (默认, 参与轮询) | "write" (只写标签, 不参与轮询)
-    std::string writeVariable;          // 数值/字节注入的模板变量名 (默认 "WriteValue",
-                                        //   模板按需用 {WriteValue:X4} 或 {WriteValue:raw} 消费)
-    std::string readBackTag;            // 写标签: 写后读回校验引用的读标签名
-                                        //   (空 = 用写标签自身读语义原样重读;
-                                        //   v1.x 已取代 "ReadHoldingRegisters" 硬编码约定)
-                                        // 注: 请求-应答超时不在此配置, 统一由 device.requestTimeoutMs 决定 (2026-08-24 收敛)
-        // ── 标签级写能力: direction=read 标签在此声明写语义 ──
-    // 三形态: 只读 (两字段均空, 写 API 明确拒绝)
-    //         读写 (writeOperation 非空 = 可标量写; writeBytesOperation 非空 = 可变长写)
-    //         只写 (direction=write, operation 即写操作, 不参与轮询).
-    // 写请求变量表 = defaultVariables → variables → writeVariables → 注入 {writeVariable};
-    // 读回校验用自身 operation (readBackTag 无需配置).
-        // 协议级 writeOperation/writeBytesOperation 兜底不存在 — 写声明点唯一: 标签.
-    std::string writeOperation;         // 标量写 (POST value) 用的操作模板名 (如 "WriteVar")
-    std::string writeBytesOperation;    // 变长写 (POST bytes) 用的操作模板名 (模板以 {Name:raw} 消费)
-    std::unordered_map<std::string, uint32_t> writeVariables; // 写请求专用变量覆盖 (如 S7 写的 TransportSize/Length 与读不同)
+        // -- write tag: when direction="write", this tag defines a write rather than an acquisition point --
+    // operation points directly at the write-operation template (e.g. "WriteVar"/"WriteSingleRegister"),
+    // variables carry the full write semantics (TransportSize/Length/DBNumber/AddrLo/...),
+    // and it does not participate in polling; /api/data/write routes to this tag by tag name.
+    std::string direction;              // "read" (default, participates in polling) | "write" (write-only tag, does not participate in polling)
+    std::string writeVariable;          // template variable name the value/bytes are injected into (default "WriteValue",
+                                        //   templates consume {WriteValue:X4} or {WriteValue:raw} as needed)
+    std::string readBackTag;            // write tag: the read-tag name referenced by the post-write read-back check
+                                        //   (empty = use the write tag's own read semantics to re-read as-is;
+                                        //   v1.x has replaced the "ReadHoldingRegisters" hardcoded convention)
+                                        // Note: the request-response timeout is not configured here; it is decided uniformly by device.requestTimeoutMs (converged 2026-08-24)
+        // -- tag-level write capability: a direction=read tag declares write semantics here --
+    // Three forms: read-only (both fields empty, the write API rejects explicitly)
+    //         read-write (writeOperation non-empty = scalar-writable; writeBytesOperation non-empty = variable-length-writable)
+    //         write-only (direction=write, operation is the write operation, does not participate in polling).
+    // Write-request variable table = defaultVariables -> variables -> writeVariables -> injected {writeVariable};
+    // the read-back check uses its own operation (readBackTag needs no configuration).
+        // protocol-level writeOperation/writeBytesOperation fallback does not exist - the sole write-declaration point: the tag.
+    std::string writeOperation;         // operation-template name used by a scalar write (POST value) (e.g. "WriteVar")
+    std::string writeBytesOperation;    // operation-template name used by a variable-length write (POST bytes) (template consumes via {Name:raw})
+    std::unordered_map<std::string, uint32_t> writeVariables; // write-request-specific variable overrides (e.g. S7 write's TransportSize/Length differ from read)
 
-    // 读后换算链 (可选; 空 = 不换算, 行为与旧版完全一致).
-    //   仅对数值型 (整型/浮点) 结果生效; Bool/ByteArray/String 标签声明 converters 为校验错误.
-    //   换算后值统一为 Double (TypedValue::d) — 上报/快照/写回比对的消费方均可读.
+    // post-read conversion chain (optional; empty = no conversion, behavior identical to the old version).
+    //   Takes effect only for numeric (integer/float) results; a Bool/ByteArray/String tag declaring converters is a validation error.
+    //   The converted value is uniformly a Double (TypedValue::d) - readable by reporting/snapshot/write-back comparison consumers.
     std::vector<ScaleConverter> converters;
 
     TagDefinition()
@@ -490,16 +492,16 @@ struct TagDefinition {
         , coalesce(true)
         , direction("read"), writeVariable(kDefaultWriteValueVariable)
         , bitOffset(-1) {
-        // converters 无内置实例 — 默认空链 = 不换算
+        // converters have no built-in instances - a default empty chain = no conversion
     }
 };
 
-// ────────── 配置根 (对应 tags.json) ──────────
+// ────────── config root (maps to tags.json) ──────────
 
 struct ConfigRoot {
-    int schemaVersion;                          // 配置代际号 (ADR-0005); 须等于 kSupportedSchemaVersion
-    Optional<ResilienceConfig> resilience; // 全局韧性策略 (Config_Schema §11 / ADR-0004); 未设置 = 全取默认
-    Optional<WebApiConfig> webApi;         // 管理面安全 (Config_Schema §12 / ADR-0008); 未设置 = 全取默认
+    int schemaVersion;                          // config generation number (ADR-0005); must equal kSupportedSchemaVersion
+    Optional<ResilienceConfig> resilience; // global resilience policy (Config_Schema §11 / ADR-0004); unset = all defaults
+    Optional<WebApiConfig> webApi;         // management-plane security (Config_Schema §12 / ADR-0008); unset = all defaults
     std::vector<DeviceConfig> devices;
     std::vector<TagDefinition> tags;
 

@@ -1,6 +1,7 @@
 {
     "schemaVersion":  2,
     "protocolName":  "modbus-tcp",
+    "_provenance":  "报文约定依据 Modbus Organization (modbus.org) 免费发布的 MODBUS Application Protocol Specification V1.1b3 (Serial Line / TCP/IP) 整理, 未复制规范文档原文。MODBUS® 为 Schneider Electric 注册商标。",
     "transport":  {
                       "type":  "Tcp"
                   },

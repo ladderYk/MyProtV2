@@ -1,6 +1,6 @@
 // src/Transport/include/MyProt/Transport/IChannel.hpp
-// 通道接口 — 异步回调模型 (C++11, ADR-0010 §2)
-// 签名约定: 尾参回调; 回调在 io_context 线程触发, 实现方须保证回调保活 (shared_ptr 捕获)
+// Channel interface - async callback model (C++11, ADR-0010 §2)
+// Signature convention: trailing callback; the callback fires on the io_context thread, and implementers must keep it alive (shared_ptr capture)
 
 #pragma once
 #include <string>
@@ -17,40 +17,40 @@ namespace MyProt { namespace Transport {
 
 using Bytes = Core::Bytes;   // std::vector<uint8_t>
 
-/// 连接完成回调 (成功或失败时恰好调用一次)
+/// Connection-completion callback (invoked exactly once on success or failure)
 using ConnectHandler = std::function<void(Core::Expected<void>)>;
 
-/// 请求-响应完成回调 (收到完整响应帧或失败时恰好调用一次)
+/// Request-response completion callback (invoked exactly once when a full response frame is received or on failure)
 using ReceiveHandler = std::function<void(Core::Expected<Core::Bytes>)>;
 
-/// 通道抽象基类 — Tcp/Tls/Serial 具体通道的统一接口。
-/// 单通道单请求: 同一时刻仅允许一笔在途 SendReceive (网关层按设备串行化)。
+/// Channel abstract base class - the unified interface for the concrete Tcp/Tls/Serial channels.
+/// One channel, one request: only one in-flight SendReceive at a time (the gateway layer serializes per device).
 class IChannel {
 public:
     virtual ~IChannel() = default;
 
-    /// 异步建立物理连接; timeout 到期未完成则按 Timeout 失败
+    /// Asynchronously establish the physical connection; if not done by the timeout, fail as Timeout
     virtual void Connect(const Core::ConnectionConfig& endpoint,
                          std::chrono::milliseconds timeout,
                          ConnectHandler handler) = 0;
 
-    /// 异步请求-响应: 发送 request, 按 framingConfig 规则收取完整响应帧;
-    /// framingConfig 为 null 时使用通道内置默认成帧
+    /// Asynchronous request-response: send request, collect the full response frame per framingConfig rules;
+    /// when framingConfig is null, use the channel's built-in default framing
     virtual void SendReceive(const Bytes& request,
                              std::shared_ptr<const Core::FramingConfig> framingConfig,
                              std::chrono::milliseconds timeout,
                              ReceiveHandler handler) = 0;
 
-    /// 断开并释放底层资源; 挂起操作以 ConnectionClosed 完成
+    /// Disconnect and release underlying resources; pending operations complete with ConnectionClosed
     virtual void Disconnect() = 0;
 
     virtual bool IsConnected() const = 0;
 
-    /// 最近一次失败的错误快照 (线程安全)
+    /// A snapshot of the most recent failure's error (thread-safe)
     virtual Core::Error GetLastError() const = 0;
 };
 
-/// 通道智能指针
+/// Channel smart pointer
 using IChannelPtr = std::shared_ptr<IChannel>;
 
 }} // namespace MyProt::Transport

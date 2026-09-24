@@ -1,5 +1,5 @@
 // src/Gateway/include/MyProt/Gateway/TagGrouper.hpp
-// 标签分组器 — 按 (deviceId, operation, scanRate) 分组 + 地址邻近合并 (modules/05_Gateway.md §5.4)
+// Tag grouper - groups by (deviceId, operation, scanRate) + coalesces nearby addresses (modules/05_Gateway.md §5.4)
 
 #pragma once
 #include <vector>
@@ -9,50 +9,50 @@
 
 namespace MyProt { namespace Gateway {
 
-/// 标签分组 — 同一 (deviceId, operation, scanRate) 的标签集合
+/// Tag group - the set of tags with the same (deviceId, operation, scanRate)
 struct TagGroup {
     std::string deviceId;
     std::string operationName;
     int scanRateMs;
-    std::vector<size_t> tagIndices;   // 原始 tags 数组中的索引
+    std::vector<size_t> tagIndices;   // indices into the original tags array
 };
 
-/// 标签分组器 — 将标签按设备+操作+扫描周期分组, 再按地址邻近性合并为批量请求
+/// Tag grouper - groups tags by device+operation+scan-period, then coalesces them into batch requests by address proximity
 class TagGrouper {
 public:
-    /// 按 (deviceId, operation, scanRate) 分组
+    /// Group by (deviceId, operation, scanRate)
     std::vector<TagGroup> GroupByScanRate(
         const std::vector<Core::TagDefinition>& tags);
 
-    /// 将分组内相邻地址标签合并为 MergedRequest 列表
-    /// @param group 分组结果
-    /// @param tags 原始标签数组 (用于读取 variables 中的地址)
-    /// @param maxSpan 最大合并地址跨度 (字节; 超过则拆分).
-    ///        实际调用方 (PollingEngine) 传协议级 ProtocolConfig::maxSpanBytes;
-    ///        此处缺省仅为直接构造路径兜底.
+    /// Coalesce adjacent-address tags within a group into a list of MergedRequests
+    /// @param group the grouping result
+    /// @param tags the original tag array (used to read the addresses in variables)
+    /// @param maxSpan the maximum coalesced address span (bytes; split if exceeded).
+    ///        The actual caller (PollingEngine) passes the protocol-level ProtocolConfig::maxSpanBytes;
+    ///        the default here is only a fallback for the direct-construction path.
     std::vector<MergedRequest> CoalesceAdjacent(
         const TagGroup& group,
         const std::vector<Core::TagDefinition>& tags,
         int maxSpan = Core::kDefaultMaxSpanBytes);
 
-    /// 便捷接口: 一步完成分组 + 合并
-    /// @param tags 待分组的标签定义
-    /// @param maxSpan 最大地址跨度 (字节; 超过则不合并)
-    /// @return 合并后的请求列表
+    /// Convenience interface: complete grouping + coalescing in one step
+    /// @param tags the tag definitions to group
+    /// @param maxSpan the maximum address span (bytes; do not coalesce if exceeded)
+    /// @return the coalesced request list
     std::vector<MergedRequest> Group(
         const std::vector<Core::TagDefinition>& tags,
         int maxSpan = Core::kDefaultMaxSpanBytes);
 
-    /// 从 tag.variables 中提取起始字节地址.
-        ///   为跨协议字节单位 "StartByteAddress" (协议族地址名如 Modbus 的寄存器号
-        ///   由协议 JSON outputs 的 derivedLength 派生); 无 addressVariable 配置.
-    ///   唯一定义处 — TagReader 等管线组件共用, 不再各自复制
+    /// Extract the start byte address from tag.variables.
+        ///   It is the cross-protocol byte unit "StartByteAddress" (protocol-family address names such as the Modbus register number
+        ///   are derived by the protocol JSON outputs' derivedLength); there is no addressVariable config.
+    ///   Single point of definition - pipeline components such as TagReader share it, no longer each copying it.
     static uint32_t GetStartAddress(const Core::TagDefinition& tag);
 
-        /// 从 tag.variables["ByteCount"] 提取字节跨度.
-    ///   替代旧的 tag.registerCount × 2 (Modbus 协议族硬编码);
-    ///   引擎零协议知识, 字节数完全由协议 JSON derivedLength 表达.
-    ///   没声明 → 回退 2 (UInt16 最小跨度, 与早期 finalType 默认值兼容).
+        /// Extract the byte span from tag.variables["ByteCount"].
+    ///   Replaces the old tag.registerCount x 2 (Modbus-protocol-family hardcoding);
+    ///   the engine has zero protocol knowledge, the byte count is fully expressed by the protocol JSON derivedLength.
+    ///   Not declared -> fall back to 2 (the UInt16 minimum span, compatible with the early finalType default).
     static uint32_t GetByteCount(const Core::TagDefinition& tag);
 
 private:

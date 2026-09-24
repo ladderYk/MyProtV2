@@ -1,7 +1,7 @@
-// src/App/RuntimeGlue.hpp — 生产/E2E 两进程共享胶水层 API
-// 崩溃取证 / 停止信号 / 扩展路由 handler / ApplyRuntimeSync 运行时装配。
-// 实现 (RuntimeGlue.cpp) 同时编入 MyProt.App 与 MyProt.E2E 两个工程。
-// 运行时状态聚合见 AppContext.hpp; 路由注册见 HttpRouter.hpp。
+// src/App/RuntimeGlue.hpp - glue-layer API shared by the production/E2E two processes
+// Crash forensics / stop signal / extension-route handler / ApplyRuntimeSync runtime assembly.
+// The implementation (RuntimeGlue.cpp) is compiled into both MyProt.App and MyProt.E2E projects.
+// Runtime-state aggregation see AppContext.hpp; route registration see HttpRouter.hpp.
 #ifndef MYPROT_APP_RUNTIMEGLUE_HPP
 #define MYPROT_APP_RUNTIMEGLUE_HPP
 
@@ -13,40 +13,40 @@
 
 namespace MyProt { namespace App {
 
-// ── 崩溃取证 / 运行控制 (生产入口专用) ──
-void InstallCrashDiagnostics();     // SEH + dbghelp 栈回溯安装
+// ── Crash forensics / run control (production entry only) ──
+void InstallCrashDiagnostics();     // SEH + dbghelp stack-trace installation
 bool IsRunning();
-void InstallStopSignals();          // Ctrl+C / 关窗 → g_running=false
+void InstallStopSignals();          // Ctrl+C / window close -> g_running=false
 
-// ── URL 查询参数提取 ("/api/x?start=3&count=8", key=start → "3") ──
+// ── URL query-parameter extraction ("/api/x?start=3&count=8", key=start -> "3") ──
 std::string QueryParam(const std::string& path, const std::string& key);
 
-// ── WebApi 扩展路由 handler (两进程共用; method 校验在各 handler 内部) ──
+// ── WebApi extension-route handlers (shared by both processes; method validation is inside each handler) ──
 
-/// /api/sim/* 仿真数据面: status 清单 / registers 读(GET) 写(POST)
+/// /api/sim/* simulation data plane: status list / registers read (GET) write (POST)
 std::pair<int, std::string> HandleSimApi(const HttpRequest& req,
                                          const SimServerMap& sims);
 
-/// latest 快照 → JSON ({count, tags:[...]}) — /latest 与 SSE /stream 共用
+/// latest snapshot -> JSON ({count, tags:[...]}) - shared by /latest and the SSE /stream
 std::string BuildLatestJson(const Polling::LatestValueStore& latestStore,
                             const std::string& deviceFilter);
 
-/// GET /api/data/latest 实时数据快照 (?device= 过滤)
+/// GET /api/data/latest real-time data snapshot (?device= filter)
 std::pair<int, std::string> HandleDataApi(
     const HttpRequest& req, const Polling::LatestValueStore& latestStore);
 
-/// POST /api/data/write 单寄存器写 (io.post 全链, 与轮询回调串行)
+/// POST /api/data/write single-register write (full chain via io.post, serialized with the polling callback)
 std::pair<int, std::string> HandleWriteApi(const AppContext& ctx,
                                            const HttpRequest& req);
 
-/// GET/POST /api/validate?scope=&name= 只读校验 (不落盘/不重载), 返回结构化问题清单。
-/// 实现见 ValidateApi.cpp; scope: protocols|tags。
+/// GET/POST /api/validate?scope=&name= read-only validation (no disk write/no reload), returning a structured issue list.
+/// Implementation see ValidateApi.cpp; scope: protocols|tags.
 std::pair<int, std::string> HandleValidateApi(const Service::ConfigStore& store,
                                               const HttpRequest& req);
 
-// ── reload 运行时联动 — 首次装配与热重载唯一代码路径 ──
-// 重新加载配置目录 → 全停重建仿真器 → 清空实时快照 → post 到 io 线程
-// 重装配引擎。新配置非法时保持旧运行态并返回错误 (配合 ConfigStore 自动回滚)。
+// ── reload runtime linkage - the sole code path for first-time assembly and hot reload ──
+// Reload the config directory -> fully stop and rebuild simulators -> clear real-time snapshots -> post to the io thread
+// to re-assemble the engine. On invalid new config, keep the old running state and return an error (pairs with ConfigStore auto-rollback).
 Core::VoidExpected ApplyRuntimeSync(const std::string& configDir,
                                     AppContext& ctx, std::ostream* log);
 

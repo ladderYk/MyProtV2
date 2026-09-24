@@ -1,6 +1,6 @@
 // src/Engine/include/MyProt/Engine/ExpressionEvaluator.hpp
-// 表达式求值器 — validCondition / dataLengthExpr 等 (modules/02_Engine.md)
-// 递归下降解析器, C 优先级对齐 (ADR-0003 KI-13)
+// Expression evaluator - validCondition / dataLengthExpr etc. (modules/02_Engine.md)
+// Recursive-descent parser, C precedence-aligned (ADR-0003 KI-13)
 
 #pragma once
 #include <string>
@@ -11,27 +11,27 @@
 
 namespace MyProt { namespace Engine {
 
-/// 表达式求值器
-/// 支持 resp[N] 字节引用, resp[A:B] 切片, 比较运算, 算术/逻辑运算
-/// EBNF 优先级: || < && < | < ^ < & < == != < < > <= >= < << >> < + - < * / % < 一元(! - ~)
+/// Expression evaluator
+/// Supports resp[N] byte references, resp[A:B] slices, comparison operators, arithmetic/logical operators
+/// EBNF precedence: || < && < | < ^ < & < == != < < > <= >= < << >> < + - < * / % < unary(! - ~)
 class ExpressionEvaluator {
 public:
-    /// 求值条件表达式 (如 "resp[7] == 0x03")
+    /// Evaluate a condition expression (e.g. "resp[7] == 0x03")
     Core::Expected<bool> EvaluateCondition(
         const std::string& expr,
         Core::ByteView response);
 
-    /// 求值长度表达式 (如 "resp[2]")
+    /// Evaluate a length expression (e.g. "resp[2]")
     Core::Expected<int> EvaluateLength(
         const std::string& expr,
         Core::ByteView response);
 
 private:
-    // ── 词法分析 ──
+    // ── Lexical analysis ──
     enum class TokenType {
-        Number,         // 整数字面量 (十进制/十六进制)
-        RespIndex,      // resp[N] — 值存 number
-        RespRange,      // resp[A:B] — 值存 number, number2 存 B
+        Number,         // integer literal (decimal/hexadecimal)
+        RespIndex,      // resp[N] - value stored in number
+        RespRange,      // resp[A:B] - value stored in number, number2 stores B
         LParen, RParen,
         OpOr, OpAnd,    // || &&
         OpBitOr, OpBitXor, OpBitAnd,  // | ^ &
@@ -46,13 +46,13 @@ private:
 
     struct Token {
         TokenType type;
-        int64_t number;     // Number / RespIndex 的值
-        int64_t number2;    // RespRange 的结束索引
+        int64_t number;     // value of Number / RespIndex
+        int64_t number2;    // end index of RespRange
         Token() : type(TokenType::Eof), number(0), number2(0) {}
     };
 
-    // ── 递归下降: 每层一个方法, 返回 int64_t ──
-    // 布尔结果: 非零 = true
+    // ── Recursive descent: one method per level, returns int64_t ──
+    // Boolean result: non-zero = true
     const std::vector<Token>* _tokens;
     size_t _pos;
     Core::ByteView _response;

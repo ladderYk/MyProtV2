@@ -1,5 +1,7 @@
 # MyProtV2 — 项目文档
 
+[简体中文](README.md) | [English](en/README.md)
+
 ## 文档维护原则
 
 主文档（`architecture/`、`modules/`、`protocols/`、`Config_Schema.md`、`adr/`）只描述**当前 v1.0 实态**——即"系统现在是什么样"，不记录"曾经是什么样 / 哪一版改了什么"。
@@ -20,9 +22,9 @@
 
 | 协议 | 配置 | 教学文档 | 状态 |
 |------|------|----------|:----:|
-| Modbus TCP | [configs/protocols/modbus-tcp.json](../../configs/protocols/modbus-tcp.json) | [modbus-tcp.md](./protocols/modbus-tcp.md) | ✅ 已支持 |
-| Siemens S7-1200 | [configs/protocols/s7-1200.json](../../configs/protocols/s7-1200.json) | [s7-1200.md](./protocols/s7-1200.md) | ✅ 已支持（仅 Read/Write Var）|
-| 仙工智能 SEER AGV | [configs/protocols/seer.json](../../configs/protocols/seer.json) | [seer.md](./protocols/seer.md) | ✅ 已支持（JSON 正文需 hex 编码）|
+| Modbus TCP | [configs/protocols/modbus-tcp.json](../configs/protocols/modbus-tcp.json) | [modbus-tcp.md](./protocols/modbus-tcp.md)（[EN](./en/protocols/modbus-tcp.md)） | ✅ 已支持 |
+| Siemens S7-1200 | [configs/protocols/s7-1200.json](../configs/protocols/s7-1200.json) | [s7-1200.md](./protocols/s7-1200.md)（[EN](./en/protocols/s7-1200.md)） | ✅ 已支持（仅 Read/Write Var）|
+| 仙工智能 SEER AGV | [configs/protocols/seer.json](../configs/protocols/seer.json) | [seer.md](./protocols/seer.md)（[EN](./en/protocols/seer.md)） | ✅ 已支持（JSON 正文需 hex 编码）|
 
 新增协议：见 [protocols/README.md §如何新增一个协议](./protocols/README.md#如何新增一个协议指引)。
 
@@ -30,12 +32,12 @@
 
 | 序号 | 文档 | 内容 |
 |:--:|------|------|
-| 01 | [设计哲学与技术栈](./architecture/01_Design_Philosophy_and_TechStack.md) | 设计原则、编码准则、技术选型 |
-| 02 | [分层架构与目录结构](./architecture/02_Layered_Architecture.md) | 六层架构模型、依赖规则、工程目录 |
-| 03 | [线程模型与数据流](./architecture/03_Threading_and_DataFlow.md) | 线程池划分、并发策略、数据流全景 |
-| 04 | [错误处理、优雅关闭与安全](./architecture/04_Error_Shutdown_Security.md) | Expected<T,E> 体系、五阶段关闭、TLS/鉴权 |
-| 05 | [可观测性、配置与构建](./architecture/05_Observability_Config_Build.md) | 日志/Metrics/健康检查、配置加载、构建产物（VS2015 解决方案）、测试策略 |
-| 06 | [扩展指南与模拟仿真](./architecture/06_Extension_and_Simulation.md) | 新增协议/函数/通道/仓库、模拟仿真层概述 |
+| 01 | [设计哲学与技术栈](./architecture/01_Design_Philosophy_and_TechStack.md)（[EN](./en/architecture/01_Design_Philosophy_and_TechStack.md)） | 设计原则、编码准则、技术选型 |
+| 02 | [分层架构与目录结构](./architecture/02_Layered_Architecture.md)（[EN](./en/architecture/02_Layered_Architecture.md)） | 六层架构模型、依赖规则、工程目录 |
+| 03 | [线程模型与数据流](./architecture/03_Threading_and_DataFlow.md)（[EN](./en/architecture/03_Threading_and_DataFlow.md)） | 线程池划分、并发策略、数据流全景 |
+| 04 | [错误处理、优雅关闭与安全](./architecture/04_Error_Shutdown_Security.md)（[EN](./en/architecture/04_Error_Shutdown_Security.md)） | Expected<T,E> 体系、五阶段关闭、TLS/鉴权 |
+| 05 | [可观测性、配置与构建](./architecture/05_Observability_Config_Build.md)（[EN](./en/architecture/05_Observability_Config_Build.md)） | 日志/Metrics/健康检查、配置加载、构建产物（VS2015 解决方案）、测试策略 |
+| 06 | [扩展指南与模拟仿真](./architecture/06_Extension_and_Simulation.md)（[EN](./en/architecture/06_Extension_and_Simulation.md)） | 新增协议/函数/通道/仓库、模拟仿真层概述 |
 
 ### 模块详细设计（`modules/`）
 
@@ -56,7 +58,7 @@
 
 | 文档 | 内容 |
 |------|------|
-| [配置 Schema 定稿](./Config_Schema.md) | 配置契约的唯一事实来源：JSON↔POCO 对齐、模板文法、校验清单 |
+| [配置 Schema 定稿](./Config_Schema.md) | 配置契约的唯一事实来源：JSON↔POCO 对齐、模板文法、校验清单（[English](./en/Config_Schema.md)） |
 | [ADR-0001 设备内并发模型与吞吐指标](./adr/0001-device-concurrency-vs-throughput.md) | 串行 vs 吞吐的裁决、性能目标 |
 | [ADR-0002 传输抽象与多总线支持](./adr/0002-transport-abstraction.md) | TCP/TLS + 串口/RTU；Connect 端点泛化、framing 分类、共享总线语义 |
 | [ADR-0003 已知问题跟踪登记](./adr/0003-known-issues.md) | 架构评审发现的未决缺陷与待裁决语义（并发安全 / 韧性 / 接线 / 引擎语义） |

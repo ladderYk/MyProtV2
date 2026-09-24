@@ -1,14 +1,16 @@
 // src/Core/include/MyProt/Core/ServerConfig.hpp
-// 全局服务端配置 (仿真 + 未来告警/webhook 等)
+// Global server-side config (simulation + future alerting/webhook etc.)
 //
-// 背景: 协议层 (ProtocolConfig.simulation) 不应承载 listenPort / initialValues / packetLossRate
-// 等服务端行为字段 — 这些是部署环境属性, 与协议语法无关. simulation 段位于
-// server.json 顶层 ServerConfig.simulation, 协议层彻底干净.
+// Background: the protocol layer (ProtocolConfig.simulation) should not carry server-behavior
+// fields such as listenPort / initialValues / packetLossRate — these are deployment-environment
+// attributes, unrelated to protocol syntax. The simulation block lives at the top level of
+// server.json under ServerConfig.simulation, keeping the protocol layer completely clean.
 //
-// 文件: configs/server.json (新增), 由 ConfigDirectoryLoader 加载; 路径同 tags.json.
-// schemaVersion 与配置根**共享**同一代际号 (Core::kSupportedSchemaVersion) ——
-//   加载器对协议 / 配置根 / server.json 三者做一致性与门禁校验 (ADR-0005).
-//   (本配置与 protocols 共享版本号, 不独立代际)
+// File: configs/server.json (new), loaded by ConfigDirectoryLoader; path handled like tags.json.
+// schemaVersion **shares** the same generation number as the config root
+//   (Core::kSupportedSchemaVersion) — the loader checks consistency and gates all three of
+//   protocol / config root / server.json (ADR-0005).
+//   (this config shares the version number with protocols, not an independent generation)
 #pragma once
 
 #include "MyProt/Core/SimulationConfig.hpp"
@@ -17,10 +19,10 @@
 namespace MyProt {
 namespace Core {
 
-// 全局服务端配置. 当前仅含 simulation; 可扩展 alertSink / webhook / oem.
+// Global server-side config. Currently only simulation; extensible to alertSink / webhook / oem.
 struct ServerConfig {
-    SimulationConfig simulation;        // 仿真服务端 (listenPort, initialValues, packetLossRate, faultProfile)
-    int schemaVersion;                  // 配置代际号 (ADR-0005); 须等于 kSupportedSchemaVersion
+    SimulationConfig simulation;        // simulation server (listenPort, initialValues, packetLossRate, faultProfile)
+    int schemaVersion;                  // config generation number (ADR-0005); must equal kSupportedSchemaVersion
 
     ServerConfig() : schemaVersion(kSupportedSchemaVersion) {}
 };

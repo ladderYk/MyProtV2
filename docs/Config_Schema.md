@@ -56,6 +56,8 @@ configs/
 | `variableAliases` | map\<string, string\> | ✗ | `{}` | 变量别名映射（`别名 → 契约名`），让协议作者用自己的名字书写模板与变量表，引擎内部仍按契约名工作。详见下节 |
 | `maxSpanBytes` | int | ✗ | `250` | 标签按地址邻近合并的最大跨度（**字节**），供 `TagGrouper::CoalesceAdjacent` 限制单次批读跨度 —— 即协议族的"单次读取上限"。Modbus 应取 `250`（FC03 上限 125 寄存器 × 2 字节）。须 > 0 |
 
+> 下划线前缀字段（如 `_provenance`）被解析器忽略，不进 POCO、不参与校验，专用于书写机器无关的备注——约定来源说明（公开规范名称 / 抓包记录 / 手册版本）、商标声明等。建议每个协议文件携带 `_provenance` 字段留痕协议约定的独立推导来源（权属与 clean-room 证据）。
+>
 > 协议层**不含**仿真配置（`listenPort` / `initialValues` / `packetLossRate` 属服务端行为）；仿真段位于 `server.json` 的 `ServerConfig.simulation`。
 
 **`variableAliases`（变量别名映射）**

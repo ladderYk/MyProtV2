@@ -157,7 +157,7 @@ POST /api/data/write  body: {"tag":"PLC-001.MultiReg","bytes":"01 0A 0B 0C"}
 
 **实现要点**：
 - **错误码**：`MyProt::Core::Error::Code::ReadBackMismatch`（不可重试，避免重复写入；与 `WriteFailed` 区分）→ HTTP **503**。
-- **TagReader 接口**：[`WriteOnce`/`WriteBytes`](../Gateway/include/MyProt/Gateway/TagReader.hpp) 增 `bool readBack` 参数；实现层在 echo 校验通过后立即对同地址发起读。
+- **TagReader 接口**：[`WriteOnce`/`WriteBytes`](../../src/Gateway/include/MyProt/Gateway/TagReader.hpp) 增 `bool readBack` 参数；实现层在 echo 校验通过后立即对同地址发起读。
 - **协议契约**：
   - 标量 + readBack：用协议里的 `ReadHoldingRegisters` 操作模板构建读请求（注入 `RegisterCount=1`）；取 Modbus FC03 PDU 头 8 字节 + 字节计数 1 字节 + 寄存器值 2 字节布局的 `[9..10]` 字节按 big-endian 解析 16-bit，与 `value` 比对。
   - 变长 + readBack：用**写操作名**（如 `WriteMultipleRegisters`）的模板构建读请求并注入 `RegisterCount = totalBytes / 2`——此为简化遗留，**应改为用读操作模板**，见 [ADR-0003 变长 read-back](./0003-known-issues.md#变长-read-back)。

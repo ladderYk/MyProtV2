@@ -1,17 +1,17 @@
 // src/Core/include/MyProt/Core/Metrics.hpp
-// 轻量指标注册表 — 计数器/仪表盘 + Prometheus 文本暴露 (architecture/05, KI-07)
-// header-only 与 Core 工程约定一致; 埋点走进程级 Instance(), 渲染走 GET /metrics。
+// Lightweight metrics registry - counters/gauges + Prometheus text exposition (architecture/05, KI-07)
+// header-only, consistent with the Core project convention; instrumentation uses the process-level Instance(), rendering goes through GET /metrics.
 //
-// 指集 (命名约定 myprot_*):
-//   counter  myprot_poll_reads_total{device}        轮询采集样本数
-//   counter  myprot_poll_read_failures_total{device} 轮询失败样本数
-//   counter  myprot_writes_total{device}            写操作成功次数
-//   counter  myprot_write_failures_total{device}    写操作失败次数
-//   counter  myprot_channel_connects_total{device}  物理通道建立次数 (含重连)
-//   counter  myprot_circuit_opens_total{device}     熔断器开启次数
-//   gauge    myprot_circuit_state{device}           熔断器状态 (0=Closed 1=HalfOpen 2=Open)
-//   gauge    myprot_device_lifecycle_state{device}  设备生命周期 (0=New 1=Connecting 2=Connected 3=Degraded 4=Disabled)
-//   counter  myprot_device_lifecycle_transitions_total{device,from,to} 生命周期转换次数
+// Metric set (naming convention myprot_*):
+//   counter  myprot_poll_reads_total{device}        poll acquisition sample count
+//   counter  myprot_poll_read_failures_total{device} poll failure sample count
+//   counter  myprot_writes_total{device}            successful write operations
+//   counter  myprot_write_failures_total{device}    failed write operations
+//   counter  myprot_channel_connects_total{device}  physical channel establishments (incl. reconnects)
+//   counter  myprot_circuit_opens_total{device}     circuit-breaker openings
+//   gauge    myprot_circuit_state{device}           circuit-breaker state (0=Closed 1=HalfOpen 2=Open)
+//   gauge    myprot_device_lifecycle_state{device}  device lifecycle (0=New 1=Connecting 2=Connected 3=Degraded 4=Disabled)
+//   counter  myprot_device_lifecycle_transitions_total{device,from,to} lifecycle transitions
 #pragma once
 #include <string>
 #include <vector>
@@ -22,9 +22,9 @@
 
 namespace MyProt { namespace Core {
 
-/// 内置指标名常量 — 埋点侧统一引用, 防手写漂移
-/// (须先于 MetricsRegistry 声明: 类内联函数体不可见其后声明的名字空间量;
-///  便捷函数在同名字空间的后续块中定义)
+/// Built-in metric-name constants - referenced uniformly by instrumentation, preventing hand-written drift
+/// (must be declared before MetricsRegistry: an in-class inline function body cannot see namespace-scope entities declared after it;
+///  the convenience functions are defined in a later block of the same-name namespace)
 namespace metrics {
 
 const char* const kPollReadsTotal        = "myprot_poll_reads_total";
@@ -39,14 +39,14 @@ const char* const kDeviceLifecycleTransitionsTotal = "myprot_device_lifecycle_tr
 
 } // namespace metrics
 
-/// 进程级指标注册表 — Prometheus 文本格式 (exposition v0.0.4) 渲染
-/// 并发模型: 全局互斥; 埋点为纳秒级临界区, io 单线程 + WebApi 少量线程下无竞争压力
+/// Process-level metrics registry - renders Prometheus text format (exposition v0.0.4)
+/// Concurrency model: a global mutex; instrumentation is a nanosecond-scale critical section, with no contention under the single io thread + a few WebApi threads
 class MetricsRegistry {
 public:
     typedef std::vector<std::pair<std::string, std::string> > Labels;
 
 private:
-    // ── 数据结构 (前置声明, 规避 v140 对类内后置类型的解析限制) ──
+    // ── data structures (forward-declared to work around v140's parse limit on in-class trailing types) ──
     struct Series {
         Series() : value(0.0) {}
         Labels labels;
@@ -60,9 +60,9 @@ private:
     };
 
     mutable std::mutex _mtx;
-    std::map<std::string, Family> _families;              // 族名 → 元信息
+    std::map<std::string, Family> _families;              // family name -> meta info
     std::map<std::string, std::map<std::string, Series> >
-        _series;                                          // 族名 → 键 → 序列
+        _series;                                          // family name -> key -> series
 
 public:
     static MetricsRegistry& Instance() {
@@ -70,7 +70,7 @@ public:
         return r;
     }
 
-    /// 预登记指标族元信息 (type: "counter"|"gauge"; help 非空时写入)
+    /// Pre-register metric-family meta info (type: "counter"|"gauge"; help written only when non-empty)
     void Describe(const std::string& name, const std::string& type,
                   const std::string& help) {
         std::lock_guard<std::mutex> lock(_mtx);
@@ -80,7 +80,7 @@ public:
         f.registered = true;
     }
 
-    /// counter += v (缺省 1)
+    /// counter += v (defaults to 1)
     void CounterAdd(const std::string& name, const Labels& labels, double v = 1.0) {
         std::lock_guard<std::mutex> lock(_mtx);
         TouchFamily(name, "counter");
@@ -90,7 +90,7 @@ public:
         s.value += v;
     }
 
-    /// gauge = v (直接置值; 状态类指标用)
+    /// gauge = v (direct set; used for state-type metrics)
     void GaugeSet(const std::string& name, const Labels& labels, double v) {
         std::lock_guard<std::mutex> lock(_mtx);
         TouchFamily(name, "gauge");
@@ -100,7 +100,7 @@ public:
         s.value = v;
     }
 
-    /// 渲染全部指标为 Prometheus 文本 (输出按指标名/标签键排序, 结果确定)
+    /// Render all metrics as Prometheus text (output sorted by metric name / label key, deterministic result)
     std::string RenderPrometheus() const {
         std::ostringstream os;
         std::lock_guard<std::mutex> lock(_mtx);
@@ -137,26 +137,32 @@ private:
         }
     }
 
-    /// 内置指标族说明集中登记 (渲染时 HELP 文本)
+    /// Centralized registration of built-in metric-family descriptions (HELP text at render time)
+    /// HELP strings are bilingual (English / Chinese); enum-value annotations stay in English.
     void RegisterBuiltinHelp() {
         using namespace metrics;
-        Describe(kPollReadsTotal, "counter", "轮询采集样本数");
-        Describe(kPollReadFailuresTotal, "counter", "轮询失败样本数");
-        Describe(kWritesTotal, "counter", "写操作成功次数");
-        Describe(kWriteFailuresTotal, "counter", "写操作失败次数");
+        Describe(kPollReadsTotal, "counter",
+                 "poll acquisition sample count / 轮询采集样本数");
+        Describe(kPollReadFailuresTotal, "counter",
+                 "poll failure sample count / 轮询失败样本数");
+        Describe(kWritesTotal, "counter",
+                 "successful write operations / 写操作成功数");
+        Describe(kWriteFailuresTotal, "counter",
+                 "failed write operations / 写操作失败数");
         Describe(kChannelConnectsTotal, "counter",
-                 "物理通道建立次数 (含重连)");
-        Describe(kCircuitOpensTotal, "counter", "熔断器开启次数");
+                 "physical channel establishments (incl. reconnects) / 物理通道建立数(含重连)");
+        Describe(kCircuitOpensTotal, "counter",
+                 "circuit-breaker openings / 熔断器开启次数");
         Describe(kCircuitState, "gauge",
-                 "熔断器状态 (0=Closed 1=HalfOpen 2=Open)");
+                 "circuit-breaker state (0=Closed 1=HalfOpen 2=Open) / 熔断器状态");
         Describe(kDeviceLifecycleState, "gauge",
-                 "设备生命周期 (0=New 1=Connecting 2=Connected 3=Degraded 4=Disabled)");
+                 "device lifecycle (0=New 1=Connecting 2=Connected 3=Degraded 4=Disabled) / 设备生命周期状态");
         Describe(kDeviceLifecycleTransitionsTotal, "counter",
-                 "设备生命周期转换次数");
+                 "device lifecycle transitions / 设备生命周期状态迁移次数");
     }
 
     static std::string MakeKey(const Labels& labels) {
-        // 标签键序即渲染序 — 排序保证同族多标签序列输出确定
+        // label key order is the render order - sorting guarantees deterministic output for multi-label series in the same family
         Labels sorted(labels);
         SortLabels(sorted);
         std::ostringstream os;
@@ -205,13 +211,13 @@ private:
     static std::string EscapeHelp(const std::string& v) { return EscapeLabel(v); }
 };
 
-/// 埋点便捷层 — device 标签构造 + 计数器/仪表盘快捷调用
-/// (重开 namespace metrics; 常量块见类前)
+/// Instrumentation convenience layer - device-label construction + counter/gauge shortcuts
+/// (reopens namespace metrics; the constants block is before the class)
 namespace metrics {
 
 typedef MetricsRegistry::Labels Lbl;
 
-/// 单 device 标签构造 (最常用形态)
+/// single device-label construction (the most common form)
 inline Lbl Device(const std::string& deviceId) {
     Lbl l;
     l.push_back(std::make_pair(std::string("device"), deviceId));

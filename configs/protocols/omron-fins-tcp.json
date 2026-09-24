@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "protocolName": "omron-fins-tcp",
+  "_provenance": "报文约定依据欧姆龙公开的以太网单元手册中 FINS/TCP 命令定义独立整理, 未复制手册原文。OMRON 为欧姆龙株式会社注册商标。",
   "transport": { "type": "Tcp", "defaultPort": 9600 },
   "framing": {
     "type": "LengthField",

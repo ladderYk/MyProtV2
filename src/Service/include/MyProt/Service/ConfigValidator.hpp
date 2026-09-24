@@ -1,6 +1,6 @@
 // src/Service/include/MyProt/Service/ConfigValidator.hpp
-// 配置深度校验器 — Config_Schema §7 十五项规则 + 版本门禁 + 韧性/管理面校验
-// 主 API 操作 POCO 结构体; ValidateJson* / validateAndParse* 为 JSON 文本入口。
+// Config deep validator - Config_Schema §7 fifteen rules + version gate + resilience/management-plane validation
+// The main API operates on POCO structs; ValidateJson* / validateAndParse* are JSON-text entry points.
 
 #pragma once
 #include <string>
@@ -12,7 +12,7 @@
 
 namespace MyProt { namespace Service {
 
-/// 校验结果: 错误 (阻止启动) 与警告 (不阻止, 日志输出)
+/// Validation result: errors (block startup) and warnings (do not block, logged)
 struct ValidationResult {
     std::vector<std::string> errors;
     std::vector<std::string> warnings;
@@ -22,15 +22,15 @@ struct ValidationResult {
     void addError(const std::string& msg)   { errors.push_back(msg); }
     void addWarning(const std::string& msg) { warnings.push_back(msg); }
 
-    /// 合并另一份结果 (warnings 合并; errors 合并后若对方有错误则整体 hasErrors)
+    /// Merge another result (warnings merged; errors merged, then if the other had errors the whole is hasErrors)
     void merge(const ValidationResult& other) {
         errors.insert(errors.end(), other.errors.begin(), other.errors.end());
         warnings.insert(warnings.end(), other.warnings.begin(), other.warnings.end());
     }
 };
 
-/// 校验 + 解析一体产物: 单次 JSON 解析同时得到深度校验结果与 POCO
-/// (供 ConfigDirectoryLoader 生产加载链路, 消除 validate+parse 双重解析)
+/// Combined validate + parse product: a single JSON parse yields both the deep-validation result and the POCO
+/// (for ConfigDirectoryLoader's production load path, eliminating the validate+parse double parse)
 struct ProtocolValidationOutcome {
     ValidationResult result;
     Core::ProtocolConfig proto;
@@ -45,56 +45,56 @@ class ConfigValidator {
 public:
     explicit ConfigValidator(int supportedSchemaVersion = 2);
 
-    // ── POCO 入口 ──
+    // ── POCO entry points ──
 
-    /// 校验单个协议 (对应 protocols/*.json)
+    /// Validate a single protocol (corresponds to protocols/*.json)
     ValidationResult validateProtocol(const Core::ProtocolConfig& proto) const;
 
-    /// 校验配置根 (对应 tags.json); 若传入协议列表则做跨文件引用校验
+    /// Validate the config root (corresponds to tags.json); if a protocol list is passed, do cross-file reference validation
     ValidationResult validateConfigRoot(
         const Core::ConfigRoot& root,
         const std::vector<Core::ProtocolConfig>& protocols = std::vector<Core::ProtocolConfig>()) const;
 
-    // ── JSON 文本入口 (供 ConfigStore 直接调用) ──
+    // ── JSON-text entry points (called directly by ConfigStore) ──
 
-    /// 校验协议 JSON 文本
+    /// Validate protocol JSON text
     static Core::Expected<ValidationResult> validateProtocolJson(
         const std::string& json, int supportedSchemaVersion = 2);
 
-    /// 校验标签根 JSON 文本 (可附带协议 JSON 列表做跨文件引用)
+    /// Validate the tag-root JSON text (optionally with a protocol JSON list for cross-file reference)
     static Core::Expected<ValidationResult> validateConfigRootJson(
         const std::string& json,
         const std::vector<std::string>& protocolJsons = std::vector<std::string>(),
         int supportedSchemaVersion = 2);
 
-    // ── JSON → POCO 解析 (供 ConfigDirectoryLoader 生产加载链路) ──
+    // ── JSON -> POCO parsing (for ConfigDirectoryLoader's production load path) ──
     static Core::Expected<Core::ProtocolConfig> parseProtocolJson(const std::string& json);
     static Core::Expected<Core::ConfigRoot> parseConfigRootJson(const std::string& json);
 
-    // ── 试算校验 (ADR-0012 §2, 实现 FrameConsistencyCheck.cpp) ──
-    /// 对协议内含 {Name:raw} 载荷占位符的 LengthField 写操作以真实管线试渲染一帧:
-    ///   1) 派生长度 expr 可解性 (求值失败 → 错误, 封堵运行时静默 0 值);
-    ///   2) 渲染帧与 framing 长度槽位一致性 (模板固定段 ↔ outputs 常量 ↔ framing 三方核对);
-    ///   3) {Frame:fixed} 保留名 / 未知格式占位符拦截。
-    /// 输入为已解析 POCO。挂接点: 保存期 ConfigStore::Validate +
-    /// 加载期 vN 校验入口 (validateConfigRootJson / validateAndParseConfigRootJson)。
-    /// @return 错误列表 (空 = 通过)
+    // ── Trial validation (ADR-0012 §2, implemented in FrameConsistencyCheck.cpp) ──
+    /// For a protocol's LengthField write operations containing {Name:raw} payload placeholders, trial-render one frame with the real pipeline:
+    ///   1) derived-length expr resolvability (evaluation failure -> error, sealing off a silent runtime 0 value);
+    ///   2) consistency between the rendered frame and the framing length slot (a three-way cross-check of template fixed segment <-> outputs constant <-> framing);
+    ///   3) interception of the {Frame:fixed} reserved name / unknown-format placeholders.
+    /// Input is an already-parsed POCO. Attachment points: save-time ConfigStore::Validate +
+    /// load-time vN validation entry (validateConfigRootJson / validateAndParseConfigRootJson).
+    /// @return the error list (empty = pass)
     static std::vector<std::string> CheckFrameConsistency(
         const Core::ProtocolConfig& proto);
 
-    // ── 文法工具 (供同库其他 TU 复用, 如 ConfigDirectoryLoader 的仿真模板行校验) ──
-    /// 十六进制字面量行校验: 每字节恰两位 hex, 空格/制表分隔, 至少一个 token。
+    // ── Grammar utilities (reused by other TUs in the same library, e.g. ConfigDirectoryLoader's simulation-template-line validation) ──
+    /// Hex-literal line validation: each byte is exactly two hex digits, space/tab separated, at least one token.
     static bool isValidHexLiteral(const std::string& s);
 
-    // ── 校验 + 解析一体入口 (单次 JSON 解析; 生产加载链路用) ──
+    // ── Combined validate + parse entry (single JSON parse; for the production load path) ──
 
-    /// 协议 JSON: 深度校验并解析为 POCO
+    /// Protocol JSON: deep-validate and parse into a POCO
     static Core::Expected<ProtocolValidationOutcome> validateAndParseProtocolJson(
         const std::string& json, int supportedSchemaVersion = 2);
 
-    /// 配置根 JSON: 深度校验并解析为 POCO。
-    /// protocols 为已各自通过校验的协议集 — 仅执行根级规则与跨文件引用校验,
-    /// 不再重复逐协议解析/校验 (由调用方在协议加载阶段完成一次即可)。
+    /// Config-root JSON: deep-validate and parse into a POCO.
+    /// protocols is the protocol set already each validated - only root-level rules and cross-file reference validation run,
+    /// without repeating per-protocol parsing/validation (the caller completes it once during the protocol-load stage).
     static Core::Expected<ConfigRootValidationOutcome> validateAndParseConfigRootJson(
         const std::string& json,
         const std::vector<Core::ProtocolConfig>& protocols,
@@ -103,10 +103,10 @@ public:
 private:
     int _supportedVersion;
 
-    // ── 版本门禁 (唯一会提前终止的检查) ──
+    // ── Version gate (the only check that terminates early) ──
     bool checkVersionGate(int protoVersion, ValidationResult& r) const;
 
-    // ── 协议层 (§7 规则 1-8) ──
+    // ── Protocol layer (§7 rules 1-8) ──
     void validateTransport(const Core::TransportConfig& t, ValidationResult& r) const;
     void validateFraming(const Core::FramingConfig& f,
                          const Core::TransportConfig& t, ValidationResult& r) const;
@@ -114,22 +114,22 @@ private:
                            const Core::TransportConfig& transport,
                            ValidationResult& r) const;
 
-    // ── 模板文法 (§3) ──
+    // ── Template grammar (§3) ──
     void validateTemplate(const std::string& opName, const std::string& line,
                           ValidationResult& r) const;
-    /// 长度偏移自检 — 校验位于成帧长度槽位的派生变量相对 payload 的常量偏移与模板布局一致
+    /// Derived-length offset self-check - validates that a derived variable sitting in the framing length slot has a constant offset relative to payload consistent with the template layout
     void ValidateDerivedLengthOffsets(const Core::ProtocolConfig& proto,
                                       const Core::OperationConfig& op,
                                       const std::string& opName,
                                       ValidationResult& r) const;
 
-    // ── 设备层 (§7 规则 9-11) ──
+    // ── Device layer (§7 rules 9-11) ──
     void validateDevice(const Core::DeviceConfig& dev,
                         const std::unordered_map<std::string,
                             const Core::ProtocolConfig*>& protoMap,
                         ValidationResult& r) const;
 
-    // ── 标签层 (§7 规则 12-15) ──
+    // ── Tag layer (§7 rules 12-15) ──
     void validateTag(const Core::TagDefinition& tag,
                      const std::unordered_map<std::string,
                          const Core::DeviceConfig*>& deviceMap,
@@ -137,14 +137,14 @@ private:
                          const Core::ProtocolConfig*>& protoMap,
                      ValidationResult& r) const;
 
-    // ── 韧性策略 (§11) ──
+    // ── Resilience policy (§11) ──
     void validateResilience(const Core::ResilienceConfig& res,
                             const std::string& ctx, ValidationResult& r) const;
 
-    // ── 管理面 (§12) ──
+    // ── Management plane (§12) ──
     void validateWebApi(const Core::WebApiConfig& api, ValidationResult& r) const;
 
-    // ── 工具方法 ──
+    // ── Utility methods ──
     static bool isValidPlaceholder(const std::string& s);
     static bool isValidIPAddress(const std::string& s);
     static bool isNumericFinalType(const std::string& ft);

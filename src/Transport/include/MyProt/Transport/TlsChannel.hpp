@@ -1,5 +1,5 @@
 // src/Transport/include/MyProt/Transport/TlsChannel.hpp
-// TLS 通道 — 异步回调模型 (ADR-0010 §2); v1 占位, 签名已冻结
+// TLS channel - async callback model (ADR-0010 §2); a v1 placeholder, signature already frozen
 
 #pragma once
 #include <memory>
@@ -11,8 +11,8 @@
 
 namespace MyProt { namespace Transport {
 
-/// TLS 通道 — 基于 asio::ssl::stream<asio::ip::tcp::socket> (待实现)
-/// 异步模型同 TcpChannel (ADR-0010 §2)
+/// TLS channel - based on asio::ssl::stream<asio::ip::tcp::socket> (to be implemented)
+/// The async model matches TcpChannel (ADR-0010 §2)
 class TlsChannel : public IChannel,
                    public std::enable_shared_from_this<TlsChannel> {
 public:

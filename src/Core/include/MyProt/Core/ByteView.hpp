@@ -1,5 +1,5 @@
 // src/Core/include/MyProt/Core/ByteView.hpp
-// 轻量字节视图 — 取代 std::span<const uint8_t>, C++11, 零依赖 (ADR-0010 §3)
+// Lightweight byte view - replaces std::span<const uint8_t>, C++11, zero dependencies (ADR-0010 §3)
 
 #pragma once
 #include <cstddef>
@@ -10,8 +10,8 @@ namespace MyProt { namespace Core {
 
 using Bytes = std::vector<uint8_t>;
 
-/// 轻量字节视图 (取代 std::span<const uint8_t>; ADR-0010 §3)。不持有数据,
-/// 生命周期由调用方保证 (通道内部缓冲 / 请求帧在 SendReceive 期间存活)。
+/// Lightweight byte view (replaces std::span<const uint8_t>; ADR-0010 §3). Does not own data;
+/// its lifetime is guaranteed by the caller (the channel's internal buffer / request frame stays alive during SendReceive).
 struct ByteView {
     const uint8_t* data;
     size_t size;

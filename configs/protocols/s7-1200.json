@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "protocolName": "s7-1200",
+  "_provenance": "S7comm 协议非厂商公开发布; 本文件的 COTP/S7 握手与报文模板基于https://blog.csdn.net/qq_43254236/article/details/132856838?spm=1001.2101.3001.6650.4&utm_medium=distribute.pc_relevant.none-task-blog-2%7Edefault%7EBlogCommendFromBaidu%7Eactivity-4-132856838-blog-148157515.235%5Ev43%5Epc_blog_bottom_relevance_base5&depth_1-utm_source=distribute.pc_relevant.none-task-blog-2%7Edefault%7EBlogCommendFromBaidu%7Eactivity-4-132856838-blog-148157515.235%5Ev43%5Epc_blog_bottom_relevance_base5&utm_relevant_index=5 文档生成",
   "transport": {
     "type": "Tcp"
   },

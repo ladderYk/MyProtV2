@@ -1,14 +1,14 @@
 // src/Simulation/include/MyProt/Simulation/ResponseSynthesizer.hpp
-// 应答合成器 — responseParser 的反向复用 (配置驱动仿真 L3 层)
+// Response synthesizer - reverse reuse of responseParser (config-driven simulation L3 layer)
 //
-// 客户端用 responseParser 校验应答; 仿真器把同一规格当作"应答布局说明书"
-// 从请求反向生成应答帧 (Config_Schema §5):
-//   validCondition "resp[N]==V" → 应答偏移 N 写字面量 V (如 FC 回显位)
-//   dataLengthExpr  "resp[N]"   → 应答偏移 N 写实际数据长度
-//   dataStartIndex M            → 应答前 M 字节镜像请求前缀, 数据区自 M 起
-//   dataLengthExpr 为数字常量    → 数据区长度对齐该常量 (截断/补零)
-// 最后按 framing 重算长度字段 — 与 LengthFieldFrameParser::CalculateTotalFrameSize
-// 切帧公式互逆, 保证客户端能用同一份 framing 配置正确切出本帧。
+// The client validates responses with responseParser; the simulator treats the same spec as a "response layout manual"
+// and generates a response frame in reverse from the request (Config_Schema §5):
+//   validCondition "resp[N]==V" -> write literal V at response offset N (e.g. the FC echo bit)
+//   dataLengthExpr  "resp[N]"   -> write the actual data length at response offset N
+//   dataStartIndex M            -> mirror the request's first M bytes as the response prefix, the data region starts at M
+//   dataLengthExpr a numeric constant -> align the data-region length to that constant (truncate/zero-pad)
+// Finally recompute the length field per framing - inverse to LengthFieldFrameParser::CalculateTotalFrameSize's
+// frame-splitting formula, guaranteeing the client can correctly split out this frame with the same framing config.
 
 #pragma once
 
@@ -23,37 +23,37 @@ namespace MyProt { namespace Simulation {
 
 class ResponseSynthesizer {
 public:
-    /// 从 OperationConfig 解析出的应答布局规格
+    /// The response-layout spec parsed from OperationConfig
     struct Spec {
-        std::vector<std::pair<std::size_t, std::uint8_t> > asserts; ///< 偏移→字面量
-        bool hasLenIndex;   ///< dataLengthExpr 形如 resp[N]
+        std::vector<std::pair<std::size_t, std::uint8_t> > asserts; ///< offset -> literal
+        bool hasLenIndex;   ///< dataLengthExpr shaped like resp[N]
         std::size_t lenIndex;
-        std::size_t constLen;     ///< dataLengthExpr 为数字常量 (0 = 无)
+        std::size_t constLen;     ///< dataLengthExpr is a numeric constant (0 = none)
         std::size_t dataStartIndex;
 
         Spec() : hasLenIndex(false), lenIndex(0), constLen(0), dataStartIndex(0) {}
     };
 
-    /// 解析操作的应答规格。文法不支持的子句静默忽略 (宽松解析)。
+    /// Parse an operation's response spec. Grammar clauses that are unsupported are silently ignored (lenient parsing).
     static void ParseSpec(const Core::OperationConfig& op, Spec& out);
 
-    /// 合成应答帧。
-    /// @param request 已匹配的完整请求帧 (前缀镜像来源)
-    /// @param data    应答数据区内容 (上层按变量从数据区取出)
-    /// @param framing 协议帧配置 (长度字段重算依据)
-    /// @return 应答帧; 无法合成时返回空
+    /// Synthesize a response frame.
+    /// @param request the matched complete request frame (source of the prefix mirror)
+    /// @param data    the response data-region content (the upper layer takes it out of the data region per variable)
+    /// @param framing the protocol framing config (basis for recomputing the length field)
+    /// @return the response frame; returns empty when it cannot be synthesized
     static std::vector<std::uint8_t> Synthesize(const Spec& spec,
                                                 const std::vector<std::uint8_t>& request,
                                                 const std::vector<std::uint8_t>& data,
                                                 const Core::FramingConfig& framing);
 
-    /// 按自定义应答模板合成帧 (SimOperationConfig.responseTemplate, 非空时
-    /// 覆盖 echo 反向合成)。文法:
-    ///   hex 字面量  "AA 0B"      — 逐字节常量 (空格/制表符分隔)
-    ///   {req:N:M}               — 从请求帧偏移 N 拷贝 M 字节 (回显)
-    ///   {data}                  — 展开应答数据区 (read=寄存器值; write 为空)
-    /// 拼接完成后按 framing 重算长度字段 (与 Synthesize 一致)。
-    /// @return true 合成成功; false 文法错误或请求越界 (调用方不应答)
+    /// Synthesize a frame from a custom response template (SimOperationConfig.responseTemplate; when non-empty
+    /// it overrides the echo reverse synthesis). Grammar:
+    ///   hex literal  "AA 0B"      - per-byte constants (space/tab separated)
+    ///   {req:N:M}               - copy M bytes from request-frame offset N (echo)
+    ///   {data}                  - expand the response data region (read = register values; write is empty)
+    /// After concatenation, recompute the length field per framing (consistent with Synthesize).
+    /// @return true on success; false on a grammar error or request out-of-range (the caller should not respond)
     static bool SynthesizeFromTemplate(
         const std::vector<std::string>& tmpl,
         const std::vector<std::uint8_t>& request,
@@ -62,7 +62,7 @@ public:
         std::vector<std::uint8_t>& out);
 
 private:
-    /// 按 LengthFieldConfig 重算并写入帧内长度字段
+    /// Recompute and write the in-frame length field per LengthFieldConfig
     static void ApplyLengthField(std::vector<std::uint8_t>& frame,
                                  const Core::LengthFieldConfig& lf);
 };

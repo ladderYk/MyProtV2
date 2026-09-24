@@ -1,12 +1,12 @@
 // src/Transport/include/MyProt/Transport/SocketKeepAlive.hpp
-// 跨平台 TCP keepalive 设置 — 解决"对端关闭后无法感知"问题 (2026-08-29 实装)
-// 机制: 让 OS 内核周期性探测死连接, 对端 RST 后 socket read 立即返回 error,
-//       已有 SendReceive 错误路径自然走通, 下次轮询自动重连。
-// 跨平台: Windows 用 SIO_KEEPALIVE_VALS (ms 级), Linux/BSD 用 TCP_KEEP* setsockopt (s 级)。
+// Cross-platform TCP keepalive setup - solves the "cannot detect a peer-close" problem (implemented 2026-08-29)
+// Mechanism: let the OS kernel periodically probe dead connections; after the peer sends RST, socket read returns an error immediately,
+//       the existing SendReceive error path is naturally exercised, and the next poll reconnects automatically.
+// Cross-platform: Windows uses SIO_KEEPALIVE_VALS (ms granularity), Linux/BSD uses TCP_KEEP* setsockopt (s granularity).
 
 #pragma once
 
-#include "MyProt/Transport/NativeSocket.hpp"   // NativeSocket 类型定义
+#include "MyProt/Transport/NativeSocket.hpp"   // NativeSocket type definition
 
 #if defined(_WIN32)
     #include <winsock2.h>
@@ -19,17 +19,17 @@
 
 namespace MyProt { namespace Transport {
 
-/// 启用/配置 TCP keepalive
-/// @param s        原生 socket 句柄 (asio::ip::tcp::socket::native_handle())
-/// @param onoff    true 启用, false 关闭
-/// @param idleSec  空闲多久后开始探测 (秒; Linux 下有效; Windows 用 idleMs)
-/// @param intvlSec 探测间隔 (秒; Linux 下有效; Windows 用 intvlMs)
-/// @param cnt      探测失败次数 (Linux 下有效; Windows 忽略, 固定 3 探测 ≈ 3×intvl)
+/// Enable/configure TCP keepalive
+/// @param s        native socket handle (asio::ip::tcp::socket::native_handle())
+/// @param onoff    true to enable, false to disable
+/// @param idleSec  how long idle before probing starts (seconds; effective on Linux; Windows uses idleMs)
+/// @param intvlSec probe interval (seconds; effective on Linux; Windows uses intvlMs)
+/// @param cnt      number of failed probes (effective on Linux; ignored on Windows, fixed at 3 probes ≈ 3×intvl)
 inline void SetSocketKeepAlive(NativeSocket s, bool onoff,
                                int idleSec, int intvlSec, int cnt) {
     if (s == InvalidSocket()) return;
 #if defined(_WIN32)
-    (void)cnt;   // Windows 的 SIO_KEEPALIVE_VALS 无探测次数参数 (固定 3 次), 仅 POSIX 分支使用
+    (void)cnt;   // Windows' SIO_KEEPALIVE_VALS has no probe-count parameter (fixed at 3); only the POSIX branch uses it
     struct {
         ULONG onoff;
         ULONG keepalivetime;      // ms
@@ -42,8 +42,8 @@ inline void SetSocketKeepAlive(NativeSocket s, bool onoff,
     DWORD bytesReturned = 0;
     ::WSAIoctl(s, SIO_KEEPALIVE_VALS, &in, sizeof(in),
                nullptr, 0, &bytesReturned, nullptr, nullptr);
-    // 注: SIO_KEEPALIVE_VALS 失败通常是因为对端非 TCP (如串口);
-    //     调用方需自行判断 socket 类型, 此处静默返回。
+    // Note: SIO_KEEPALIVE_VALS usually fails because the peer is not TCP (e.g. a serial port);
+    //       the caller must determine the socket type itself; here it returns silently.
 #else
     int opt = onoff ? 1 : 0;
     ::setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt));

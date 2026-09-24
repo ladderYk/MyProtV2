@@ -1,6 +1,6 @@
 // src/Polling/include/MyProt/Polling/PollingEngine.hpp
-// 轮询引擎 — 按 scanRateMs 分组定时调度标签读取 (modules/06_Polling.md, ADR-0004)
-// C++11 回调模型 (ADR-0010), 无协程
+// Polling engine - schedules tag reads on timers grouped by scanRateMs (modules/06_Polling.md, ADR-0004)
+// C++11 callback model (ADR-0010), no coroutines
 
 #pragma once
 #include <vector>
@@ -9,7 +9,7 @@
 #include <atomic>
 #include <functional>
 #include <unordered_map>
-#include "MyProt/Core/Optional.hpp"   // Core::Optional<T> (C++11 兼容, 取代 std::optional, 2026-08-29 回退)
+#include "MyProt/Core/Optional.hpp"   // Core::Optional<T> (C++11-compatible, replaces std::optional, rolled back 2026-08-29)
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
@@ -20,52 +20,52 @@
 
 namespace MyProt { namespace Polling {
 
-/// 结果分发回调: 每轮读取完成后调用, 参数为本轮所有 TagValue (含 Bad 质量)
+/// Result-dispatch callback: called after each read round completes, with all TagValues of the round (incl. Bad quality)
 using ResultDispatch = std::function<void(const std::vector<Core::TagValue>&)>;
 
-/// 轮询引擎 — 按 scanRateMs 定时调度各设备的标签读取
-/// 依赖: Gateway::ProtocolGateway (TagGrouper + TagReader + ChannelManager)
-/// 调度: 每组一个 asio::steady_timer, 回调链驱动异步读取
-/// 背压: 上一批未完成 → 跳过新批次 (ADR-0004 §deadline)
-/// Deadline: 每轮读取预算 = scanRateMs, 超时标 Bad 不级联
+/// Polling engine - schedules each device's tag reads on timers by scanRateMs
+/// Depends on: Gateway::ProtocolGateway (TagGrouper + TagReader + ChannelManager)
+/// Scheduling: one asio::steady_timer per group, a callback chain drives async reads
+/// Backpressure: previous batch not done -> skip the new batch (ADR-0004 §deadline)
+/// Deadline: each read round's budget = scanRateMs; on timeout mark Bad without cascading
 class PollingEngine {
 public:
     PollingEngine(asio::io_context& io, Gateway::ProtocolGateway& gateway);
 
-    /// 启动轮询
-    /// @param tags  全部标签定义 (拷贝存储, 按 scanRateMs 分组)
-    /// @param devices  设备配置 (用于构建 deviceId → protocolName 映射)
-    /// @param onResults  每轮读取完成后的结果分发回调 (可选)
-    /// @param globalResilience  全局韧性策略 (ConfigRoot.resilience); 设备级
-    ///                          resilience 覆盖之, 均未设置时用内置默认
+    /// Start polling
+    /// @param tags  all tag definitions (copied and stored, grouped by scanRateMs)
+    /// @param devices  device configs (used to build the deviceId -> protocolName map)
+    /// @param onResults  the result-dispatch callback after each read round (optional)
+    /// @param globalResilience  the global resilience policy (ConfigRoot.resilience); device-level
+    ///                          resilience overrides it; built-in defaults are used when neither is set
     void Start(const std::vector<Core::TagDefinition>& tags,
                const std::vector<Core::DeviceConfig>& devices,
                ResultDispatch onResults = nullptr,
                const Core::Optional<Core::ResilienceConfig>& globalResilience =
                    Core::Optional<Core::ResilienceConfig>());
 
-    /// 停止轮询 (取消所有定时器, 在飞批次自然完成)
+    /// Stop polling (cancel all timers; in-flight batches complete naturally)
     void Stop();
 
-    /// 获取统计信息
+    /// Get the statistics
     const PollStats& GetStats() const { return _stats; }
 
-    /// 是否正在运行
+    /// Whether it is running
     bool IsRunning() const { return _running.load(); }
 
 private:
-    /// 轮询组 — 同一 scanRateMs 的所有标签 + 合并请求
+    /// Poll group - all tags with the same scanRateMs + merged requests
     struct PollGroup {
         int scanRateMs;
-        std::uint64_t generation;   // 装配代际 — 热重载后旧代 in-flight 组不得续排
-        // 原始标签数组 — 全部组共享同一份 (tagIndices 引用此数组);
-        // shared_ptr 保证在飞异步链持有旧代标签表快照, 热重载替换不悬垂
+        std::uint64_t generation;   // assembly generation - after a hot reload, old-generation in-flight groups must not be rescheduled
+        // The original tag array - all groups share the same one (tagIndices reference this array);
+        // shared_ptr ensures the in-flight async chain holds an old-generation tag-table snapshot, so a hot-reload replacement does not dangle
         std::shared_ptr<const std::vector<Core::TagDefinition>> tags;
         std::vector<Gateway::MergedRequest> mergedRequests;
         asio::steady_timer timer;
-        bool busy;     // 背压标志
-        // 本轮总预算截止时刻 (= 触发时刻 + scanRateMs, ADR-0004 §3);
-        // 重试/重连消耗同一预算, 超预算不级联到下一周期
+        bool busy;     // backpressure flag
+        // This round's total-budget deadline (= trigger time + scanRateMs, ADR-0004 §3);
+        // retries/reconnects consume the same budget; over-budget does not cascade to the next cycle
         std::chrono::steady_clock::time_point batchDeadline;
 
         PollGroup(asio::io_context& io)
@@ -77,34 +77,34 @@ private:
     PollStats _stats;
     std::atomic<bool> _running;
     std::atomic<bool> _stopping;
-    std::atomic<std::uint64_t> _generation;  // 当前装配代际 (Start 时递增)
-    ResultDispatch _onResults;   // 结果分发回调
-    std::unordered_map<std::string, std::string> _deviceProtocolMap;  // deviceId → protocolName
-    std::unordered_map<std::string, int> _deviceTimeoutMap;           // deviceId → requestTimeoutMs
+    std::atomic<std::uint64_t> _generation;  // current assembly generation (incremented at Start)
+    ResultDispatch _onResults;   // result-dispatch callback
+    std::unordered_map<std::string, std::string> _deviceProtocolMap;  // deviceId -> protocolName
+    std::unordered_map<std::string, int> _deviceTimeoutMap;           // deviceId -> requestTimeoutMs
     std::unordered_map<std::string, Core::ResilienceConfig>
-        _deviceResilienceMap;    // deviceId → 生效韧性 (设备级覆盖 > 全局 > 默认)
-    // 协议快照缓存 (protocolName → shared_ptr) — 每协议仅首访做一次 lookup+拷贝;
-    // Start() 时清空, 热重载重装配后自然刷新 (在飞批次持旧快照, 快照语义)
+        _deviceResilienceMap;    // deviceId -> effective resilience (device-level override > global > default)
+    // Protocol snapshot cache (protocolName -> shared_ptr) - each protocol does a lookup+copy only on first access;
+    // cleared at Start(), refreshed naturally after a hot-reload re-assembly (in-flight batches hold old snapshots, snapshot semantics)
     std::unordered_map<std::string, std::shared_ptr<const Core::ProtocolConfig>>
         _protocolCache;
     std::vector<std::shared_ptr<PollGroup>> _groups;
 
-    /// 调度下一轮定时器
+    /// Schedule the next-round timer
     void ScheduleNext(std::shared_ptr<PollGroup> group);
 
-    /// 定时器触发回调
+    /// Timer-trigger callback
     void OnTimerFire(std::shared_ptr<PollGroup> group,
                      const asio::error_code& ec);
 
-    /// 处理设备的一轮读取 (协议查找 → 通道获取 → ReadBatch 链)
-    /// attempt: 当前连接尝试序号 (1 起); 连接类可重试故障按韧性策略退避后重入
+    /// Handle one device's read round (protocol lookup -> channel acquisition -> ReadBatch chain)
+    /// attempt: the current connect-attempt sequence number (from 1); retryable connection-class failures re-enter after backoff per the resilience policy
     void ProcessDevice(std::shared_ptr<PollGroup> group, size_t deviceIdx,
                        std::shared_ptr<std::vector<Core::TagValue>> results,
                        int attempt);
 
-    /// 链式执行各 MergedRequest 的 ReadBatch
-    /// deviceIdx: 设备段起始索引; curIdx: 当前请求索引 (同段内递增)
-    /// attempt: 当前读尝试序号 (1 起); 可重试故障退避后重试同一请求
+    /// Chain-execute ReadBatch for each MergedRequest
+    /// deviceIdx: the start index of the device segment; curIdx: the current request index (incrementing within the same segment)
+    /// attempt: the current read-attempt sequence number (from 1); a retryable fault retries the same request after backoff
     void PollBatchChain(std::shared_ptr<PollGroup> group,
                         size_t deviceIdx,
                         size_t curIdx,
@@ -115,44 +115,44 @@ private:
                         std::shared_ptr<std::vector<Core::TagValue>> allResults,
                         int attempt);
 
-    /// 一轮读取完成: 更新统计, 分发结果, 解除背压, 调度下一轮
+    /// One read round done: update stats, dispatch results, release backpressure, schedule the next round
     void FinishBatch(std::shared_ptr<PollGroup> group,
                      std::shared_ptr<std::vector<Core::TagValue>> results);
 
-    /// 丢弃旧代批次 (热重载后 generation 不匹配): 不分发结果、不更新统计,
-    /// 仅释放背压 — 防已删除/改名标签的陈旧值复活到新数据面。
+    /// Discard an old-generation batch (generation mismatch after a hot reload): dispatch no results, update no stats,
+    /// release only the backpressure - preventing stale values of deleted/renamed tags from reviving into the new data plane.
     void AbandonBatch(std::shared_ptr<PollGroup> group);
 
-    /// 将指定 MergedRequest 的所有标签标记为 Bad, 追加到 results
+    /// Mark all tags of the specified MergedRequest as Bad and append them to results
     void AppendBadValues(std::shared_ptr<PollGroup> group,
                          size_t deviceIdx,
                          const Core::Error& error,
                          std::vector<Core::TagValue>& results);
 
-    /// 设备级失败: 该设备段所有 MergedRequest 的标签标 Bad (同设备请求按
-    /// deviceId 连续存放) 后推进到下一设备; 不做熔断记账, 由调用方决定
+    /// Device-level failure: mark the tags of all MergedRequests in this device segment Bad (same-device requests are
+    /// stored contiguously by deviceId) then advance to the next device; do no circuit-breaker accounting, the caller decides
     void FailDevice(std::shared_ptr<PollGroup> group,
                     size_t deviceIdx,
                     const Core::Error& error,
                     std::shared_ptr<std::vector<Core::TagValue>> results);
 
-    /// 通过 deviceId 查找协议配置 (经 _deviceProtocolMap + ProtocolLookup)
-    /// 返回协议快照 (缓存于 _protocolCache, 稳态轮询零拷贝)
+    /// Look up the protocol config via deviceId (through _deviceProtocolMap + ProtocolLookup)
+    /// Returns the protocol snapshot (cached in _protocolCache, zero-copy during steady-state polling)
     std::shared_ptr<const Core::ProtocolConfig>
     GetProtocolForDevice(const std::string& deviceId);
 
-    /// 生效韧性配置: 设备级覆盖 > 全局 > 内置默认 (struct 仅 6 int, 按值返回)
+    /// Effective resilience config: device-level override > global > built-in default (the struct is just 6 ints, returned by value)
     Core::ResilienceConfig ResilienceFor(const std::string& deviceId) const;
 
-    /// 本轮剩余预算(ms) = batchDeadline - now; 已耗尽返回 0
+    /// This round's remaining budget (ms) = batchDeadline - now; returns 0 if exhausted
     int RemainingBudgetMs(std::shared_ptr<PollGroup> group) const;
 
-    /// 指数退避: min(backoffMaxMs, backoffBaseMs × 2^(failedAttempt-1))
+    /// Exponential backoff: min(backoffMaxMs, backoffBaseMs × 2^(failedAttempt-1))
     static int BackoffDelayMs(const Core::ResilienceConfig& res,
                               int failedAttempt);
 
-    /// 退避等待后继续 (独立临时 timer, 不占用组调度 timer);
-    /// cont 在 io 线程执行, 其内部须自行校验 _stopping/代际
+    /// Continue after a backoff wait (a separate temporary timer, not occupying the group's scheduling timer);
+    /// cont runs on the io thread and must itself validate _stopping/generation internally
     void RetryAfterBackoff(std::shared_ptr<PollGroup> group, int delayMs,
                            const std::function<void()>& cont);
 };
