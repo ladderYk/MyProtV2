@@ -2,6 +2,8 @@
 
 # Build output
 build/
+build-linux*/
+bin/
 *.suo
 *.user
 *.sdf

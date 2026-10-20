@@ -15,7 +15,8 @@
 
 ```
 MyProt-master/
-├── MyProt.sln          # VS 解决方案（主构建入口）
+├── MyProt.sln          # VS 解决方案（Windows 主构建入口）
+├── CMakeLists.txt      # Linux/CI 构建入口（同一份源码，不改动 VS 工程）
 ├── src/
 │   ├── Core/           # Expected<T,E>/Optional/ByteView/ByteOrder 值类型与配置 POCO
 │   ├── Transport/      # IChannel 抽象 + TCP/TLS/串口通道、LengthField/Silence 成帧
@@ -55,6 +56,32 @@ MyProt-master/
    ```bat
    powershell -ExecutionPolicy Bypass -File scripts\ci.ps1
    ```
+
+### Linux
+
+同一份源码用 CMake 构建，`MyProt.sln` 保持不变。环境要求：
+
+- 支持 C++11 的 GCC 或 Clang
+- CMake 3.13+、GNU Make、POSIX 线程
+
+```bash
+cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release
+cmake --build build-linux -j
+
+# 编译 + 4 个单元测试 + E2E（退出码 0 = 全绿）
+./scripts/ci-linux.sh
+```
+
+可执行文件输出到 `bin/<Config>/`（如 `bin/Release/MyProt.App`）。请从仓库根目录启动，
+以便相对路径 `configs/`、`webui/dist` 正确解析：
+
+```bash
+./bin/Release/MyProt.App --config configs --port 8080
+```
+
+平台差异只集中在两处：`src/Core/include/MyProt/Core/Platform.hpp`
+（环境变量、控制台代码页、文件/目录操作）与 `src/App/CrashDiagnostics.cpp`
+（Windows 用 SEH + dbghelp，Linux 用 POSIX 信号 + `backtrace`）。
 
 ### 仿真测试
 

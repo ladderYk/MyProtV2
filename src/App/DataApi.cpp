@@ -21,13 +21,6 @@
 #include <memory>
 #include <fstream>
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#include <dbghelp.h>
-#pragma comment(lib, "dbghelp.lib")
-#include <crtdbg.h>
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"

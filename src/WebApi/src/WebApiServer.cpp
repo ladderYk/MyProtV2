@@ -4,6 +4,7 @@
 
 #include "MyProt/WebApi/WebApiServer.hpp"
 #include "MyProt/Core/Metrics.hpp"
+#include "MyProt/Core/Platform.hpp"     // 跨平台环境变量读取
 #include "MyProt/Service/SchemaRegistry.hpp"
 #include <cstdlib>
 #include <cstring>
@@ -138,18 +139,9 @@ bool ReadFileContent(const std::string& path, std::string* out) {
     return true;
 }
 
-/// 读取环境变量 (getenv_s 安全版, SDL 下 getenv 触发 C4996)
+/// 读取环境变量 (跨平台: Windows getenv_s / POSIX getenv)
 std::string ReadEnvValue(const char* name) {
-    size_t required = 0;
-    if (getenv_s(&required, nullptr, 0, name) != 0 || required == 0) {
-        return std::string();
-    }
-    std::vector<char> buf(required);
-    size_t written = 0;
-    if (getenv_s(&written, &buf[0], required, name) != 0) {
-        return std::string();
-    }
-    return std::string(&buf[0], written > 0 ? written - 1 : 0);   // 去掉结尾 '\0'
+    return Core::Platform::GetEnv(name);
 }
 
 /// 从 "/path?key=v&..." 提取 query 参数值 (含最小 %XX 解码; 未找到返回空串)
@@ -286,7 +278,9 @@ void WebApiServer::HandleConnection(
                 value = (vbegin == std::string::npos) ? "" : value.substr(vbegin);
 
                 if (HeaderIs(name, "content-length")) {
-                    contentLength = static_cast<size_t>(_atoi64(value.c_str()));
+                    // strtoll 跨平台 (MSVC _atoi64 仅 Windows 可用)
+                    const long long parsedLen = std::strtoll(value.c_str(), NULL, 10);
+                    contentLength = parsedLen > 0 ? static_cast<size_t>(parsedLen) : 0;
                     if (contentLength > kMaxBodySize) malformed = true;
                 } else if (HeaderIs(name, "authorization")) {
                     if (value.size() > 7 && value.compare(0, 7, "Bearer ") == 0) {

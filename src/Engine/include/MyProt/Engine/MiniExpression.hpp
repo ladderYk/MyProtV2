@@ -1,7 +1,10 @@
 // src/Engine/include/MyProt/Engine/MiniExpression.hpp
-// Minimal arithmetic expression evaluator (zero dependency)
-//   Supports: numbers (10/0x1F), variable names, + - * / % & | ^ ~ ( ), unary minus
-//   Does not support: function calls, strings, conditional branches (use autoCompute strategies for those)
+// Minimal arithmetic + condition expression evaluator (zero dependency)
+//   Arithmetic: numbers (10/0x1F), variable names, + - * / % & | ^ ~ ( ), unary +/-/~
+//   Condition (v1.28): == != > < >= <= && || ! and resp[N] response-byte indexing
+//     — comparison/logical nodes evaluate to 0/1; resp[N] resolves via the VarLookup
+//       callback using the canonical name "resp[<index>]" (index may itself be an expression).
+//   Does not support: function calls, strings, ternary (use autoCompute strategies for those)
 //
 // Usage:
 //   MiniExpression::Parser p("RegisterCount * 2 + (1 & 0xFF)");
@@ -10,6 +13,7 @@
 //       auto it = vars.find(name); if (it == vars.end()) { found = false; return 0; }
 //       found = true; return it->second;
 //   });
+//   // condition example: "resp[7] == 0x03 && resp[8] != 0xFF" → 1/0
 #pragma once
 #include <cstdint>
 #include <stdexcept>
@@ -31,12 +35,14 @@ using VarLookup = std::function<uint64_t(const std::string&, bool& found)>;
 
 /// AST node (public so the implementation .cpp can construct/evaluate directly)
 struct Node {
-    enum Type { Num, Var, Unary, Binary };
+    enum Type { Num, Var, Resp, Unary, Binary };
     Type type;
     std::string text;   // for Var
     uint64_t num = 0;   // for Num
-    char op = 0;        // for Unary/Binary: '+','-','*','/','%','&','|','^','~'
-    std::unique_ptr<Node> lhs, rhs;
+    char op = 0;        // Unary: '-','~','!'  |  Binary arithmetic: '+','-','*','/','%','&','|','^'
+                        // Binary condition (single-char codes, no collision with the above):
+                        //   '=' (==)  'n' (!=)  '>'  '<'  'G' (>=)  'L' (<=)  'A' (&&)  'O' (||)
+    std::unique_ptr<Node> lhs, rhs;  // Resp: lhs holds the index expression
 };
 
 class Parser {
@@ -61,19 +67,26 @@ private:
     std::unique_ptr<Node> root_;
 
     // Parser (recursive descent)
+    // Precedence low→high: Or || → And && → Equality ==/!= → Relational >/</>=/<=
+    //                       → Expr +/- → Term */% → BitOr | → BitXor ^ → BitAnd &
+    //                       → Unary (prefix) → Primary
     void SkipWs();
     bool Peek(char c);
     bool Consume(char c);
-    std::unique_ptr<Node> ParseExpr();    // + -
-    std::unique_ptr<Node> ParseTerm();    // * / %
-    std::unique_ptr<Node> ParseBitOr();   // |
-    std::unique_ptr<Node> ParseBitXor();  // ^
-    std::unique_ptr<Node> ParseBitAnd();  // &
-    std::unique_ptr<Node> ParseUnary();   // - ~ + (prefix)
-    std::unique_ptr<Node> ParsePrimary(); // number/variable/{name:len}/(expr)
+    std::unique_ptr<Node> ParseOr();         // ||
+    std::unique_ptr<Node> ParseAnd();        // &&
+    std::unique_ptr<Node> ParseEquality();   // == !=
+    std::unique_ptr<Node> ParseRelational(); // > < >= <=
+    std::unique_ptr<Node> ParseExpr();       // + -
+    std::unique_ptr<Node> ParseTerm();       // * / %
+    std::unique_ptr<Node> ParseBitOr();      // |
+    std::unique_ptr<Node> ParseBitXor();     // ^
+    std::unique_ptr<Node> ParseBitAnd();     // &
+    std::unique_ptr<Node> ParseUnary();      // - ~ + ! (prefix)
+    std::unique_ptr<Node> ParsePrimary();    // number/variable/resp[N]/{name:len}/(expr)
     std::unique_ptr<Node> ParseNumber();
     std::unique_ptr<Node> ParseIdent();
-    std::unique_ptr<Node> ParseLenToken(); // {name:len} byte-length reference
+    std::unique_ptr<Node> ParseLenToken();   // {name:len} byte-length reference
 
     // Evaluation
     uint64_t EvalNode(const Node& n, const VarLookup& lookup) const;

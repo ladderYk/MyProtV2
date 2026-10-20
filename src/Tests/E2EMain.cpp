@@ -11,11 +11,8 @@
 #include <sstream>
 #include <iomanip>
 #include "MyProt/Core/Optional.hpp"   // Core::Optional<T> (C++11 兼容, 取代 std::optional, 2026-08-29 回退)
+#include "MyProt/Core/Platform.hpp"   // 跨平台: 控制台 / 目录 / 文件
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
@@ -217,7 +214,7 @@ void Check(const char* name, bool condition) {
     }
 }
 int RunE2E() {
-    SetConsoleOutputCP(65001);
+    MyProt::Core::Platform::EnableUtf8Console();
 
     std::cout << "========================================" << std::endl;
     std::cout << "  MyProt V2 End-to-End Test" << std::endl;
@@ -1434,6 +1431,27 @@ int RunE2E() {
                   && VrHas::Warn(res.value(), "TLS")
                   && VrHas::Warn(res.value(), "尚未实现"));
         }
+
+        // 8l: validCondition 语法错误 → 加载期拒绝 (v1.28 方案 A)
+        //   与运行时同一 MiniExpression 解析器, 堵住"写了不报错、运行时静默失败"盲区
+        {
+            const std::string bad = Patch(kValidProto,
+                                          "\"resp[7]==0x03\"",
+                                          "\"resp[7] ==\"");
+            auto res = ConfigValidator::validateProtocolJson(bad, 2);
+            Check("11-18: validCondition 语法错误加载期被拒",
+                  !res.has_value()
+                  && res.error().message.find("validCondition 语法错误") != std::string::npos);
+        }
+        // 8m: validCondition 多条件合法 → 加载期通过 (v1.28 方案 A)
+        {
+            const std::string ok = Patch(kValidProto,
+                                         "\"resp[7]==0x03\"",
+                                         "\"resp[7] == 0x03 && resp[8] != 0xFF\"");
+            auto res = ConfigValidator::validateProtocolJson(ok, 2);
+            Check("11-19: validCondition 多条件加载期通过",
+                  res.has_value() && res.value().errors.empty());
+        }
     }
     std::cout << std::endl;
 
@@ -1446,14 +1464,14 @@ int RunE2E() {
 
         // 准备独立测试目录 (与 WebApi 测试共用)
         const char* kFaultDir = "configs_fault_test";
-        ::CreateDirectoryA(kFaultDir, NULL);
-        const std::string faultProtoDir = std::string(kFaultDir) + "\\protocols";
-        ::CreateDirectoryA(faultProtoDir.c_str(), NULL);
+        MyProt::Core::Platform::EnsureDirectory(kFaultDir);
+        const std::string faultProtoDir = std::string(kFaultDir) + "/protocols";
+        MyProt::Core::Platform::EnsureDirectory(faultProtoDir);
         // 制造坏配置: 删除 modbus.json (E2E 故障注入)
-        ::DeleteFileA((faultProtoDir + "\\modbus.json").c_str());
+        MyProt::Core::Platform::RemoveFile(faultProtoDir + "/modbus.json");
         for (int i = 1; i <= 3; ++i) {
-            ::DeleteFileA((faultProtoDir + "\\modbus.json.bak."
-                           + std::to_string(i)).c_str());
+            MyProt::Core::Platform::RemoveFile(faultProtoDir + "/modbus.json.bak."
+                                               + std::to_string(i));
         }
 
         ConfigStoreOptions opts;
@@ -1560,15 +1578,15 @@ int RunE2E() {
     {
         // 准备测试配置目录: configs_webapi_test/protocols/modbus.json + tags.json
         const char* kCfgDir = "configs_webapi_test";
-        ::CreateDirectoryA(kCfgDir, NULL);
-        const std::string protoDir = std::string(kCfgDir) + "\\protocols";
-        ::CreateDirectoryA(protoDir.c_str(), NULL);
+        MyProt::Core::Platform::EnsureDirectory(kCfgDir);
+        const std::string protoDir = std::string(kCfgDir) + "/protocols";
+        MyProt::Core::Platform::EnsureDirectory(protoDir);
         {
-            std::ofstream f((protoDir + "\\modbus.json").c_str());
+            std::ofstream f((protoDir + "/modbus.json").c_str());
             f << "{\"schemaVersion\":2,\"protocolName\":\"ModbusTCP\"}";
         }
         {
-            std::ofstream f((std::string(kCfgDir) + "\\tags.json").c_str());
+            std::ofstream f((std::string(kCfgDir) + "/tags.json").c_str());
             f << "{\"schemaVersion\":2}";
         }
 
@@ -2179,9 +2197,8 @@ int RunE2E() {
         // 也顺带断言"发布配置通过保存期同一套校验"; 若该文件缺失则退化为断言 404,
         // 不产生环境相关的假失败 (E2E 其它用例同样以相对路径访问工作目录)。
         const std::string kValProto = "modbus-tcp";
-        const char* kValProtoPath = "configs\\protocols\\modbus-tcp.json";
-        const bool valHasCfg =
-            ::GetFileAttributesA(kValProtoPath) != INVALID_FILE_ATTRIBUTES;
+        const char* kValProtoPath = "configs/protocols/modbus-tcp.json";
+        const bool valHasCfg = MyProt::Core::Platform::FileExists(kValProtoPath);
 
         MyProt::Service::ConfigStoreOptions vOpts;
         vOpts.configDir = "configs";
@@ -2319,9 +2336,9 @@ int RunE2E() {
     std::cout << "--- Test 16: Reload Runtime Sync ---" << std::endl;
     {
         const char* kDir = "configs_reload_test";
-        ::CreateDirectoryA(kDir, NULL);
-        const std::string pDir = std::string(kDir) + "\\protocols";
-        ::CreateDirectoryA(pDir.c_str(), NULL);
+        MyProt::Core::Platform::EnsureDirectory(kDir);
+        const std::string pDir = std::string(kDir) + "/protocols";
+        MyProt::Core::Platform::EnsureDirectory(pDir);
 
         // 重载 JSON: nTags=标签数, devPort=仿真器端口 (双变更点)
         auto TagsJson = [](int nTags, int devPort) {
@@ -2346,7 +2363,7 @@ int RunE2E() {
             return ss.str();
         };
         {
-            std::ofstream f((std::string(kDir) + "\\tags.json").c_str());
+            std::ofstream f((std::string(kDir) + "/tags.json").c_str());
             f << TagsJson(1, 11531);
         }
         // 仿真 JSON 重载: listenPort 变更应生效
@@ -2376,7 +2393,7 @@ int RunE2E() {
                 << "\"handshake\":[]}";
             return ss.str();
         };
-        const std::string protoPath = pDir + "\\simmodbus.json";
+        const std::string protoPath = pDir + "/simmodbus.json";
         { std::ofstream f(protoPath.c_str()); f << ProtoJson(11531); }
                 // server.json: 仿真段归属服务端配置 (不在协议 JSON);
         //   操作描述符 (kind/addressVar/countVar) 由协议 JSON 推导,
@@ -2385,7 +2402,7 @@ int RunE2E() {
             std::ostringstream ss;
             ss << "{\"schemaVersion\":2,\"simulation\":{\"listenPort\":" << port
                << ",\"initialValues\":{\"0\":" << initVal << "}}}";
-            std::ofstream f((std::string(kDir) + "\\server.json").c_str());
+            std::ofstream f((std::string(kDir) + "/server.json").c_str());
             f << ss.str();
         };
         WriteSimServerJson(11531, 5);
@@ -2490,7 +2507,7 @@ int RunE2E() {
         { std::ofstream f(protoPath.c_str()); f << ProtoJson(11532); }
         WriteSimServerJson(11532, 7);   // 仿真器随 server.json 迁移端口
         {
-            std::ofstream f((std::string(kDir) + "\\tags.json").c_str());
+            std::ofstream f((std::string(kDir) + "/tags.json").c_str());
             f << TagsJson(2, 11532);   // 标签×2 + 设备端口迁移 → 仿真器新端口生效
         }
         Check("16-5: reload 成功", rStore.Reload().has_value());
@@ -2555,13 +2572,13 @@ int RunE2E() {
     std::cout << "--- Test 17: Write via /api/data/write ---" << std::endl;
     {
         const char* kDir = "configs_write_test";
-        ::CreateDirectoryA(kDir, NULL);
-        const std::string pDir = std::string(kDir) + "\\protocols";
-        ::CreateDirectoryA(pDir.c_str(), NULL);
+        MyProt::Core::Platform::EnsureDirectory(kDir);
+        const std::string pDir = std::string(kDir) + "/protocols";
+        MyProt::Core::Platform::EnsureDirectory(pDir);
 
         // 标签: R.W @ addr5, 150ms 轮询 (写后回读验证点)
         {
-            std::ofstream f((std::string(kDir) + "\\tags.json").c_str());
+            std::ofstream f((std::string(kDir) + "/tags.json").c_str());
             f << "{\"schemaVersion\":2,"
               << "\"devices\":[{\"id\":\"PLC-W\",\"protocol\":\"SimModbusW\","
               << "\"connection\":{\"host\":\"127.0.0.1\",\"port\":11540,"
@@ -2585,7 +2602,7 @@ int RunE2E() {
         }
         // 閸楀繗顔? 鐠?FC03 + 閸?FC06; 浠跨湡鍣?read+write 閸欏本鎼锋担? 閸掓繂鈧?addr5=99
         {
-            std::ofstream f((pDir + "\\simmodbusw.json").c_str());
+            std::ofstream f((pDir + "/simmodbusw.json").c_str());
             f << "{\"schemaVersion\":2,\"protocolName\":\"SimModbusW\","
               << "\"transport\":{\"type\":\"Tcp\",\"defaultPort\":11540},"
               << "\"framing\":{\"type\":\"LengthField\","
@@ -2621,7 +2638,7 @@ int RunE2E() {
         // server.json: 仿真段归属服务端配置; 描述符由协议 JSON 推导,
         //   仅写操作的 dataOffset (请求内数据偏移) 无法从协议表达, 故在此覆盖声明.
         {
-            std::ofstream f((std::string(kDir) + "\\server.json").c_str());
+            std::ofstream f((std::string(kDir) + "/server.json").c_str());
             f << "{\"schemaVersion\":2,\"simulation\":{\"listenPort\":11540,"
               << "\"initialValues\":{\"5\":99,\"15\":0},"
               << "\"operations\":{\"WriteSingleRegister\":{\"dataOffset\":10}}}}";
@@ -2940,9 +2957,9 @@ int RunE2E() {
     std::cout << "--- Test 19: variant-write bytes path (P1 A) ---" << std::endl;
     {
         const char* kDir15 = "configs_varwrite_test";
-        ::CreateDirectoryA(kDir15, NULL);
-        const std::string pDir15 = std::string(kDir15) + "\\protocols";
-        ::CreateDirectoryA(pDir15.c_str(), NULL);
+        MyProt::Core::Platform::EnsureDirectory(kDir15);
+        const std::string pDir15 = std::string(kDir15) + "/protocols";
+        MyProt::Core::Platform::EnsureDirectory(pDir15);
 
         const std::string tagsJson =
             "{\"schemaVersion\":2,"
@@ -2956,7 +2973,7 @@ int RunE2E() {
             "\"writeBytesOperation\":\"WriteMultipleRegisters\","
             "\"finalType\":\"UInt16\"}]}";
         {
-            std::ofstream f((std::string(kDir15) + "\\tags.json").c_str());
+            std::ofstream f((std::string(kDir15) + "/tags.json").c_str());
             f << tagsJson;
         }
         const std::string protoJson =
@@ -2996,7 +3013,7 @@ int RunE2E() {
             "\"operations\":{\"ReadHoldingRegisters\":{"
             "\"kind\":\"read\",\"addressVar\":\"StartAddress\","
             "\"countVar\":\"RegisterCount\"}}}}";
-        const std::string protoPath15 = pDir15 + "\\simmodbus.json";
+        const std::string protoPath15 = pDir15 + "/simmodbus.json";
         { std::ofstream f(protoPath15.c_str()); f << protoJson; }
 
         asio::io_context vio;
@@ -3092,6 +3109,14 @@ int RunE2E() {
 
         asio::io_context hio15;
         SyncTcpClient vClient(hio15);
+        // 等待监听就绪: Linux 线程调度下 Start() 可能晚于首个请求到达
+        for (int i = 0; i < 20; ++i) {
+            if (vClient.Connect("127.0.0.1", 18085)) {
+                vClient.Close();
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
         auto VHttpReq = [&vClient](const std::string& req) -> std::string {
             if (!vClient.Connect("127.0.0.1", 18085)) return "";
             const std::vector<uint8_t> raw = vClient.SendReceiveAll(
@@ -3195,12 +3220,12 @@ int RunE2E() {
         // Test 19 的 R.W15 刻意只声明 writeBytesOperation (标量写 fail-fast 断言),
         // 故不能复用其 R.W15 — 两者对同一标签的期望互相矛盾.
         const char* kDir20 = "configs_readback_test";
-        ::CreateDirectoryA(kDir20, NULL);
+        MyProt::Core::Platform::EnsureDirectory(kDir20);
         {
-            const std::string pDir20 = std::string(kDir20) + "\\protocols";
-            ::CreateDirectoryA(pDir20.c_str(), NULL);
+            const std::string pDir20 = std::string(kDir20) + "/protocols";
+            MyProt::Core::Platform::EnsureDirectory(pDir20);
             {
-                std::ofstream f((std::string(kDir20) + "\\tags.json").c_str());
+                std::ofstream f((std::string(kDir20) + "/tags.json").c_str());
                 f << "{\"schemaVersion\":2,"
                   << "\"devices\":[{\"id\":\"PLC-RB\",\"protocol\":\"SimModbus\","
                   << "\"connection\":{\"host\":\"127.0.0.1\",\"port\":11542,"
@@ -3226,7 +3251,7 @@ int RunE2E() {
                   << "\"finalType\":\"ByteArray\"}]}";
             }
             {
-                std::ofstream f((pDir20 + "\\simmodbusrb.json").c_str());
+                std::ofstream f((pDir20 + "/simmodbusrb.json").c_str());
                 f << "{\"schemaVersion\":2,\"protocolName\":\"SimModbus\","
                   << "\"transport\":{\"type\":\"Tcp\",\"defaultPort\":11542},"
                   << "\"framing\":{\"type\":\"LengthField\","
@@ -3275,7 +3300,7 @@ int RunE2E() {
             }
             {
                 // dataOffset = 模板定长前缀字节数 (2+2+2+1+1+2 = 10), 写值起始处.
-                std::ofstream f((std::string(kDir20) + "\\server.json").c_str());
+                std::ofstream f((std::string(kDir20) + "/server.json").c_str());
                 f << "{\"schemaVersion\":2,\"simulation\":{\"listenPort\":11542,"
                   << "\"initialValues\":{\"10\":0},"
                   << "\"operations\":{\"WriteSingleRegister\":{\"dataOffset\":10},"
@@ -3586,8 +3611,8 @@ int RunE2E() {
     //   不以"测试内自造协议"自证 — 配置被改动即回归报警.
     std::cout << "--- Test 21: SEER (Seer AGV) Byte-Level Wiring ---" << std::endl;
     {
-        const char* kSeerPath = "configs\\protocols\\seer.json";
-        if (::GetFileAttributesA(kSeerPath) == INVALID_FILE_ATTRIBUTES) {
+        const char* kSeerPath = "configs/protocols/seer.json";
+        if (!MyProt::Core::Platform::FileExists(kSeerPath)) {
             Check("21-0: configs/protocols/seer.json 存在", false);
         } else {
             std::ifstream seerFile(kSeerPath);
@@ -3809,6 +3834,47 @@ int RunE2E() {
         }
         std::cout << std::endl;
     }
+
+    // ───Test 23: 多条件 validCondition (v1.28) ───
+    // MiniExpression 驱动: 支持 && || ! 和比较 == != > < >= <=
+    // 旧语法 "resp[N]==V" 为子集, 向后兼容
+    std::cout << "--- Test 23: Multi-condition validCondition (v1.28) ---" << std::endl;
+    {
+        // Modbus FC03 读保持寄存器应答: TID(2) PID(2) LEN(2) UID FC ByteCount Data...
+        // resp[7]=FC=0x03, resp[8]=ByteCount=0x02, resp[9..10]=数据
+        std::vector<uint8_t> resp;
+        resp.push_back(0x00); resp.push_back(0x01);   // TID
+        resp.push_back(0x00); resp.push_back(0x00);   // PID
+        resp.push_back(0x00); resp.push_back(0x05);   // LEN
+        resp.push_back(0x01);                          // UID
+        resp.push_back(0x03);                          // FC  resp[7]
+        resp.push_back(0x02);                          // ByteCount resp[8]
+        resp.push_back(0x00); resp.push_back(0x64);   // 数据 100
+
+        const MyProt::Core::ByteView view(resp.empty() ? 0 : &resp[0], resp.size());
+
+        Check("23-1: resp[7]==0x03 && resp[8]!=0xFF → true",
+              MyProt::Engine::ResponseParser::CheckCondition(view, "resp[7] == 0x03 && resp[8] != 0xFF"));
+        Check("23-2: resp[7]==0x03 && resp[8]==0xFF → false",
+              !MyProt::Engine::ResponseParser::CheckCondition(view, "resp[7] == 0x03 && resp[8] == 0xFF"));
+        Check("23-3: resp[7]==0x06 || resp[7]==0x03 → true",
+              MyProt::Engine::ResponseParser::CheckCondition(view, "resp[7] == 0x06 || resp[7] == 0x03"));
+        Check("23-4: !(resp[7]==0x00) → true",
+              MyProt::Engine::ResponseParser::CheckCondition(view, "!(resp[7] == 0x00)"));
+        Check("23-5: 旧语法 resp[7]==0x03 → true (向后兼容)",
+              MyProt::Engine::ResponseParser::CheckCondition(view, "resp[7]==0x03"));
+        Check("23-6: resp[8] > 0x01 && resp[8] < 0x03 → true",
+              MyProt::Engine::ResponseParser::CheckCondition(view, "resp[8] > 0x01 && resp[8] < 0x03"));
+        Check("23-7: resp[7] + 1 == 0x04 → true (混合算术 + 比较)",
+              MyProt::Engine::ResponseParser::CheckCondition(view, "resp[7] + 1 == 0x04"));
+        Check("23-8: 空条件 → true (默认通过)",
+              MyProt::Engine::ResponseParser::CheckCondition(view, ""));
+        Check("23-9: resp[100]==0x00 → false (越界字节访问)",
+              !MyProt::Engine::ResponseParser::CheckCondition(view, "resp[100] == 0x00"));
+        Check("23-10: resp[7] == → false (语法错误运行时容错)",
+              !MyProt::Engine::ResponseParser::CheckCondition(view, "resp[7] =="));
+    }
+    std::cout << std::endl;
 
     std::cout << "========================================" << std::endl;
     std::cout << "  Results: " << g_passed << " passed, " << g_failed << " failed" << std::endl;

@@ -12,11 +12,8 @@
 #include <vector>
 #include <cstdint>
 #include "MyProt/Core/Optional.hpp"   // Core::Optional<T> (C++11 兼容, 取代 std::optional, 2026-08-29 回退)
+#include "MyProt/Core/Platform.hpp"   // 跨平台: 环境变量 / 控制台 / 文件系统
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
@@ -70,21 +67,20 @@ std::string TypedToText(const MyProt::Core::TypedValue& v) {
 /// 日志环境接线: MYPROT_LOG_LEVEL=debug|info|warn|error 调级别;
 /// MYPROT_LOG_FILE=<path> 开启落盘轮转 (缺省 10MB × 3 份)
 void SetupLoggingFromEnv() {
-    char buf[512];
-    size_t n = 0;
-    if (0 == getenv_s(&n, buf, sizeof(buf), "MYPROT_LOG_LEVEL") && n > 1) {
-        const std::string lv(buf);
+    const std::string lv = MyProt::Core::Platform::GetEnv("MYPROT_LOG_LEVEL");
+    if (!lv.empty()) {
         if (lv == "debug") MyProt::Core::Logger::SetLevel(MyProt::Core::LogLevel::Debug);
         else if (lv == "warn") MyProt::Core::Logger::SetLevel(MyProt::Core::LogLevel::Warn);
         else if (lv == "error") MyProt::Core::Logger::SetLevel(MyProt::Core::LogLevel::Error);
     }
-    if (0 == getenv_s(&n, buf, sizeof(buf), "MYPROT_LOG_FILE") && n > 1) {
-        MyProt::Core::Logger::SetFileSink(std::string(buf));
+    const std::string logFile = MyProt::Core::Platform::GetEnv("MYPROT_LOG_FILE");
+    if (!logFile.empty()) {
+        MyProt::Core::Logger::SetFileSink(logFile);
     }
 }
 
 int RunProduction(const std::string& configDir, uint16_t apiPort) {
-    SetConsoleOutputCP(65001);
+    MyProt::Core::Platform::EnableUtf8Console();
     InstallCrashDiagnostics();
     SetupLoggingFromEnv();
 
@@ -356,9 +352,15 @@ int RunProduction(const std::string& configDir, uint16_t apiPort) {
         simOwners[i]->Stop();
     }
     int exitCode = serverError.empty() ? 0 : 3;
+#ifdef _WIN32
+    // Windows 控制台双击启动时保留窗口，便于查看退出原因；Linux 服务/CI 不阻塞
     fprintf(stderr, "\n[main] exitCode=%d. 按 Enter 关闭窗口...\n", exitCode);
     fflush(stderr);
     std::getchar();
+#else
+    fprintf(stderr, "\n[main] exitCode=%d.\n", exitCode);
+    fflush(stderr);
+#endif
     return exitCode;
 }
 

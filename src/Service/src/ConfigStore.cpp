@@ -12,23 +12,9 @@
 #include <sstream>
 #include <algorithm>
 
-#include <windows.h>
-#include <io.h>
+#include "MyProt/Core/Platform.hpp"   // 跨平台文件系统: 存在性/原子替换/删除/枚举
 
 namespace MyProt { namespace Service {
-
-namespace {
-
-// 窄字符路径 → 宽字符 (配置文件路径约定 UTF-8, 与 JSON 一致)
-std::wstring ToWide(const std::string& s) {
-    int n = ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    if (n <= 0) return std::wstring();
-    std::wstring w(static_cast<size_t>(n) - 1, L'\0');
-    ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], n);
-    return w;
-}
-
-} // namespace
 
 ConfigStore::ConfigStore(const ConfigStoreOptions& options)
     : _opts(options) {}
@@ -73,7 +59,7 @@ Core::Expected<std::string> ConfigStore::ReadFile(const std::string& path) const
     return Core::Expected<std::string>(ss.str());
 }
 
-// ── 原子写: 临时文件 + MoveFileExW 原子替换 (Windows) ──
+// ── 原子写: 临时文件 + 原子替换 (Windows MoveFileExW / POSIX rename) ──
 Core::Expected<void> ConfigStore::AtomicWrite(const std::string& path,
                                               const std::string& content) {
     std::string tmp = path + ".tmp";
@@ -90,9 +76,8 @@ Core::Expected<void> ConfigStore::AtomicWrite(const std::string& path,
                                     "写临时文件失败", "path=" + tmp);
         }
     }
-    if (!::MoveFileExW(ToWide(tmp).c_str(), ToWide(path).c_str(),
-                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        ::DeleteFileW(ToWide(tmp).c_str());
+    if (!Core::Platform::AtomicReplaceFile(tmp, path)) {
+        Core::Platform::RemoveFile(tmp);
         return Core::Unexpected(Core::Error::Code::ConfigError,
                                 "原子替换配置失败", "path=" + path);
     }
@@ -113,18 +98,18 @@ Core::Expected<void> ConfigStore::BackupFile(const std::string& path) {
     // 先清理超出保留上限的最老备份
     for (int i = _opts.backupRetention; i >= 1; --i) {
         std::string bak = path + ".bak." + std::to_string(i);
-        if (::GetFileAttributesW(ToWide(bak).c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+        if (!Core::Platform::FileExists(bak)) continue;
         // 若到达上限仍需保留, 删除最老一份
         if (i == _opts.backupRetention) {
-            ::DeleteFileW(ToWide(bak).c_str());
+            Core::Platform::RemoveFile(bak);
         }
     }
     // 轮转: bak.N ← bak.(N-1)
     for (int i = _opts.backupRetention - 1; i >= 1; --i) {
         std::string from = path + ".bak." + std::to_string(i);
         std::string to   = path + ".bak." + std::to_string(i + 1);
-        if (::GetFileAttributesW(ToWide(from).c_str()) != INVALID_FILE_ATTRIBUTES) {
-            ::MoveFileExW(ToWide(from).c_str(), ToWide(to).c_str(), MOVEFILE_REPLACE_EXISTING);
+        if (Core::Platform::FileExists(from)) {
+            Core::Platform::AtomicReplaceFile(from, to);
         }
     }
     // 当前版 → bak.1
@@ -155,20 +140,13 @@ Core::Expected<std::vector<std::string>> ConfigStore::List(ConfigScope scope) co
     }
     // Protocol: 枚举 configDir/protocols/*.json
     std::vector<std::string> names;
-    std::string dir = _opts.configDir + ConfigLayout::kProtocolsDirPath + "/";
-    std::string pattern = dir + "*.json";
-    _finddata_t fd;
-    intptr_t h = ::_findfirst(pattern.c_str(), &fd);
-    if (h != -1) {
-        do {
-            std::string file(fd.name);
-            if (file.size() > 5 && file.substr(file.size() - 5) == ".json") {
-                names.push_back(file.substr(0, file.size() - 5));
-            }
-        } while (::_findnext(h, &fd) == 0);
-        ::_findclose(h);
+    const std::string dir = _opts.configDir + ConfigLayout::kProtocolsDirPath;
+    const std::vector<std::string> files = Core::Platform::ListFiles(dir, ".json");
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        if (files[i].size() > 5) {
+            names.push_back(files[i].substr(0, files[i].size() - 5));
+        }
     }
-    std::sort(names.begin(), names.end());
     return Core::Expected<std::vector<std::string>>(names);
 }
 
@@ -293,7 +271,7 @@ Core::Expected<std::vector<std::string>> ConfigStore::ListBackups(
     std::vector<std::string> tags;
     for (int i = 1; i <= _opts.backupRetention; ++i) {
         std::string bak = path + ".bak." + std::to_string(i);
-        if (::GetFileAttributesW(ToWide(bak).c_str()) != INVALID_FILE_ATTRIBUTES) {
+        if (Core::Platform::FileExists(bak)) {
             tags.push_back("bak." + std::to_string(i));
         }
     }
@@ -350,19 +328,19 @@ Core::Expected<void> ConfigStore::Delete(ConfigScope scope, const std::string& n
     std::string path = ResolvePath(scope, name, &err);
     if (path.empty()) return Core::UnexpectedType{err};
 
-    if (::GetFileAttributesW(ToWide(path).c_str()) == INVALID_FILE_ATTRIBUTES) {
+    if (!Core::Platform::FileExists(path)) {
         return Core::Unexpected(Core::Error::Code::ProtocolNotFound,
                                 "协议配置不存在", "name=" + name);
     }
-    if (!::DeleteFileW(ToWide(path).c_str())) {
+    if (!Core::Platform::RemoveFile(path)) {
         return Core::Unexpected(Core::Error::Code::ConfigError,
                                 "删除配置文件失败", "path=" + path);
     }
     // 连带清理备份
     for (int i = 1; i <= _opts.backupRetention; ++i) {
         std::string bak = path + ".bak." + std::to_string(i);
-        if (::GetFileAttributesW(ToWide(bak).c_str()) != INVALID_FILE_ATTRIBUTES) {
-            ::DeleteFileW(ToWide(bak).c_str());
+        if (Core::Platform::FileExists(bak)) {
+            Core::Platform::RemoveFile(bak);
         }
     }
     return Core::VoidExpected();

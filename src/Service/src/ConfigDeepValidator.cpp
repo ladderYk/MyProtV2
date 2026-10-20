@@ -11,10 +11,7 @@
 #include <set>
 #include <unordered_map>
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
+#include "MyProt/Core/Platform.hpp"     // 跨平台文件存在性
 
 #include <nlohmann/json.hpp>
 
@@ -28,17 +25,8 @@ using nlohmann::json;
 
 // ──────────────────── 基础工具 ────────────────────
 
-std::wstring ToWide(const std::string& s) {
-    int n = ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    if (n <= 0) return std::wstring();
-    std::wstring w(static_cast<size_t>(n) - 1, L'\0');
-    ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], n);
-    return w;
-}
-
 bool FileExists(const std::string& path) {
-    if (path.empty()) return false;
-    return ::GetFileAttributesW(ToWide(path).c_str()) != INVALID_FILE_ATTRIBUTES;
+    return Core::Platform::FileExists(path);
 }
 
 bool IsHexChar(char c) {
@@ -841,6 +829,20 @@ bool ParseOperationDoc(const json& j, Core::OperationConfig& op, std::string& er
                 || !OptInt(rp, "dataStartIndex", op.responseParser.dataStartIndex, err)
                 || !OptStr(rp, "dataLengthExpr", op.responseParser.dataLengthExpr, err)) {
             return false;
+        }
+        // v1.28: validCondition 加载期语法校验 (与运行时同一 MiniExpression 解析器).
+        //   堵住"写了多条件不报错、运行时静默失败"盲区 — 语法错误在此报 Error, 不放行到运行时.
+        if (!op.responseParser.validCondition.empty()) {
+            try {
+                MyProt::Engine::MiniExpression::Parser p(op.responseParser.validCondition);
+                p.Parse();
+            } catch (const MyProt::Engine::MiniExpression::Error& e) {
+                err = "操作 " + op.name + " validCondition 语法错误: " + e.what();
+                return false;
+            } catch (...) {
+                err = "操作 " + op.name + " validCondition 语法错误";
+                return false;
+            }
         }
     }
         // 操作语义标注 (可选; 空 = 未标注, "read" | "write" 由校验器核对)

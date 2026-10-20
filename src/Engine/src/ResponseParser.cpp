@@ -2,6 +2,7 @@
 // 响应解析器实现 — 单标签响应解析 (C++11, ADR-0010 §5)
 
 #include "MyProt/Engine/ResponseParser.hpp"
+#include "MyProt/Engine/MiniExpression.hpp"
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -16,22 +17,30 @@ int64_t NowMs() {
             std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
-/// 校验 validCondition 子集 "resp[N]==V"
-bool CheckValidCondition(const Core::ByteView& resp, const std::string& cond) {
-    size_t lb = cond.find("resp[");
-    if (lb == std::string::npos) return false;
-    size_t rb = cond.find(']', lb);
-    size_t eq = cond.find("==", rb == std::string::npos ? lb : rb);
-    if (rb == std::string::npos || eq == std::string::npos) return false;
-
-    int idx = std::atoi(cond.substr(lb + 5, rb - lb - 5).c_str());
-    if (idx < 0 || static_cast<size_t>(idx) >= resp.size) return false;
-
-    // 跳过 "==" 后的空白
-    size_t vpos = eq + 2;
-    while (vpos < cond.size() && (cond[vpos] == ' ' || cond[vpos] == '\t')) ++vpos;
-    uint32_t expect = static_cast<uint32_t>(std::strtoul(cond.c_str() + vpos, 0, 0));
-    return resp[static_cast<size_t>(idx)] == expect;
+/// v1.28: 求值 validCondition 布尔表达式 (由 MiniExpression 驱动).
+///   支持: resp[N] 响应字节访问 (N 可为算术表达式), 比较 == != > < >= <=,
+///         逻辑 && || !, 算术 + - * / % & | ^ ~ ( ).
+///   旧语法 "resp[N]==V" 为其子集 — 向后兼容, 现有协议零改动.
+///   解析/求值失败返回 false (调用方视为"条件不满足").
+bool EvalCondition(const Core::ByteView& resp, const std::string& cond) {
+    try {
+        MiniExpression::Parser p(cond);
+        p.Parse();
+        uint64_t v = p.Evaluate([&](const std::string& name, bool& found) -> uint64_t {
+            // 规范名 "resp[<index>]" → 取响应第 index 字节; 越界视为未找到 → 抛错 → false
+            if (name.size() > 6 && name.compare(0, 5, "resp[") == 0 && name.back() == ']') {
+                int idx = std::atoi(name.substr(5, name.size() - 6).c_str());
+                if (idx < 0 || static_cast<size_t>(idx) >= resp.size) { found = false; return 0; }
+                found = true;
+                return resp[static_cast<size_t>(idx)];
+            }
+            found = false;
+            return 0;
+        });
+        return v != 0;
+    } catch (...) {
+        return false;
+    }
 }
 
 /// 依 finalType 填充 TypedValue; 成功 true / 类型不支持或数据不足 false
@@ -134,16 +143,16 @@ Core::ByteOrder ResponseParser::ResolveByteOrder(
 bool ResponseParser::CheckCondition(const Core::ByteView& response,
                                     const std::string& validCondition) {
     if (validCondition.empty()) return true;
-    return CheckValidCondition(response, validCondition);
+    return EvalCondition(response, validCondition);
 }
 
 Core::Expected<Core::TagValue> ResponseParser::Parse(const Core::ByteView& response,
                                                      const Core::ResponseParserConfig& config,
                                                      const Core::TagDefinition& tag,
                                                      Core::ByteOrder byteOrder) {
-    // ── 有效条件校验 ──
+    // ── 有效条件校验 (v1.28: MiniExpression 驱动, 支持多条件布尔表达式) ──
     if (!config.validCondition.empty() &&
-        !CheckValidCondition(response, config.validCondition)) {
+        !CheckCondition(response, config.validCondition)) {
         return Core::Unexpected(Core::Error::Code::InvalidResponse,
                                 "validCondition 不满足", config.validCondition);
     }

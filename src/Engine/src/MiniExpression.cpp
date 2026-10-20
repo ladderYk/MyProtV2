@@ -35,6 +35,12 @@ static std::unique_ptr<Node> MakeBinary(char op, std::unique_ptr<Node> lhs, std:
     n->rhs = std::move(rhs);
     return n;
 }
+static std::unique_ptr<Node> MakeResp(std::unique_ptr<Node> index) {
+    auto n = std::unique_ptr<Node>(new Node());
+    n->type = Node::Resp;
+    n->lhs = std::move(index);
+    return n;
+}
 
 Parser::Parser(const std::string& expr) : expr_(expr) {}
 Parser::~Parser() = default;
@@ -52,7 +58,64 @@ bool Parser::Consume(char c) {
     return false;
 }
 
-// 优先级从低到高: Expr(+-) → Term(*/%) → BitOr(|) → BitXor(^) → BitAnd(&) → Unary(-~) → Primary
+// 优先级从低到高: Or(||) → And(&&) → Equality(== !=) → Relational(> < >= <=)
+//   → Expr(+-) → Term(*/%) → BitOr(|) → BitXor(^) → BitAnd(&) → Unary(- ~ + !) → Primary
+std::unique_ptr<Node> Parser::ParseOr() {
+    auto left = ParseAnd();
+    while (true) {
+        SkipWs();
+        if (pos_ + 1 < expr_.size() && expr_[pos_] == '|' && expr_[pos_ + 1] == '|') {
+            pos_ += 2;
+            auto right = ParseAnd();
+            left = MakeBinary('O', std::move(left), std::move(right));
+        } else break;
+    }
+    return left;
+}
+std::unique_ptr<Node> Parser::ParseAnd() {
+    auto left = ParseEquality();
+    while (true) {
+        SkipWs();
+        if (pos_ + 1 < expr_.size() && expr_[pos_] == '&' && expr_[pos_ + 1] == '&') {
+            pos_ += 2;
+            auto right = ParseEquality();
+            left = MakeBinary('A', std::move(left), std::move(right));
+        } else break;
+    }
+    return left;
+}
+std::unique_ptr<Node> Parser::ParseEquality() {
+    auto left = ParseRelational();
+    while (true) {
+        SkipWs();
+        if (pos_ + 1 < expr_.size() && expr_[pos_] == '=' && expr_[pos_ + 1] == '=') {
+            pos_ += 2;
+            auto right = ParseRelational();
+            left = MakeBinary('=', std::move(left), std::move(right));
+        } else if (pos_ + 1 < expr_.size() && expr_[pos_] == '!' && expr_[pos_ + 1] == '=') {
+            pos_ += 2;
+            auto right = ParseRelational();
+            left = MakeBinary('n', std::move(left), std::move(right));
+        } else break;
+    }
+    return left;
+}
+std::unique_ptr<Node> Parser::ParseRelational() {
+    auto left = ParseExpr();
+    while (true) {
+        SkipWs();
+        if (pos_ + 1 < expr_.size() && expr_[pos_] == '>' && expr_[pos_ + 1] == '=') {
+            pos_ += 2; auto r = ParseExpr(); left = MakeBinary('G', std::move(left), std::move(r));
+        } else if (pos_ + 1 < expr_.size() && expr_[pos_] == '<' && expr_[pos_ + 1] == '=') {
+            pos_ += 2; auto r = ParseExpr(); left = MakeBinary('L', std::move(left), std::move(r));
+        } else if (pos_ < expr_.size() && expr_[pos_] == '>') {
+            pos_ += 1; auto r = ParseExpr(); left = MakeBinary('>', std::move(left), std::move(r));
+        } else if (pos_ < expr_.size() && expr_[pos_] == '<') {
+            pos_ += 1; auto r = ParseExpr(); left = MakeBinary('<', std::move(left), std::move(r));
+        } else break;
+    }
+    return left;
+}
 std::unique_ptr<Node> Parser::ParseExpr() {
     auto left = ParseTerm();
     while (true) {
@@ -80,9 +143,15 @@ std::unique_ptr<Node> Parser::ParseTerm() {
 }
 std::unique_ptr<Node> Parser::ParseBitOr() {
     auto left = ParseBitXor();
-    while (Consume('|')) {
-        auto right = ParseBitXor();
-        left = MakeBinary('|', std::move(left), std::move(right));
+    while (true) {
+        SkipWs();
+        // 单个 '|' 才是按位或; '||' 由 ParseOr 处理, 此处不消费
+        if (pos_ < expr_.size() && expr_[pos_] == '|'
+                && !(pos_ + 1 < expr_.size() && expr_[pos_ + 1] == '|')) {
+            ++pos_;
+            auto right = ParseBitXor();
+            left = MakeBinary('|', std::move(left), std::move(right));
+        } else break;
     }
     return left;
 }
@@ -96,9 +165,15 @@ std::unique_ptr<Node> Parser::ParseBitXor() {
 }
 std::unique_ptr<Node> Parser::ParseBitAnd() {
     auto left = ParseUnary();
-    while (Consume('&')) {
-        auto right = ParseUnary();
-        left = MakeBinary('&', std::move(left), std::move(right));
+    while (true) {
+        SkipWs();
+        // 单个 '&' 才是按位与; '&&' 由 ParseAnd 处理, 此处不消费
+        if (pos_ < expr_.size() && expr_[pos_] == '&'
+                && !(pos_ + 1 < expr_.size() && expr_[pos_ + 1] == '&')) {
+            ++pos_;
+            auto right = ParseUnary();
+            left = MakeBinary('&', std::move(left), std::move(right));
+        } else break;
     }
     return left;
 }
@@ -115,6 +190,14 @@ std::unique_ptr<Node> Parser::ParseUnary() {
         // 一元 + 直接透传
         return ParseUnary();
     }
+    SkipWs();
+    // 一元逻辑非 '!'; 排除 '!=' (由 ParseEquality 处理)
+    if (pos_ < expr_.size() && expr_[pos_] == '!'
+            && !(pos_ + 1 < expr_.size() && expr_[pos_ + 1] == '=')) {
+        ++pos_;
+        auto operand = ParseUnary();
+        return MakeUnary('!', std::move(operand));
+    }
     return ParsePrimary();
 }
 std::unique_ptr<Node> Parser::ParsePrimary() {
@@ -123,7 +206,7 @@ std::unique_ptr<Node> Parser::ParsePrimary() {
         throw Error("MiniExpression: 意外的表达式末尾");
     }
     if (Consume('(')) {
-        auto inner = ParseExpr();
+        auto inner = ParseOr();    // 括号内支持完整条件表达式 (v1.28)
         if (!Consume(')')) {
             throw Error("MiniExpression: 缺少右括号");
         }
@@ -136,7 +219,26 @@ std::unique_ptr<Node> Parser::ParsePrimary() {
         return ParseNumber();
     }
     if (std::isalpha(static_cast<unsigned char>(expr_[pos_])) || expr_[pos_] == '_') {
-        return ParseIdent();
+        // 读取标识符, 识别 resp[N] 响应字节索引 (N 可为任意算术表达式)
+        size_t start = pos_;
+        while (pos_ < expr_.size()
+               && (std::isalnum(static_cast<unsigned char>(expr_[pos_])) || expr_[pos_] == '_')) {
+            ++pos_;
+        }
+        std::string ident = expr_.substr(start, pos_ - start);
+        SkipWs();
+        if (ident == "resp" && pos_ < expr_.size() && expr_[pos_] == '[') {
+            ++pos_;                         // consume '['
+            auto idx = ParseExpr();         // index expression (full arithmetic)
+            SkipWs();
+            if (pos_ >= expr_.size() || expr_[pos_] != ']') {
+                throw Error("MiniExpression: resp[...] 缺少 ']'");
+            }
+            ++pos_;                         // consume ']'
+            return MakeResp(std::move(idx));
+        }
+        if (ident.empty()) throw Error("MiniExpression: 变量名为空");
+        return MakeVar(ident);
     }
     throw Error(std::string("MiniExpression: 意外的字符 '") + expr_[pos_] + "'");
 }
@@ -202,7 +304,7 @@ std::unique_ptr<Node> Parser::ParseLenToken() {
 
 void Parser::Parse() {
     pos_ = 0;
-    root_ = ParseExpr();
+    root_ = ParseOr();
     SkipWs();
     if (pos_ != expr_.size()) {
         throw Error(std::string("MiniExpression: 解析后剩余字符: ") + expr_.substr(pos_));
@@ -219,11 +321,21 @@ uint64_t Parser::EvalNode(const Node& n, const VarLookup& lookup) const {
             if (!found) throw Error("MiniExpression: 未知变量: " + n.text);
             return v;
         }
+        case Node::Resp: {
+            // resp[N] — 求值索引后以规范名 "resp[N]" 交由 lookup 解析 (如从响应字节流取第 N 字节)
+            uint64_t idx = EvalNode(*n.lhs, lookup);
+            std::string name = "resp[" + std::to_string(idx) + "]";
+            bool found = true;
+            uint64_t v = lookup(name, found);
+            if (!found) throw Error("MiniExpression: 响应字节越界或未提供: " + name);
+            return v;
+        }
         case Node::Unary: {
             uint64_t v = EvalNode(*n.rhs, lookup);
             switch (n.op) {
                 case '-': return (uint64_t)(-(int64_t)v);
                 case '~': return ~v;
+                case '!': return v == 0 ? 1 : 0;
                 default: throw Error("MiniExpression: 未知一元运算符");
             }
         }
@@ -239,6 +351,15 @@ uint64_t Parser::EvalNode(const Node& n, const VarLookup& lookup) const {
                 case '&': return a & b;
                 case '|': return a | b;
                 case '^': return a ^ b;
+                // 条件运算 (v1.28) — 结果 0/1
+                case '=': return a == b ? 1 : 0;
+                case 'n': return a != b ? 1 : 0;
+                case '>': return a > b ? 1 : 0;
+                case '<': return a < b ? 1 : 0;
+                case 'G': return a >= b ? 1 : 0;
+                case 'L': return a <= b ? 1 : 0;
+                case 'A': return (a != 0 && b != 0) ? 1 : 0;
+                case 'O': return (a != 0 || b != 0) ? 1 : 0;
                 default: throw Error("MiniExpression: 未知二元运算符");
             }
         }

@@ -15,7 +15,8 @@ A **pure config-driven industrial protocol gateway** in C++11. Every communicati
 
 ```
 MyProt-master/
-├── MyProt.sln          # Visual Studio solution (main build entry)
+├── MyProt.sln          # Visual Studio solution (main build entry on Windows)
+├── CMakeLists.txt      # Linux/CI build entry (same source tree, no VS changes)
 ├── src/
 │   ├── Core/           # Expected<T,E>/Optional/ByteView/ByteOrder value types + config POCOs
 │   ├── Transport/      # IChannel abstraction + TCP/TLS/serial channels, LengthField/Silence framing
@@ -55,6 +56,32 @@ MyProt-master/
    ```bat
    powershell -ExecutionPolicy Bypass -File scripts\ci.ps1
    ```
+
+### Linux
+
+The same sources build with CMake; `MyProt.sln` stays untouched. Requirements:
+
+- GCC or Clang with C++11 support
+- CMake 3.13+, GNU Make, POSIX threads
+
+```bash
+cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release
+cmake --build build-linux -j
+
+# build + 4 unit suites + E2E (exit code 0 = all green)
+./scripts/ci-linux.sh
+```
+
+Binaries are written to `bin/<Config>/` (e.g. `bin/Release/MyProt.App`). Run them from the
+repository root so the relative `configs/` and `webui/dist` paths resolve:
+
+```bash
+./bin/Release/MyProt.App --config configs --port 8080
+```
+
+Platform differences are isolated in two places: `src/Core/include/MyProt/Core/Platform.hpp`
+(environment variables, console code page, file/directory operations) and
+`src/App/CrashDiagnostics.cpp` (SEH + dbghelp on Windows, POSIX signals + `backtrace` on Linux).
 
 ### Simulation Testing
 

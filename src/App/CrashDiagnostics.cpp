@@ -1,4 +1,5 @@
 // src/App/CrashDiagnostics.cpp — 崩溃取证 (方案1-S1 从 RuntimeGlue.cpp 搬移, 零行为变更)
+// 平台分支: Windows 用 SEH + dbghelp; POSIX 用 signal + backtrace。
 
 #include "CrashDiagnostics.hpp"
 
@@ -8,12 +9,22 @@
 #include <exception>
 #include <iostream>
 
-#include <windows.h>
-#include <dbghelp.h>
-#include <crtdbg.h>
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#  include <dbghelp.h>
+#  include <crtdbg.h>
+#  if defined(_MSC_VER)
+#    pragma comment(lib, "dbghelp.lib")   // 符号栈回溯依赖
+#  endif
+#else
+#  include <execinfo.h>
+#endif
 
 namespace MyProt { namespace App {
-// 未捕获异常诊断: 打印 what() 后按 MSVC abort 语义终止
+// 未捕获异常诊断: 打印 what() 后按 abort 语义终止
 void OnTerminate() {
     std::exception_ptr ep = std::current_exception();
     if (ep) {
@@ -31,6 +42,7 @@ void OnTerminate() {
     std::abort();
 }
 
+#if defined(_WIN32)
 // ── 硬崩溃取证: SIGABRT / SEH 未处理异常 + dbghelp 栈回溯 ──
 void PrintCurrentStack(WORD skip) {
     void* frames[32] = {0};
@@ -151,5 +163,57 @@ void InstallCrashDiagnostics() {
     ::SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
     ::SymInitialize(::GetCurrentProcess(), NULL, TRUE);
 }
+
+#else  // ── POSIX ──
+
+// ── 栈回溯: glibc/backtrace (符号名可读性取决于编译期 -rdynamic) ──
+void PrintCurrentStack(int skip) {
+    void* frames[32] = {0};
+    const int n = ::backtrace(frames, 32);
+    if (n <= 0) return;
+    char** symbols = ::backtrace_symbols(frames, n);
+    for (int i = skip; i < n; ++i) {
+        std::cerr << "  #" << (i - skip) << " ";
+        if (symbols != NULL && symbols[i] != NULL) {
+            std::cerr << symbols[i];
+        } else {
+            std::cerr << frames[i];
+        }
+        std::cerr << std::endl;
+    }
+    if (symbols != NULL) std::free(symbols);
+    std::cerr.flush();
+}
+
+const char* SignalName(int sig) {
+    switch (sig) {
+        case SIGABRT: return "SIGABRT";
+        case SIGSEGV: return "SIGSEGV";
+        case SIGBUS:  return "SIGBUS";
+        case SIGILL:  return "SIGILL";
+        case SIGFPE:  return "SIGFPE";
+        default:      return "SIGNAL";
+    }
+}
+
+// 打印现场后恢复默认处理并重新投递, 保留 core dump 行为
+void OnFatalSignal(int sig) {
+    std::cerr << "[FATAL] " << SignalName(sig) << " (信号 " << sig
+              << ") 栈回溯:" << std::endl;
+    PrintCurrentStack(2);
+    ::signal(sig, SIG_DFL);
+    ::raise(sig);
+}
+
+void InstallCrashDiagnostics() {
+    std::set_terminate(&OnTerminate);
+    ::signal(SIGABRT, &OnFatalSignal);
+    ::signal(SIGSEGV, &OnFatalSignal);
+    ::signal(SIGBUS,  &OnFatalSignal);
+    ::signal(SIGILL,  &OnFatalSignal);
+    ::signal(SIGFPE,  &OnFatalSignal);
+}
+
+#endif
 
 }} // namespace MyProt::App

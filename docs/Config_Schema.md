@@ -175,7 +175,7 @@ configs/
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `validCondition` | string | `""` | 表达式（文法见 modules/02 §2.1）；空 = 跳过校验。**注意**：引擎仅支持 `resp[N]==V` 单条件形式（如 `resp[7]==0x03`），多条件（`&&`/`||`/`!=` 等）**静默失效**——校验器加载期不检查，标签 AlwBad 且无错误提示。建议未来在 ConfigDeepValidator 增加语法校验。 |
+| `validCondition` | string | `""` | 条件表达式（v1.28：MiniExpression 驱动，支持 `resp[N]` 字节访问、比较 `== != > < >= <=`、逻辑 `&& || !`、算术 `+ - * / % & | ^ ~`）；空 = 跳过校验。旧语法 `resp[N]==V` 为子集，向后兼容。加载期语法校验（ConfigDeepValidator）——语法错误不放行到运行时。 |
 | `dataStartIndex` | int | 0 | 数据区起始字节偏移 |
 | `dataLengthExpr` | string | `""` | 数据区长度表达式（如 `"resp[8]"`）；空 = 取 `帧长 - dataStartIndex`。**注意**：此回退逻辑在真实采集路径与仿真路径均生效（`ResponseParser.cpp:160`），非"仿真专用"。 |
 

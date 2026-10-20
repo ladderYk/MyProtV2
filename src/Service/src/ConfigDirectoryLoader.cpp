@@ -4,13 +4,13 @@
 
 #include "MyProt/Service/ConfigDirectoryLoader.hpp"
 
-#include <io.h>
 #include <fstream>
 #include <sstream>
 #include <iostream>
 #include <algorithm>
 #include <cctype>     // 别名归一化的标识符扫描
 
+#include "MyProt/Core/Platform.hpp"     // 跨平台目录枚举
 #include "MyProt/Service/ConfigValidator.hpp"
 #include "MyProt/Core/ServerConfig.hpp"  // 解析 server.json
 #include <nlohmann/json.hpp>
@@ -59,17 +59,7 @@ bool ReadTextFile(const std::string& path, std::string& out, std::string& err) {
 
 /// 枚举 dir 下 *.json 文件名 (不含路径, 已排序保证加载顺序稳定)
 std::vector<std::string> ListJsonFiles(const std::string& dir) {
-    std::vector<std::string> names;
-    const std::string pattern = dir + "/*.json";
-    ::_finddata_t fd;
-    ::intptr_t h = ::_findfirst(pattern.c_str(), &fd);
-    if (h == -1) return names;  // 无匹配 = 目录不存在或为空
-    do {
-        if ((fd.attrib & _A_SUBDIR) == 0) names.push_back(fd.name);
-    } while (::_findnext(h, &fd) == 0);
-    ::_findclose(h);
-    std::sort(names.begin(), names.end());
-    return names;
+    return Core::Platform::ListFiles(dir, ".json");
 }
 
 // ════════════════════════════════════════════════════════════════════

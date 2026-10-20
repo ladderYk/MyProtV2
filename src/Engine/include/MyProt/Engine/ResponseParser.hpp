@@ -14,7 +14,8 @@ namespace MyProt { namespace Engine {
 // ────────── concrete parser - single-tag response parsing (used directly by E2E/Gateway) ──────────
 
 /// Parse flow:
-///   1. validCondition check (supports "resp[N]==V", V in decimal or 0x hexadecimal)
+///   1. validCondition check (v1.28: MiniExpression-driven boolean expression;
+///      supports resp[N] byte access, == != > < >= <=, && || !, arithmetic + - * / % & | ^ ~)
 ///   2. dataStartIndex locates the data region
 ///   3. registerCount×2 bytes (if insufficient, take all remaining) converted per finalType
 ///   4. produce a TagValue (quality=Good, timestamp=now)
@@ -26,7 +27,7 @@ public:
         const Core::ProtocolConfig& protocol,
         const Core::Optional<Core::ByteOrder>& tagOverride);
 
-    /// Validate the validCondition subset "resp[N]==V"
+    /// Validate the validCondition boolean expression (v1.28: MiniExpression-driven)
     /// (scenarios like write-response echo that only need a condition check, without parsing the data region)
     static bool CheckCondition(const Core::ByteView& response,
                                const std::string& validCondition);
