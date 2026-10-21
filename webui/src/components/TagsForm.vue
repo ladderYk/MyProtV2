@@ -9,6 +9,7 @@ import {
   ElSwitch, ElCard, ElButton, ElAlert, ElTabs, ElTabPane
 } from 'element-plus'
 import VarTracePanel from './VarTracePanel.vue'
+import FieldHelp from './FieldHelp.vue'
 import { listConfigs, getConfig, getSchema } from '../api'
 
 const props = defineProps({
@@ -40,6 +41,12 @@ const openDevs = reactive({})       // 设备节点展开态; 缺省 = 展开
 const sysSettings = ref(false)      // 系统设置抽屉 (原「全局参数」页签)
 const curDev = computed(() => (local.devices || [])[selDev.value])
 const curTag = computed(() => (local.tags || [])[selTag.value])
+// 文本输入草稿: 设备 ID / 标签全名有重命名语义 (校验+引用同步), 需在失焦时提交,
+// 输入过程中只更新草稿; 否则 Element Plus 会因 modelValue 未变而回滚原生 input
+const devIdDraft = ref('')
+const tagNameDraft = ref('')
+watch(() => curDev.value && curDev.value.id, id => { devIdDraft.value = id || '' }, { immediate: true })
+watch(() => curTag.value && curTag.value.name, n => { tagNameDraft.value = n || '' }, { immediate: true })
 
 /// 某设备下的标签数 (树上角标)
 function tagCountOf(devId) {
@@ -52,7 +59,15 @@ function devIndexById(id) {
 function isOpen(i) { return openDevs[i] !== false }
 function toggleDev(i) { openDevs[i] = !isOpen(i) }
 function selectDevice(i) { if (i < 0) return; selMode.value = 'dev'; selDev.value = i }
-function selectTag(i) { if (i < 0) return; selMode.value = 'tag'; selTag.value = i }
+function selectTag(i) {
+  if (i < 0) return
+  selMode.value = 'tag'
+  selTag.value = i
+  // 同步设备下标 — 否则「新增标签」会落到上一个选中的设备下
+  const t = (local.tags || [])[i]
+  const d = t ? devIndexById(t.deviceId) : -1
+  if (d >= 0) selDev.value = d
+}
 
 // ── 方案 2: 校验问题 → 定位设备/标签 ─────────────────────────────
 //   field 优先 (devices.<id>.* / tags.<name>.*), ruleId=ref.tag* 视为标签侧;
@@ -72,7 +87,15 @@ function focusIssue(issue) {
   return subject ? `未找到设备「${subject}」(可能已删除或改名)` : '无法定位: 该条目无设备 ID'
 }
 
-defineExpose({ focusIssue })
+defineExpose({ focusIssue, focusDevice, addDevice, addTag })
+
+/// 按设备 ID 选中 (总览「设备概览」/ 快捷动作跳转用)
+function focusDevice(id) {
+  const i = devIndexById(id)
+  if (i < 0) return false
+  selectDevice(i)
+  return true
+}
 
 /// 某设备下的标签索引 (带搜索过滤)
 function tagsOfDev(devId) {
@@ -126,12 +149,18 @@ function ensureShape(src) {
   return d
 }
 
+// 数值兜底: Number('abc') 是 NaN, 而 NaN ?? 0 仍是 NaN (?? 只拦 null/undefined)
+function toNum(v) {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
 // variables ↔ _rows 双向桥; writeVariables ↔ _wrows (v1.7)
 function syncRows(tag) {
   const vars = tag.variables && typeof tag.variables === 'object' ? tag.variables : {}
-  tag._rows = Object.entries(vars).map(([k, v]) => ({ k, v: Number(v) ?? 0 }))
+  tag._rows = Object.entries(vars).map(([k, v]) => ({ k, v: toNum(v) }))
   const wv = tag.writeVariables && typeof tag.writeVariables === 'object' ? tag.writeVariables : {}
-  tag._wrows = Object.entries(wv).map(([k, v]) => ({ k, v: Number(v) ?? 0 }))
+  tag._wrows = Object.entries(wv).map(([k, v]) => ({ k, v: toNum(v) }))
 }
 function flushVars(tag) {
   const obj = {}
@@ -259,7 +288,17 @@ function onDeviceProtocol(dev, proto) {
   emitDoc()
 }
 function removeDevice(i) {
+  const dev = local.devices[i]
+  if (!dev) return
+  const owned = (local.tags || []).filter(t => t.deviceId === dev.id).length
+  if (owned && !confirm(`删除设备「${dev.id}」将同时删除其下 ${owned} 个标签，确定？`)) return
   local.devices.splice(i, 1)
+  if (owned) {
+    // 级联删除, 避免留下引用不存在设备的孤儿标签
+    const kept = local.tags.filter(t => t.deviceId !== dev.id)
+    local.tags.splice(0, local.tags.length, ...kept)
+    if (!local.tags.length) selMode.value = 'dev'
+  }
   emitDoc()
 }
 
@@ -268,12 +307,12 @@ function renameDevice(i, newId) {
   newId = (newId || '').trim()
   if (!newId) {
     ElMessage.warning('设备 ID 不能为空')
-    return
+    return false
   }
   // v1.1 增: 设备 ID 重名校验
   if (local.devices.some((d, j) => j !== i && d.id === newId)) {
     ElMessage.warning('设备 ID「' + newId + '」已存在')
-    return
+    return false
   }
   const oldId = local.devices[i].id
   local.devices[i].id = newId
@@ -281,6 +320,14 @@ function renameDevice(i, newId) {
     if (t.deviceId === oldId) t.deviceId = newId
   }
   emitDoc()
+  return true
+}
+
+/// 失焦提交设备 ID; 校验失败时草稿回退到当前值
+function commitDeviceId() {
+  if (!renameDevice(selDev.value, devIdDraft.value)) {
+    devIdDraft.value = (curDev.value && curDev.value.id) || ''
+  }
 }
 
 // 标签 operation 候选: 所属设备的协议对应的操作名
@@ -432,10 +479,143 @@ function defaultVariablesFor(devId) {
   return out
 }
 
+// ── 简易地址映射 (v1.31) ───────────────────────────────────────────
+// 引擎契约是跨协议字节单位 StartByteAddress / ByteCount, 但现场用户只熟悉
+// “寄存器号 / 字节地址 / 线圈号 + 值个数”。这里按协议 read 操作的派生表达式
+// 反推单位, 在能推导时提供简易输入; 推导不出 (ADS / SEER) 则不出该区块。
+const TYPE_SIZE = {
+  Bool: 1, ByteArray: 1, String: 1,
+  UInt16: 2, Int16: 2, UInt32: 4, Int32: 4, Float: 4,
+  UInt64: 8, Int64: 8, Double: 8
+}
+function typeSizeOf(t) { return TYPE_SIZE[t] || 0 }
+
+function readOpOf(tag) {
+  const dev = (local.devices || []).find(d => d.id === tag.deviceId)
+  const doc = dev && protoDocs[dev.protocol]
+  return (doc && doc.operations && doc.operations[tag.operation]) || null
+}
+
+/// 'word' = 字/寄存器地址; 'byte' = 字节地址 (S7); 'bit' = 线圈位地址; '' = 不支持
+function simpleAddrMode(tag) {
+  if (tag.direction === 'write') return ''       // 只写标签的 operation 是写模板, 语义不同
+  const op = readOpOf(tag)
+  if (!op) return ''
+  const outputs = Object.values(op.outputs || {}).filter(x => x && typeof x === 'object')
+  const exprs = outputs.map(x => String(x.expr || ''))
+  if (!exprs.some(e => /ByteCount/.test(e))) return ''   // 操作本身不消费 ByteCount (ADS/SEER)
+  // 地址单位看「引用 StartByteAddress 的派生表达式」, 不能看 ByteCount:
+  //   S7 的 Length=ByteCount/2 是“字数量”, 但地址仍是字节地址
+  const addrExprs = outputs
+    .filter(x => String(x.expr || '').indexOf('StartByteAddress') >= 0)
+    .map(x => String(x.expr))
+  // Modbus 线圈: StartByteAddress * 8 是位地址; 仅 Bool 有意义
+  if (addrExprs.some(e => /StartByteAddress\s*\*\s*8/.test(e))) {
+    return tag.finalType === 'Bool' ? 'bit' : ''
+  }
+  // 字寻址: StartByteAddress / 2 (Modbus 寄存器 / 三菱 D / 欧姆龙字)
+  if (addrExprs.some(e => /StartByteAddress\s*\/\s*2/.test(e))) return 'word'
+  // 无地址派生 = 地址本身就是字节语义 (S7 ReadVar*)
+  return 'byte'
+}
+
+function simpleSupported(tag) {
+  return !!typeSizeOf(tag.finalType) && !!simpleAddrMode(tag)
+}
+
+function simpleAddr(tag) {
+  const v = Number((tag.variables || {}).StartByteAddress) || 0
+  const mode = simpleAddrMode(tag)
+  if (mode === 'word') return v / 2
+  if (mode === 'bit') return v * 8 + Math.max(Number(tag.bitOffset) || 0, 0)
+  return v
+}
+
+function simpleCount(tag) {
+  const size = typeSizeOf(tag.finalType)
+  if (!size) return 0
+  return (Number((tag.variables || {}).ByteCount) || 0) / size
+}
+
+function simpleAddrLabel(tag) {
+  return { word: '起始字地址', byte: '起始字节地址', bit: '位地址 (线圈号)' }[simpleAddrMode(tag)] || '起始地址'
+}
+
+function simpleCountLabel(tag) {
+  return (tag.finalType === 'ByteArray' || tag.finalType === 'String') ? '字节数' : '值个数'
+}
+
+/// 位寻址 (Modbus 线圈) 或 S7 位标签: 不需要“值个数”输入
+function simpleBitOnly(tag) {
+  const mode = simpleAddrMode(tag)
+  return mode === 'bit' || (mode === 'byte' && tag.finalType === 'Bool')
+}
+
+function setSimpleAddr(tag, v) {
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) return
+  tag.variables = tag.variables || {}
+  const mode = simpleAddrMode(tag)
+  if (mode === 'word') {
+    tag.variables.StartByteAddress = Math.round(n) * 2
+  } else if (mode === 'bit') {
+    tag.variables.StartByteAddress = Math.floor(n / 8)
+    tag.bitOffset = Math.round(n) % 8
+    tag.variables.ByteCount = 1
+  } else {
+    tag.variables.StartByteAddress = Math.round(n)
+    if (tag.finalType === 'Bool') tag.variables.ByteCount = 1
+  }
+  syncRows(tag)
+  emitDoc()
+}
+
+function setSimpleBit(tag, v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return
+  tag.bitOffset = Math.min(7, Math.max(0, Math.round(n)))
+  emitDoc()
+}
+
+function setSimpleCount(tag, v) {
+  const n = Number(v)
+  const size = typeSizeOf(tag.finalType)
+  if (!Number.isFinite(n) || n < 1 || !size) return
+  tag.variables = tag.variables || {}
+  tag.variables.ByteCount = Math.round(n) * size
+  syncRows(tag)
+  emitDoc()
+}
+
+/// 改类型时保持“值个数”不变 (仅当原 ByteCount 能整除旧类型宽度)
+function setFinalType(tag, v) {
+  const oldSize = typeSizeOf(tag.finalType)
+  const bc = Number((tag.variables || {}).ByteCount) || 0
+  const exact = oldSize > 0 && bc > 0 && bc % oldSize === 0
+  const count = exact ? bc / oldSize : 0
+  tag.finalType = v
+  const size = typeSizeOf(v)
+  if (exact && size > 0) {
+    tag.variables.ByteCount = count * size
+    syncRows(tag)
+  }
+  if (v === 'Bool' && simpleAddrMode(tag) === 'byte') {
+    tag.variables = tag.variables || {}
+    tag.variables.ByteCount = 1
+    syncRows(tag)
+  }
+  emitDoc()
+}
+
 function addTag() {
   // v1.1 增: 默认名采用 <deviceId>.TagNN, NN 递增到不冲突
-  // v3 改: 归属「当前选中设备」(此前固定取 devices[0], 在树里给别的设备加标签会落到第一台设备下)
-  const devId = local.devices[selDev.value]?.id || local.devices[0]?.id || ''
+  // v3 改: 归属「当前选中对象」— 标签视图下取该标签所属设备, 否则取选中设备
+  if (!local.devices.length) {
+    ElMessage.warning('请先新增设备, 再添加标签')
+    return
+  }
+  const devId = (selMode.value === 'tag' && curTag.value && curTag.value.deviceId)
+    || local.devices[selDev.value]?.id || local.devices[0]?.id || ''
   let i = 1
   let defaultName = ''
   do {
@@ -483,6 +663,13 @@ function renameTag(i, newName) {
   return true
 }
 
+/// 失焦提交标签全名; 校验失败时草稿回退到当前值
+function commitTagName() {
+  if (!renameTag(selTag.value, tagNameDraft.value)) {
+    tagNameDraft.value = (curTag.value && curTag.value.name) || ''
+  }
+}
+
 /// hint.enum 摘要文本 — 元素可为裸数字或 {value,label} 对象
 function enumShortText(en) {
   if (!Array.isArray(en) || !en.length) return ''
@@ -507,6 +694,18 @@ function setByteOrder(tag, v) {
   if (v === null || v === undefined || v === '') delete tag.byteOrder
   else tag.byteOrder = v
   emitDoc()
+}
+
+// 展示元数据 (label/unit): 空输入即删除字段, 保持配置精简
+function setTagText(tag, key, v) {
+  if (v) tag[key] = v
+  else delete tag[key]
+  emitDoc()
+}
+
+/// 失焦时去掉首尾空白 (输入过程中保留, 避免中途删掉刚输入的空格)
+function trimTagText(tag, key, v) {
+  setTagText(tag, key, (v || '').trim())
 }
 
 // v1.1 增: 折叠状态持久化 (sessionStorage, 标签页关闭后失效)
@@ -557,6 +756,10 @@ function onEditSource({ varName, layerKey }) {
   <div class="tform">
     <!-- v3: 设备树左置 — 设备→标签 两级树 (默认全展开, 搜索同时匹配设备 ID 与标签名) -->
     <aside class="dev-tree">
+      <div class="dt-head">
+        <span>设备</span>
+        <span class="dt-head-count">{{ (local.devices || []).length }} 台 · {{ (local.tags || []).length }} 标签</span>
+      </div>
       <div class="dt-search">
         <el-input v-model="treeKw" size="small" clearable placeholder="搜索设备 / 标签" />
       </div>
@@ -587,7 +790,7 @@ function onEditSource({ varName, layerKey }) {
       </ul>
       <div class="dt-actions">
         <button class="dt-add" @click="addDevice">+ 新增设备</button>
-        <button class="dt-add" @click="addTag">+ 新增标签</button>
+        <button class="dt-add" :disabled="!local.devices.length" @click="addTag">+ 新增标签</button>
       </div>
     </aside>
 
@@ -630,13 +833,16 @@ function onEditSource({ varName, layerKey }) {
         <el-tab-pane label="设备信息" name="info">
           <el-card shadow="never" class="blk">
             <el-form size="default" class="form-grid">
-              <el-form-item label="设备 ID">
+              <el-form-item>
+                <template #label>设备 ID<FieldHelp section="device" field="id" /></template>
                 <el-input
-                  :model-value="curDev.id" style="width: 200px"
-                  @change="v => renameDevice(selDev, v)"
+                  :model-value="devIdDraft" style="width: 200px"
+                  @update:model-value="v => devIdDraft = v"
+                  @change="commitDeviceId"
                 />
               </el-form-item>
-              <el-form-item label="协议">
+              <el-form-item>
+                <template #label>协议<FieldHelp section="device" field="protocol" /></template>
                 <el-select
                   :model-value="curDev.protocol" style="width: 200px"
                   @change="v => onDeviceProtocol(curDev, v)"
@@ -657,7 +863,7 @@ function onEditSource({ varName, layerKey }) {
               <el-form-item label="主机">
                 <el-input
                   :model-value="curDev.connection.host" style="width: 200px"
-                  @change="v => { curDev.connection.host = v; emitDoc() }"
+                  @update:model-value="v => { curDev.connection.host = v; emitDoc() }"
                 />
               </el-form-item>
               <el-form-item label="端口">
@@ -675,7 +881,8 @@ function onEditSource({ varName, layerKey }) {
                 <span class="unit">ms</span>
                 <div class="field-hint">仅 TCP 建链等待上限</div>
               </el-form-item>
-              <el-form-item label="请求超时">
+              <el-form-item>
+                <template #label>请求超时<FieldHelp section="device" field="requestTimeoutMs" /></template>
                 <el-input-number
                   :model-value="curDev.requestTimeoutMs ?? 3000" :min="1"
                   @update:model-value="v => { curDev.requestTimeoutMs = v; emitDoc() }"
@@ -716,14 +923,35 @@ function onEditSource({ varName, layerKey }) {
         <el-tab-pane label="标签定义" name="def">
           <el-card shadow="never" class="blk">
             <el-form size="default" class="form-grid">
-              <el-form-item label="标签全名">
+              <el-form-item>
+                <template #label>标签全名<FieldHelp section="tag" field="name" /></template>
                 <el-input
-                  :model-value="curTag.name" style="width: 240px"
+                  :model-value="tagNameDraft" style="width: 240px"
                   placeholder="如 PLC-001.Temperature"
-                  @change="v => renameTag(selTag, v)"
+                  @update:model-value="v => tagNameDraft = v"
+                  @change="commitTagName"
                 />
               </el-form-item>
-              <el-form-item label="所属设备">
+              <el-form-item>
+                <template #label>显示名称<FieldHelp section="tag" field="label" /></template>
+                <el-input
+                  :model-value="curTag.label ?? ''" style="width: 240px"
+                  placeholder="如 1号炉温度 (空 = 显示标签名)"
+                  @update:model-value="v => setTagText(curTag, 'label', v)"
+                  @change="v => trimTagText(curTag, 'label', v)"
+                />
+              </el-form-item>
+              <el-form-item>
+                <template #label>单位<FieldHelp section="tag" field="unit" /></template>
+                <el-input
+                  :model-value="curTag.unit ?? ''" style="width: 140px"
+                  placeholder="如 °C、mm/s"
+                  @update:model-value="v => setTagText(curTag, 'unit', v)"
+                  @change="v => trimTagText(curTag, 'unit', v)"
+                />
+              </el-form-item>
+              <el-form-item>
+                <template #label>所属设备<FieldHelp section="tag" field="deviceId" /></template>
                 <el-select
                   :model-value="curTag.deviceId" style="width: 200px"
                   @change="v => { curTag.deviceId = v; emitDoc() }"
@@ -731,7 +959,8 @@ function onEditSource({ varName, layerKey }) {
                   <el-option v-for="d in local.devices" :key="d.id" :label="d.id" :value="d.id" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="操作">
+              <el-form-item>
+                <template #label>操作<FieldHelp section="tag" field="operation" /></template>
                 <el-select
                   :model-value="curTag.operation" filterable allow-create default-first-option
                   placeholder="选择或输入操作名" style="width: 200px"
@@ -744,7 +973,8 @@ function onEditSource({ varName, layerKey }) {
                 </div>
               </el-form-item>
               <!-- v1.7 增: 标签级写能力 — 写操作下拉 (空 = 只读) -->
-              <el-form-item label="写操作">
+              <el-form-item>
+                <template #label>写操作<FieldHelp section="tag" field="writeOperation" /></template>
                 <el-select
                   :model-value="curTag.writeOperation ?? ''"
                   clearable filterable allow-create default-first-option
@@ -757,24 +987,27 @@ function onEditSource({ varName, layerKey }) {
                   非空 = 又读又写标签，写请求用该操作模板，写后按本标签读操作回校
                 </div>
               </el-form-item>
-              <el-form-item label="采集周期">
+              <el-form-item>
+                <template #label>采集周期<FieldHelp section="tag" field="scanRateMs" /></template>
                 <el-input-number
                   :model-value="curTag.scanRateMs" :min="100"
                   @update:model-value="v => { curTag.scanRateMs = v; emitDoc() }"
                 />
                 <span class="unit">ms (≥100)</span>
               </el-form-item>
-              <el-form-item label="数据类型">
+              <el-form-item>
+                <template #label>数据类型<FieldHelp section="tag" field="finalType" /></template>
                 <el-select
                   :model-value="curTag.finalType" filterable allow-create default-first-option
                   style="width: 160px"
-                  @change="v => { curTag.finalType = v; emitDoc() }"
+                  @change="v => setFinalType(curTag, v)"
                 >
                   <el-option v-for="t in FINAL_TYPES" :key="t" :label="t" :value="t" />
                 </el-select>
                 <div class="field-hint">决定寄存器字节如何解读（如 Float 需 2 个寄存器）</div>
               </el-form-item>
-              <el-form-item label="字节序">
+              <el-form-item>
+                <template #label>字节序<FieldHelp section="tag" field="byteOrder" /></template>
                 <el-select
                   :model-value="curTag.byteOrder ?? ''"
                   clearable filterable
@@ -789,9 +1022,61 @@ function onEditSource({ varName, layerKey }) {
           </el-card>
         </el-tab-pane>
 
-        <el-tab-pane label="变量与来源" name="vars">
+        <el-tab-pane label="地址与变量" name="vars">
           <el-card shadow="never" class="blk">
             <el-form size="default" class="form-grid">
+              <!-- v1.31: 简易地址映射 — 把引擎的字节契约换算成现场单位 -->
+              <el-form-item v-if="simpleSupported(curTag)" label="地址映射" class="span2">
+                <div class="simple-map">
+                  <div class="sm-row">
+                    <span class="sm-label">{{ simpleAddrLabel(curTag) }}</span>
+                    <el-input-number
+                      :model-value="simpleAddr(curTag)" :min="0" :step="1"
+                      :aria-label="simpleAddrLabel(curTag)"
+                      controls-position="right" style="width: 150px"
+                      @change="v => setSimpleAddr(curTag, v)"
+                    />
+                    <template v-if="!simpleBitOnly(curTag)">
+                      <span class="sm-label">{{ simpleCountLabel(curTag) }}</span>
+                      <el-input-number
+                        :model-value="simpleCount(curTag)" :min="1" :step="1"
+                        :aria-label="simpleCountLabel(curTag)"
+                        controls-position="right" style="width: 130px"
+                        @change="v => setSimpleCount(curTag, v)"
+                      />
+                      <span class="sm-hint">{{ curTag.finalType }} · {{ typeSizeOf(curTag.finalType) }} 字节/值</span>
+                    </template>
+                    <template v-else-if="simpleAddrMode(curTag) === 'byte'">
+                      <span class="sm-label">位偏移</span>
+                      <el-input-number
+                        :model-value="curTag.bitOffset < 0 ? 0 : curTag.bitOffset"
+                        :min="0" :max="7" controls-position="right" style="width: 110px"
+                        aria-label="位偏移"
+                        @change="v => setSimpleBit(curTag, v)"
+                      />
+                      <span class="sm-hint">0-7, 对应 DBX….0 ~ .7</span>
+                    </template>
+                  </div>
+                  <div class="sm-derived">
+                    自动换算
+                    <code>StartByteAddress={{ (curTag.variables || {}).StartByteAddress ?? 0 }}</code>
+                    <code>ByteCount={{ (curTag.variables || {}).ByteCount ?? 0 }}</code>
+                    <code v-if="curTag.bitOffset >= 0">bitOffset={{ curTag.bitOffset }}</code>
+                    <span v-if="simpleAddrMode(curTag) === 'word'">字地址 ×2 = 字节地址</span>
+                    <span v-else-if="simpleAddrMode(curTag) === 'bit'">线圈号 → 字节地址 + 位偏移</span>
+                  </div>
+                  <div v-if="curTag.writeOperation" class="field-hint">
+                    该标签同时可写；若写变量含长度派生项，请在下方「请求变量（高级）」中确认。
+                  </div>
+                  <div
+                    v-if="!simpleBitOnly(curTag) && (simpleCount(curTag) < 1 || simpleCount(curTag) !== Math.floor(simpleCount(curTag)))"
+                    class="field-hint warn"
+                  >
+                    当前 ByteCount={{ (curTag.variables || {}).ByteCount ?? 0 }} 不是 {{ curTag.finalType }} 的整数倍，请修正值个数。
+                  </div>
+                </div>
+              </el-form-item>
+
               <!-- v1.8 增: 当前操作的占位符提示速览 (折叠展开) — 让用户一眼看到变量名↔可读名 映射 -->
               <el-form-item v-if="opHintsList(curTag).length" label="占位符提示" class="span2">
                 <el-collapse class="hint-preview">
@@ -829,8 +1114,12 @@ function onEditSource({ varName, layerKey }) {
                 />
               </el-form-item>
 
-              <el-form-item label="请求变量" class="span2">
+              <el-form-item label="请求变量（高级）" class="span2">
                 <div class="kv-editor">
+                  <div v-if="simpleSupported(curTag)" class="field-hint" style="margin-bottom: 6px">
+                    通常无需手改：上方「地址映射」已自动维护 StartByteAddress / ByteCount；
+                    这里用于编辑其它变量（如 DBNumber / Area / UnitID）。
+                  </div>
                   <div v-for="(row, j) in curTag._rows" :key="j" class="kv-row">
                     <el-input
                       v-model="row.k" placeholder="变量名 (如 StartByteAddress)"
@@ -928,7 +1217,10 @@ function onEditSource({ varName, layerKey }) {
       />
 
       <!-- 系统设置: 原「全局参数」页签降级为抽屉 (低频设置, 不占主层级) -->
-      <el-drawer v-model="sysSettings" title="系统设置 (全局参数)" size="520px" class="sys-drawer">
+      <el-drawer
+        v-model="sysSettings" title="系统设置 (全局参数)" size="520px"
+        class="sys-drawer" destroy-on-close
+      >
         <el-collapse v-model="activeBlocks" class="blk-collapse">
           <el-collapse-item name="resilience">
             <template #title><span class="sec-title blk-ct">弹性参数 (Resilience)</span></template>
@@ -984,7 +1276,7 @@ function onEditSource({ varName, layerKey }) {
                 <el-input
                   :model-value="local.webApi.bindAddress"
                   style="max-width: 240px"
-                  @change="v => { local.webApi.bindAddress = v; emitDoc() }"
+                  @update:model-value="v => { local.webApi.bindAddress = v; emitDoc() }"
                 />
               </el-form-item>
               <el-form-item label="启用认证">
@@ -1020,25 +1312,43 @@ function onEditSource({ varName, layerKey }) {
    设备与标签的父子关系原先被两个页签割裂, 且详情被 210px 列表挤在 980px 内) */
 .tform {
   display: flex;
-  gap: 14px;
+  gap: var(--mp-sp-3);
   height: 100%;
   min-height: 0;
 }
 /* 设备→标签 两级树 (左) */
 .dev-tree {
-  width: 268px;
+  width: 272px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  background: var(--mp-surface-2);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius);
+  box-shadow: var(--mp-shadow-1);
   overflow: hidden;
 }
+.dt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 6px;
+  flex-shrink: 0;
+  font-size: var(--mp-fs-xs);
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--mp-muted);
+}
+.dt-head-count {
+  font-weight: 400;
+  color: var(--mp-muted);
+  font-variant-numeric: tabular-nums;
+}
 .dt-search {
-  padding: 10px;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 0 10px 8px;
+  border-bottom: 1px solid var(--mp-border);
   flex-shrink: 0;
 }
 .dt-items {
@@ -1050,21 +1360,38 @@ function onEditSource({ varName, layerKey }) {
   overflow-y: auto;
 }
 .dt-dev-head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 8px;
-  border-radius: 6px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--mp-radius-sm);
   cursor: pointer;
-  color: #334155;
-  transition: background 0.15s;
+  color: var(--mp-ink-2);
+  transition: background .15s, color .15s;
 }
-.dt-dev-head:hover { background: #eef2f7; }
-.dt-dev-head.active { background: #e0edff; color: #1d4ed8; font-weight: 600; }
+.dt-dev-head:hover { background: var(--mp-surface-3); }
+.dt-dev-head.active {
+  background: var(--mp-accent-soft);
+  color: var(--mp-accent-hover);
+  font-weight: 600;
+}
+/* 选中态: 左侧指示条 + 浅底, 不只靠颜色区分 */
+.dt-dev-head.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--mp-accent);
+}
 .dt-caret {
   width: 12px;
   flex-shrink: 0;
-  color: #94a3b8;
+  color: var(--mp-muted-2);
   font-size: 11px;
   text-align: center;
 }
@@ -1074,17 +1401,18 @@ function onEditSource({ varName, layerKey }) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: Consolas, monospace;
-  font-size: 12.5px;
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-sm);
 }
-.dt-dev-proto { font-size: 11px; color: #94a3b8; flex-shrink: 0; }
+.dt-dev-proto { font-size: 11px; color: var(--mp-muted); flex-shrink: 0; }
 .dt-dev-count {
   flex-shrink: 0;
   font-size: 11px;
-  color: #64748b;
-  background: #e2e8f0;
-  border-radius: 9px;
+  color: var(--mp-muted);
+  background: var(--mp-surface-3);
+  border-radius: var(--mp-radius-pill);
   padding: 0 6px;
+  font-variant-numeric: tabular-nums;
 }
 .dt-tags {
   list-style: none;
@@ -1095,45 +1423,55 @@ function onEditSource({ varName, layerKey }) {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
-  border-radius: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--mp-radius-sm);
   cursor: pointer;
-  font-size: 12.5px;
-  color: #475569;
-  transition: background 0.15s;
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-ink-2);
+  transition: background .15s, color .15s;
 }
-.dt-tags li:hover { background: #eef2f7; }
-.dt-tags li.active { background: #e0edff; color: #1d4ed8; font-weight: 600; }
+.dt-tags li:hover { background: var(--mp-surface-3); }
+.dt-tags li.active { background: var(--mp-accent-soft); color: var(--mp-accent-hover); font-weight: 600; }
 .dt-tag-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--mp-font-mono);
 }
 .dt-sub-empty, .dt-empty {
   padding: 6px 10px;
-  font-size: 12px;
-  color: #94a3b8;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted-2);
 }
 .dt-actions {
   display: flex;
   gap: 6px;
   padding: 10px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--mp-border);
   flex-shrink: 0;
 }
 .dt-add {
   flex: 1;
-  padding: 5px 6px;
-  font-size: 12px;
-  border: 1px solid #cbd5e1;
-  background: #fff;
-  color: #334155;
-  border-radius: 6px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: var(--mp-fs-xs);
+  border: 1px solid var(--mp-border-strong);
+  background: var(--mp-surface);
+  color: var(--mp-ink-2);
+  border-radius: var(--mp-radius-sm);
   cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
 }
-.dt-add:hover { border-color: #2563eb; color: #1d4ed8; }
+.dt-add:hover { border-color: var(--mp-accent); color: var(--mp-accent-hover); background: var(--mp-accent-soft); }
+.dt-add:disabled {
+  cursor: not-allowed;
+  color: var(--mp-muted-2);
+  border-color: var(--mp-border);
+  background: var(--mp-surface-2);
+}
 /* 详情区 (右) */
 .tform-main {
   flex: 1;
@@ -1142,34 +1480,39 @@ function onEditSource({ varName, layerKey }) {
   flex-direction: column;
   min-height: 0;
 }
+/* 吸顶上下文条: 设备 ▸ 标签 / 类型徽标 / 删除 */
 .ctx-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
   padding: 8px 12px;
-  margin-bottom: 10px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
+  margin-bottom: var(--mp-sp-2);
+  background: var(--mp-surface-2);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  box-shadow: var(--mp-shadow-1);
 }
 .ctx-dev {
   cursor: pointer;
-  color: #2563eb;
-  font-size: 12.5px;
-  font-family: Consolas, monospace;
+  color: var(--mp-accent);
+  font-size: var(--mp-fs-sm);
+  font-family: var(--mp-font-mono);
 }
 .ctx-dev:hover { text-decoration: underline; }
-.ctx-sep { color: #94a3b8; }
+.ctx-sep { color: var(--mp-muted-2); }
 .ctx-cur {
   font-weight: 600;
-  color: #1e293b;
-  font-size: 13px;
-  font-family: Consolas, monospace;
+  color: var(--mp-ink);
+  font-size: var(--mp-fs-sm);
+  font-family: var(--mp-font-mono);
 }
-.ctx-proto { font-size: 11.5px; color: #64748b; }
+.ctx-proto { font-size: 11px; color: var(--mp-muted); }
 .ctx-spacer { flex: 1; }
-.ctx-empty { color: #94a3b8; font-size: 12.5px; }
+.ctx-empty { color: var(--mp-muted-2); font-size: var(--mp-fs-sm); }
 /* 详情分段页签 — 内容整段滚动 (与协议配置页一致) */
 .sec-tabs {
   flex: 1;
@@ -1177,9 +1520,34 @@ function onEditSource({ varName, layerKey }) {
   display: flex;
   flex-direction: column;
 }
+/* 分段控件: 设备信息/连接参数/标签 · 标签定义/地址与变量 */
 .sec-tabs :deep(.el-tabs__header) {
   flex-shrink: 0;
-  margin-bottom: 10px;
+  margin: 0 0 var(--mp-sp-3);
+  padding: 4px;
+  background: var(--mp-surface-2);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  box-shadow: var(--mp-shadow-1);
+}
+.sec-tabs :deep(.el-tabs__nav-wrap)::after { display: none; }
+.sec-tabs :deep(.el-tabs__active-bar) { display: none; }
+.sec-tabs :deep(.el-tabs__nav) { gap: 2px; }
+.sec-tabs :deep(.el-tabs__item) {
+  height: 28px;
+  line-height: 28px;
+  padding: 0 16px !important;
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-muted);
+  border-radius: var(--mp-radius-sm);
+  transition: background .15s, color .15s;
+}
+.sec-tabs :deep(.el-tabs__item:hover) { color: var(--mp-ink-2); }
+.sec-tabs :deep(.el-tabs__item.is-active) {
+  background: var(--mp-surface);
+  color: var(--mp-ink);
+  font-weight: 600;
+  box-shadow: var(--mp-shadow-1);
 }
 .sec-tabs :deep(.el-tabs__content) {
   flex: 1;
@@ -1194,33 +1562,34 @@ function onEditSource({ varName, layerKey }) {
 .dt-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: var(--mp-fs-sm);
 }
 .dt-table th {
   text-align: left;
   font-weight: 600;
-  color: #475569;
+  color: var(--mp-muted);
   padding: 7px 8px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--mp-surface-2);
+  border-bottom: 1px solid var(--mp-border);
 }
 .dt-table td {
   padding: 7px 8px;
-  border-bottom: 1px solid #f1f5f9;
-  color: #334155;
+  border-bottom: 1px solid var(--mp-border);
+  color: var(--mp-ink-2);
 }
 .dt-table tbody tr { cursor: pointer; }
-.dt-table tbody tr:hover { background: #f1f7ff; }
-.dt-table .c-name { font-family: Consolas, monospace; }
-.dt-table .c-go { color: #2563eb; white-space: nowrap; text-align: right; }
+.dt-table tbody tr:nth-child(even) { background: var(--mp-surface-2); }
+.dt-table tbody tr:hover { background: var(--mp-accent-soft); }
+.dt-table .c-name { font-family: var(--mp-font-mono); }
+.dt-table .c-go { color: var(--mp-accent); white-space: nowrap; text-align: right; }
 .blk {
-  margin-bottom: 14px;
+  margin-bottom: var(--mp-sp-3);
 }
 .blk :deep(.el-card__header) {
   font-weight: 600;
-  font-size: 13px;
-  padding: 10px 16px;
-  background: #f8fafc;
+  font-size: var(--mp-fs-base);
+  padding: 9px var(--mp-sp-4);
+  background: var(--mp-surface-2);
 }
 .card-head {
   display: flex;
@@ -1231,36 +1600,73 @@ function onEditSource({ varName, layerKey }) {
 .blk-collapse :deep(.el-collapse-item__title) .sec-title,
 .blk-ct { line-height: 1; }
 .dev-badge {
-  font-family: Consolas, monospace;
-  font-size: 13px;
-  color: #1d4ed8;
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-base);
+  color: var(--mp-accent-hover);
 }
 .field-hint {
-  font-size: 12px;
-  color: #94a3b8;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted);
   line-height: 1.4;
   margin-top: 2px;
+}
+.field-hint.warn { color: var(--mp-warn-ink); }
+
+/* v1.31: 简易地址映射区 */
+.simple-map {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--mp-info-soft);
+  border: 1px solid var(--mp-accent-line);
+  border-radius: var(--mp-radius-sm);
+}
+.sm-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sm-label { font-size: var(--mp-fs-xs); color: var(--mp-info-ink); }
+.sm-hint { font-size: var(--mp-fs-xs); color: var(--mp-muted); }
+.sm-derived {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-ink-2);
+}
+.sm-derived code {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--mp-accent-soft);
+  color: var(--mp-info-ink);
+  font-family: var(--mp-font-mono);
 }
 .op {
   margin-bottom: 10px;
 }
 .op :deep(.el-card__header) {
   padding: 8px 12px;
-  background: #f1f5f9;
+  background: var(--mp-surface-3);
 }
 .kv-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;          /* 窄屏/长提示时换行, 避免固定宽度把操作列挤出容器 */
   gap: 8px;
   margin-bottom: 6px;
+  min-width: 0;
 }
+.kv-editor { min-width: 0; max-width: 100%; }
 
 /* v1.1 增: 数字字段单位后缀 (ms / rps / 次 / 端口 等) */
 .unit {
   margin-left: 8px;
-  font-size: 12px;
-  color: #64748b;
-  font-family: Consolas, monospace;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted);
+  font-family: var(--mp-font-mono);
 }
 /* v1.5 增: 变量名行旁 inputs 标签样式 */
 .var-hint {
@@ -1272,14 +1678,14 @@ function onEditSource({ varName, layerKey }) {
 }
 /* v1.8 增: 占位符提示速览面板样式 */
 .hint-preview {
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #f8fafc;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface-2);
 }
 .hint-preview :deep(.el-collapse-item__header) {
   padding: 0 12px;
-  font-size: 12px;
-  color: #475569;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-ink-2);
   border: none;
   background: transparent;
 }
@@ -1295,36 +1701,36 @@ function onEditSource({ varName, layerKey }) {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--mp-fs-xs);
   padding: 4px 8px;
-  background: #fff;
+  background: var(--mp-surface);
   border-radius: 4px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--mp-border);
   flex-wrap: wrap;
 }
 .hint-name {
-  font-family: Consolas, monospace;
-  color: #1d4ed8;
-  font-size: 12px;
-  background: #eff6ff;
+  font-family: var(--mp-font-mono);
+  color: var(--mp-accent-hover);
+  font-size: var(--mp-fs-xs);
+  background: var(--mp-accent-soft);
   padding: 1px 6px;
   border-radius: 3px;
 }
-.hint-eq { color: #94a3b8; }
-.hint-text { color: #334155; }
+.hint-eq { color: var(--mp-muted-2); }
+.hint-text { color: var(--mp-ink-2); }
 /* v1.1 增: el-collapse 容器外边距对齐 el-card.blk */
 .blk-collapse {
-  margin-bottom: 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
+  margin-bottom: var(--mp-sp-3);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius);
+  background: var(--mp-surface);
 }
 .blk-collapse :deep(.el-collapse-item__header) {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
   padding: 0 16px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--mp-surface-2);
+  border-bottom: 1px solid var(--mp-border);
 }
 .blk-collapse :deep(.el-collapse-item__content) {
   padding: 12px 16px;
@@ -1336,7 +1742,7 @@ function onEditSource({ varName, layerKey }) {
   width: 6px;
 }
 .dt-items::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--mp-border-strong);
   border-radius: 3px;
 }
 .dt-items::-webkit-scrollbar-track {
@@ -1364,16 +1770,16 @@ function onEditSource({ varName, layerKey }) {
   padding: 1px 6px;
   border-radius: 3px;
   font-weight: 600;
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--mp-surface-3);
+  color: var(--mp-muted);
   margin-left: 4px;
   flex-shrink: 0;
 }
-.type-badge.bool { background: #dcfce7; color: #15803d; }
-.type-badge.uint16 { background: #eff6ff; color: #1d4ed8; }
-.type-badge.float { background: #fef3c7; color: #b45309; }
+.type-badge.bool { background: var(--mp-ok-soft); color: var(--mp-ok-ink); }
+.type-badge.uint16 { background: var(--mp-accent-soft); color: var(--mp-accent-hover); }
+.type-badge.float { background: var(--mp-warn-soft); color: var(--mp-warn-ink); }
 .type-badge.int32 { background: #f0fdf4; color: #166534; }
-.type-badge.bytearray { background: #f1f5f9; color: #64748b; }
+.type-badge.bytearray { background: var(--mp-surface-3); color: var(--mp-muted); }
 /* v5: label 宽度 — 常规段统一全局 token; 韧性/管理面段字段名较长用 wide 变体 */
 .form-grid-wide.el-form {
   --el-form-label-width: 140px;

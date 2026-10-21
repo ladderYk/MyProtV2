@@ -2,8 +2,11 @@ import { createApp } from 'vue'
 import ElementPlus from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import 'element-plus/dist/index.css'
-import App from './App.vue'
+// 样式层顺序: Element Plus 默认 → 设计 token → Element Plus 覆盖 → 全站基础样式
+import './styles/tokens.css'
+import './styles/element.css'
 import './style.css'
+import App from './App.vue'
 import { installControlledInputFix } from './controlled-input-fix'
 
 const app = createApp(App).use(ElementPlus, { locale: zhCn })

@@ -41,8 +41,12 @@ const opInputs = computed(() => {
 })
 
 // 标签 variables
+// bitOffset 是标签一等字段 — 引擎会以 BitOffset 注入表达式作用域并覆盖协议级静态缺省
+// (见 Core::kBitOffsetExprVariable), 因此这里合成同名项, 使追踪面板与引擎实际取值一致
 const tagVariables = computed(() => {
-  return props.tag.variables || {}
+  const vars = { ...(props.tag.variables || {}) }
+  if (props.tag.bitOffset >= 0) vars.BitOffset = props.tag.bitOffset
+  return vars
 })
 
 // 标签 writeVariables
@@ -228,7 +232,7 @@ const detailTitle = (layer) => {
         <span>{{ l.label }}</span>
         <el-tooltip :content="l.desc" placement="top"><ElIcon><QuestionFilled /></ElIcon></el-tooltip>
       </el-tag>
-      <el-tag v-if="writeOpName" type="danger" size="small" effect="plain" class="legend-note">
+      <el-tag v-if="writeOpName" type="danger" size="small" effect="plain" class="legend-note" disable-transitions>
         ✍️ 写操作「{{ writeOpName }}」启用 → writeVariables 生效
       </el-tag>
     </div>
@@ -327,52 +331,52 @@ const detailTitle = (layer) => {
 
 <style scoped>
 .var-trace-panel {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface);
   overflow: hidden;
 }
 .vtp-legend {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-  padding: 10px 12px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
-  font-size: 12px;
+  padding: 10px 12px; background: var(--mp-surface-2); border-bottom: 1px solid var(--mp-border);
+  font-size: var(--mp-fs-xs);
 }
-.legend-title { color: #64748b; font-weight: 500; margin-right: 8px; }
+.legend-title { color: var(--mp-muted); font-weight: 500; margin-right: 8px; }
 .legend-item { display: flex; align-items: center; gap: 4px; }
 .legend-icon { font-size: 11px; }
 .legend-note { margin-left: auto; }
 .vtp-table-wrap { overflow-x: auto; padding: 8px; }
-.vtp-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 900px; }
-.vtp-table th, .vtp-table td { padding: 6px 8px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: middle; }
-.vtp-table th { background: #f8fafc; font-weight: 600; color: #475569; white-space: nowrap; position: sticky; top: 0; z-index: 1; }
-.vtp-table tbody tr:hover { background: #f8fafc; }
-.vtp-table tbody tr.effective-row td.col-final { background: #f0fdf4; }
-.vtp-table tbody tr.effective-row td.col-source { background: #f0fdf4; }
+.vtp-table { width: 100%; border-collapse: collapse; font-size: var(--mp-fs-xs); min-width: 900px; }
+.vtp-table th, .vtp-table td { padding: 6px 8px; border-bottom: 1px solid var(--mp-border); text-align: left; vertical-align: middle; }
+.vtp-table th { background: var(--mp-surface-2); font-weight: 600; color: var(--mp-muted); white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+.vtp-table tbody tr:hover { background: var(--mp-surface-2); }
+.vtp-table tbody tr.effective-row td.col-final { background: var(--mp-ok-soft); }
+.vtp-table tbody tr.effective-row td.col-source { background: var(--mp-ok-soft); }
 .col-name { width: 160px; min-width: 160px; }
-.var-name { font-family: monospace; color: #1d4ed8; background: #eff6ff; padding: 1px 6px; border-radius: 3px; }
+.var-name { font-family: var(--mp-font-mono); color: var(--mp-accent-hover); background: var(--mp-accent-soft); padding: 1px 6px; border-radius: 3px; }
 .col-hint { min-width: 180px; max-width: 240px; }
 .hint-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-.text-muted { color: #94a3b8; font-size: 12px; }
+.text-muted { color: var(--mp-muted-2); font-size: var(--mp-fs-xs); }
 .col-final { min-width: 120px; }
-.final-value { font-family: monospace; font-size: 12px; color: #166534; background: #dcfce7; padding: 1px 6px; border-radius: 3px; }
+.final-value { font-family: var(--mp-font-mono); font-size: var(--mp-fs-xs); color: var(--mp-ok-ink); background: var(--mp-ok-soft); padding: 1px 6px; border-radius: 3px; }
 .col-source { min-width: 140px; }
 .col-layer { min-width: 100px; text-align: center; }
 .layer-cell { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 28px; }
-.layer-cell.active { background: #f0fdf4; }
-.layer-cell.effective { background: #f0fdf4; }
-.layer-value { font-family: monospace; font-size: 11px; color: #166534; }
-.layer-empty { color: #cbd5e1; font-size: 11px; }
-.effective-badge { color: #16a34a; font-size: 11px; }
+.layer-cell.active { background: var(--mp-ok-soft); }
+.layer-cell.effective { background: var(--mp-ok-soft); }
+.layer-value { font-family: var(--mp-font-mono); font-size: 11px; color: var(--mp-ok-ink); }
+.layer-empty { color: var(--mp-muted-2); font-size: 11px; }
+.effective-badge { color: var(--mp-ok); font-size: 11px; }
 .col-action { min-width: 160px; text-align: center; }
 .edit-btn { margin: 0 2px; padding: 0 6px; }
-.vtp-empty { padding: 32px; text-align: center; color: #94a3b8; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.vtp-empty { padding: 32px; text-align: center; color: var(--mp-muted-2); display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .vtp-empty .el-icon { font-size: 24px; }
-.vtp-detail { border-top: 1px solid #e2e8f0; }
-.vtp-detail :deep(.el-collapse-item__header) { font-size: 12px; font-weight: 500; padding: 0 12px; }
+.vtp-detail { border-top: 1px solid var(--mp-border); }
+.vtp-detail :deep(.el-collapse-item__header) { font-size: var(--mp-fs-xs); font-weight: 500; padding: 0 12px; }
 .vtp-detail :deep(.el-collapse-item__content) { padding: 10px 12px; max-height: 200px; overflow-y: auto; }
-.detail-content { font-size: 12px; }
+.detail-content { font-size: var(--mp-fs-xs); }
 .detail-grid { display: flex; flex-direction: column; gap: 6px; }
-.detail-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: #f8fafc; border-radius: 4px; }
-.detail-item code { font-family: monospace; color: #1d4ed8; min-width: 140px; }
-.detail-value { font-family: monospace; color: #1e293b; flex: 1; }
+.detail-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: var(--mp-surface-2); border-radius: 4px; }
+.detail-item code { font-family: var(--mp-font-mono); color: var(--mp-accent-hover); min-width: 140px; }
+.detail-value { font-family: var(--mp-font-mono); color: var(--mp-ink-2); flex: 1; }
 </style>

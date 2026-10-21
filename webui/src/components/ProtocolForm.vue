@@ -4,7 +4,7 @@
 //   inputs  : source=static (value/label/unit/enum) 或 source=auto (autoIncrement/frameSlice/expr/crc)
 //   outputs : source=auto strategy=derivedLength + expr (引用 inputs 名或模板 {Name:raw} 载荷名, {name:len} 取字节长度)
 // 旧 schema 的 variables/defaultVariables/autoCompute/metadata.placeholderHints 打开时自动迁移到 inputs/outputs
-import { reactive, ref, computed, onMounted, nextTick } from 'vue'
+import { reactive, ref, computed, onMounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getSchema } from '../api'
 import {
@@ -158,6 +158,9 @@ const selOp = ref('')
 const opNames = computed(() => Object.keys(local.operations || {}))
 const curOp = computed(() => (local.operations && local.operations[selOp.value]) || null)
 selOp.value = opNames.value[0] || ''   // 默认选中首个操作 (同步, 早于首帧渲染)
+// 操作名草稿: 重命名需校验/重建键, 失焦时提交; 输入过程中只更新草稿
+const opNameDraft = ref(selOp.value)
+watch(selOp, name => { opNameDraft.value = name || '' }, { immediate: true })
 
 function clone(v) {
   return JSON.parse(JSON.stringify(v))
@@ -356,10 +359,10 @@ function removeOperation(name) {
 
 function renameOperation(oldName, newName) {
   newName = (newName || '').trim()
-  if (!newName || newName === oldName) return
+  if (!newName || newName === oldName) return false
   if (local.operations[newName]) {
     ElMessage.warning('操作名「' + newName + '」已存在')
-    return
+    return false
   }
   // 触发响应式: 先删后加
   const body = local.operations[oldName]
@@ -367,6 +370,14 @@ function renameOperation(oldName, newName) {
   local.operations[newName] = body
   if (selOp.value === oldName) selOp.value = newName   // v1.23: 改名后保持选中
   emitDoc()
+  return true
+}
+
+/// 失焦提交操作名; 校验失败时草稿回退
+function commitOpName() {
+  if (!renameOperation(selOp.value, opNameDraft.value)) {
+    opNameDraft.value = selOp.value
+  }
 }
 
 // ── 方案 2: 校验问题 → 表单定位 ──────────────────────────────────
@@ -429,14 +440,19 @@ function setOptional(key, val) {
 }
 
 // ── 高级 JSON 区 ──
-function handshakeText() {
-  return JSON.stringify(local.handshake || [], null, 2)
+// 握手 JSON 草稿: 原文绑定到本地 ref (否则 el-input 会把每次键入回滚为旧值);
+// 仅在切到 JSON 模式时从表单同步, 合法 JSON 写回模型后重新格式化
+const handshakeDraft = ref('')
+function syncHandshakeDraft() {
+  handshakeDraft.value = JSON.stringify(local.handshake || [], null, 2)
 }
+watch(activeHandshakeTab, tab => { if (tab === 'raw') syncHandshakeDraft() })
 function onHandshakeText(text) {
   try {
     const v = JSON.parse(text)
     if (!Array.isArray(v)) throw new Error('须为数组')
     local.handshake = v
+    handshakeDraft.value = JSON.stringify(v, null, 2)
     emitDoc()
   } catch (_) { /* 非法输入不落盘, 保持原值 */ }
 }
@@ -598,11 +614,18 @@ onMounted(async () => {
 
     <!-- 基础信息 -->
     <el-card shadow="never" class="blk">
+      <template #header>
+        <div class="blk-head">
+          <span class="blk-title">协议标识</span>
+          <span class="blk-desc">协议名即文件名, 设备按此名引用; 创建后不可修改</span>
+        </div>
+      </template>
       <el-form size="default" class="form-grid">
         <el-form-item>
           <template #label>协议名<FieldHelp section="protocol" field="protocolName" /></template>
           <el-input
             :model-value="local.protocolName"
+            class="mono-input"
             disabled
             style="max-width: 280px"
           />
@@ -641,10 +664,10 @@ onMounted(async () => {
         <el-input-number
           :model-value="local.transport.defaultPort"
           :min="1" :max="65535" controls-position="right" style="width: 130px"
-          placeholder="缺省 502"
+          placeholder="协议缺省"
           @update:model-value="v => { if (v == null) { delete local.transport.defaultPort } else { local.transport.defaultPort = v } ; emitDoc() }"
         />
-        <span class="unit">1-65535, 不填用引擎缺省 502</span>
+        <span class="unit">1-65535, 不填由该协议自身决定</span>
         </el-form-item>
 
         <el-form-item label="成帧方式">
@@ -765,8 +788,9 @@ onMounted(async () => {
         </el-tab-pane>
         <el-tab-pane label="JSON 模式" name="raw">
           <el-input
-            type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" :model-value="handshakeText()"
+            type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" :model-value="handshakeDraft"
             spellcheck="false"
+            @update:model-value="v => handshakeDraft = v"
             @change="onHandshakeText"
           />
           <div class="field-hint" style="margin-top: 6px">JSON 数组, 每步含 name/requestTemplate/framingOverride; 连接建立后按序执行</div>
@@ -779,6 +803,12 @@ onMounted(async () => {
       <el-tab-pane label="全局变量" name="vars">
   <div id="vars-head"></div>
     <el-card shadow="never" class="blk vars-card">
+      <template #header>
+        <div class="blk-head">
+          <span class="blk-title">全局变量</span>
+          <span class="blk-desc">协议级 inputs 为默认值, outputs 为派生量; 操作与标签可覆盖</span>
+        </div>
+      </template>
       <div v-if="aliasEntries.length" class="alias-note">
         <span class="alias-title">别名映射</span>
         <span v-for="[a, t] in aliasEntries" :key="a" class="alias-item">
@@ -829,8 +859,9 @@ onMounted(async () => {
             <template #header>
               <div class="card-head">
                 <el-input
-                  :model-value="selOp" size="small" style="width: 220px"
-                  @change="v => renameOperation(selOp, v)"
+                  :model-value="opNameDraft" size="small" class="mono-input" style="width: 220px"
+                  @update:model-value="v => opNameDraft = v"
+                  @change="commitOpName"
                 />
                 <el-button type="danger" size="small" plain @click="removeOperation(selOp)">
                   删除
@@ -938,7 +969,7 @@ onMounted(async () => {
                 <el-input
                   :model-value="curOp.responseParser?.validCondition"
                   placeholder="如 resp[7] == 0x03, 留空跳过校验"
-                  @change="v => { curOp.responseParser.validCondition = v; emitDoc() }"
+                  @update:model-value="v => { curOp.responseParser.validCondition = v; emitDoc() }"
                 />
               </el-form-item>
               <el-form-item label="数据起始下标">
@@ -952,7 +983,7 @@ onMounted(async () => {
                 <el-input
                   :model-value="curOp.responseParser?.dataLengthExpr"
                   placeholder="如 resp[8], 留空取整帧剩余"
-                  @change="v => { curOp.responseParser.dataLengthExpr = v; emitDoc() }"
+                  @update:model-value="v => { curOp.responseParser.dataLengthExpr = v; emitDoc() }"
                 />
               </el-form-item>
             </el-form>
@@ -966,22 +997,23 @@ onMounted(async () => {
 
 <style scoped>
   /* 概念速查卡: 首次配协议的入口说明 */
-  .cheat-card { border-left: 3px solid #93c5fd; }
+  .cheat-card { border-left: 3px solid var(--mp-accent-line); }
   .cheat-card :deep(.el-collapse-item__header) { font-weight: 600; }
   .cheat-body { display: flex; flex-direction: column; gap: 10px; }
-  .cheat-g { font-size: 12.5px; color: #334155; line-height: 1.6; }
+  .cheat-g { font-size: var(--mp-fs-sm); color: var(--mp-ink-2); line-height: 1.6; }
   .cheat-g ul { margin: 4px 0 0 18px; padding: 0; }
   .cheat-g li { margin: 2px 0; }
   .cheat-g code {
-    background: #f1f5f9; border-radius: 3px; padding: 0 4px;
-    font-size: 12px; color: #0f172a;
+    background: var(--mp-surface-3); border-radius: 3px; padding: 0 4px;
+    font-size: var(--mp-fs-xs); color: var(--mp-ink);
+    font-family: var(--mp-font-mono);
   }
 /* v4: 区块 tab 化 — 提示条(常驻) + tab 容器, 纵向填满 */
 .pform {
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--mp-sp-2);
   min-height: 0;
 }
 .sec-tabs {
@@ -990,19 +1022,63 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
 }
+/* 段内导航: 吸顶分段控件 (基础信息 / 全局变量 / 操作定义) */
 .sec-tabs :deep(.el-tabs__header) {
+  position: sticky;
+  top: 0;
+  z-index: 6;
   flex-shrink: 0;
-  margin-bottom: 10px;
+  margin: 0 0 var(--mp-sp-3);
+  padding: 4px;
+  background: var(--mp-surface-2);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  box-shadow: var(--mp-shadow-1);
 }
+.sec-tabs :deep(.el-tabs__nav-wrap)::after { display: none; }
+.sec-tabs :deep(.el-tabs__active-bar) { display: none; }
+.sec-tabs :deep(.el-tabs__nav) { gap: 2px; }
+.sec-tabs :deep(.el-tabs__item) {
+  height: 28px;
+  line-height: 28px;
+  padding: 0 16px !important;
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-muted);
+  border-radius: var(--mp-radius-sm);
+  transition: background .15s, color .15s;
+}
+.sec-tabs :deep(.el-tabs__item:hover) { color: var(--mp-ink-2); }
+.sec-tabs :deep(.el-tabs__item.is-active) {
+  background: var(--mp-surface);
+  color: var(--mp-ink);
+  font-weight: 600;
+  box-shadow: var(--mp-shadow-1);
+}
+/* 卡片头部: 标题 + 说明 */
+.blk-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.blk-title { font-size: var(--mp-fs-base); font-weight: 600; color: var(--mp-ink); }
+.blk-desc { font-size: var(--mp-fs-xs); font-weight: 400; color: var(--mp-muted); }
+/* 标识符统一等宽字体; 只读字段弱化底色 */
+.mono-input :deep(.el-input__wrapper) { font-family: var(--mp-font-mono); }
+.mono-input.is-disabled :deep(.el-input__wrapper) {
+  background: var(--mp-surface-3);
+  box-shadow: none;
+}
+.mono-input.is-disabled :deep(.el-input__inner) { color: var(--mp-muted); }
 /* v4.9: 基础信息段内小节分隔 (传输与成帧 / 握手) */
 .sec-divider {
-  margin: 18px 0 14px;
+  margin: var(--mp-sp-5) 0 var(--mp-sp-3);
   scroll-margin-top: 8px;
 }
 .sec-divider :deep(.el-divider__text) {
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
   font-weight: 600;
-  color: #334155;
+  color: var(--mp-ink-2);
   letter-spacing: .02em;
 }
 /* v5: 段落锚点滚动定位余量 */
@@ -1028,7 +1104,7 @@ onMounted(async () => {
   overflow: hidden;
 }
 /* v4.3: 全局变量段铺满宽度 (卡片网格按宽度自适应列数), 两段之间留间距 */
-.vars-card .vt + .vt { margin-top: 16px; }
+.vars-card .vt + .vt { margin-top: var(--mp-sp-4); }
 /* v4.10: variableAliases 只读映射条 */
 .alias-note {
   display: flex;
@@ -1036,21 +1112,21 @@ onMounted(async () => {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  margin-bottom: 12px;
-  background: #f8fafc;
-  border: 1px dashed #e2e8f0;
-  border-radius: 6px;
-  font-size: 12px;
+  margin-bottom: var(--mp-sp-3);
+  background: var(--mp-surface-2);
+  border: 1px dashed var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  font-size: var(--mp-fs-xs);
 }
-.alias-title { font-weight: 600; color: #64748b; }
+.alias-title { font-weight: 600; color: var(--mp-muted); }
 .alias-item code {
-  font-family: Consolas, monospace;
-  background: #eef2f7;
+  font-family: var(--mp-font-mono);
+  background: var(--mp-surface-3);
   border-radius: 3px;
   padding: 0 4px;
-  color: #0f172a;
+  color: var(--mp-ink);
 }
-.alias-hint { color: #94a3b8; font-size: 11px; }
+.alias-hint { color: var(--mp-muted-2); font-size: 11px; }
 /* v4.7: 变量提示条 (置于请求模板上方) — 全局/本操作 分组, 点击插入占位符 */
 .chips-bar {
   width: 100%;
@@ -1060,50 +1136,50 @@ onMounted(async () => {
   gap: 6px;
   padding: 6px 10px;
   margin-bottom: 8px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
+  background: var(--mp-surface-2);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
 }
 .chips-group {
   font-size: 11px;
   font-weight: 600;
-  color: #94a3b8;
+  color: var(--mp-muted-2);
   letter-spacing: 1px;
 }
 .chips-divider {
   width: 1px;
   height: 14px;
-  background: #e2e8f0;
+  background: var(--mp-border);
   margin: 0 4px;
 }
 .chips-title {
-  font-size: 12px;
+  font-size: var(--mp-fs-xs);
   font-weight: 600;
-  color: #64748b;
+  color: var(--mp-muted);
   padding-left: 8px;
-  border-left: 3px solid #2563eb;
+  border-left: 3px solid var(--mp-accent);
   line-height: 14px;
   margin-right: 4px;
 }
 .var-chip {
   cursor: pointer;
-  font-family: Consolas, monospace;
+  font-family: var(--mp-font-mono);
   user-select: none;
 }
-.var-chip:hover { border-color: #2563eb; color: #1d4ed8; }
-.var-chip.in  { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
-.var-chip.out { background: #fef3c7; border-color: #fde68a; color: #b45309; }
+.var-chip:hover { border-color: var(--mp-accent); color: var(--mp-accent-hover); }
+.var-chip.in  { background: var(--mp-accent-soft); border-color: var(--mp-accent-line); color: var(--mp-accent-hover); }
+.var-chip.out { background: var(--mp-warn-soft); border-color: #fde68a; color: var(--mp-warn-ink); }
 /* 局部 (当前操作派生) — 绿色, 与全局的蓝(输入)/琥珀(派生)区分 */
 .var-chip.local { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
 .var-chip.local:hover { border-color: #10b981; color: #059669; }
 .blk {
-  margin-bottom: 14px;
+  margin-bottom: var(--mp-sp-3);
 }
 .blk :deep(.el-card__header) {
   font-weight: 600;
-  font-size: 13px;
-  padding: 10px 16px;
-  background: #f8fafc;
+  font-size: var(--mp-fs-base);
+  padding: 9px var(--mp-sp-4);
+  background: var(--mp-surface-2);
 }
 .card-head {
   display: flex;
@@ -1123,34 +1199,35 @@ onMounted(async () => {
   gap: 6px;
 }
 .op-tpl-select {
-  padding: 5px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  height: var(--mp-control-h);
+  padding: 0 8px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 12px;
-  color: #475569;
-  background: #fff;
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-ink-2);
+  background: var(--mp-surface);
 }
-.op-tpl-select:focus { border-color: #2563eb; }
+.op-tpl-select:focus { border-color: var(--mp-accent); }
 .op {
   margin-bottom: 10px;
 }
 .op :deep(.el-card__header) {
   padding: 8px 12px;
-  background: #f1f5f9;
+  background: var(--mp-surface-3);
 }
 .field-hint {
-  font-size: 12px;
-  color: #94a3b8;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted);
   line-height: 1.4;
   margin-top: 2px;
 }
 .field-hint code {
-  background: #f1f5f9;
+  background: var(--mp-surface-3);
   padding: 1px 5px;
   border-radius: 4px;
-  font-family: Consolas, monospace;
-  color: #475569;
+  font-family: var(--mp-font-mono);
+  color: var(--mp-ink-2);
 }
 .tpl-editor {
   width: 100%;
@@ -1160,17 +1237,17 @@ onMounted(async () => {
   margin-bottom: 8px;
 }
 .tpl-hint {
-  font-size: 12px;
-  color: #94a3b8;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted);
   margin-bottom: 6px;
   line-height: 1.5;
 }
 .tpl-hint code {
-  background: #f1f5f9;
+  background: var(--mp-surface-3);
   padding: 1px 5px;
   border-radius: 4px;
-  font-family: Consolas, monospace;
-  color: #475569;
+  font-family: var(--mp-font-mono);
+  color: var(--mp-ink-2);
 }
 .tpl-row {
   display: flex;
@@ -1181,46 +1258,46 @@ onMounted(async () => {
 .tpl-idx {
   width: 22px;
   text-align: right;
-  font-family: Consolas, monospace;
-  font-size: 12px;
-  color: #94a3b8;
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted-2);
   flex-shrink: 0;
 }
 .tpl-input :deep(.el-input__inner) {
-  font-family: Consolas, monospace;
+  font-family: var(--mp-font-mono);
 }
 .unit {
   margin-left: 8px;
-  font-size: 12px;
-  color: #64748b;
-  font-family: Consolas, monospace;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted);
+  font-family: var(--mp-font-mono);
 }
 .adv {
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--mp-border);
   padding-top: 8px;
 }
 
 .template-tabs :deep(.el-tabs__nav) {
   margin-bottom: 8px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--mp-border);
 }
 .template-tabs :deep(.el-tabs__item) {
-  font-size: 12px;
+  font-size: var(--mp-fs-xs);
   padding: 8px 12px;
 }
 .output-expr-row {
-  margin-bottom: 16px;
-  padding: 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
+  margin-bottom: var(--mp-sp-4);
+  padding: var(--mp-sp-3);
+  background: var(--mp-surface-2);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
 }
 .output-expr-header {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
-  font-size: 12px;
+  font-size: var(--mp-fs-xs);
 }
 
 /* v4.4 改: 操作列表用 tabs — 原"左索引 + 右详情"主从分栏移除, 详情吃满整行 */
@@ -1238,8 +1315,8 @@ onMounted(async () => {
   margin-bottom: 10px;
 }
 .op-tab-name {
-  font-family: Consolas, monospace;
-  font-size: 12.5px;
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-sm);
 }
 .md-kind {
   font-size: 11px;
@@ -1250,12 +1327,12 @@ onMounted(async () => {
   margin-left: 4px;
 }
 .md-kind.r {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--mp-accent-soft);
+  color: var(--mp-accent-hover);
 }
 .md-kind.w {
-  background: #fef3c7;
-  color: #b45309;
+  background: var(--mp-warn-soft);
+  color: var(--mp-warn-ink);
 }
 .md-detail {
   flex: 1;
@@ -1273,9 +1350,9 @@ onMounted(async () => {
   .sec-tabs :deep(.el-tab-pane.pane-ops) { display: block; }
 }
 .output-expr-header code {
-  font-family: monospace;
-  color: #1d4ed8;
-  background: #eff6ff;
+  font-family: var(--mp-font-mono);
+  color: var(--mp-accent-hover);
+  background: var(--mp-accent-soft);
   padding: 1px 6px;
   border-radius: 3px;
 }

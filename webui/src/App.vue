@@ -1,36 +1,76 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+// 应用骨架 — 顶部导航 (品牌 / 分组菜单 / 全局状态 / 热重载与帮助)
+// 页面为组件内状态 (无路由); 默认落地「总览」, 之后记住上次页面。
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import LoginGate from './components/LoginGate.vue'
 import ScopeManager from './components/ScopeManager.vue'
 import SimPanel from './components/SimPanel.vue'
 import LivePanel from './components/LivePanel.vue'
-import { listConfigs, getToken, setToken, reloadConfig, setAuthLostHandler } from './api'
+import OverviewPanel from './components/OverviewPanel.vue'
+import HelpDrawer from './components/HelpDrawer.vue'
+import { listConfigs, setToken, reloadConfig, setAuthLostHandler } from './api'
+import {
+  startRuntimeStatus, stopRuntimeStatus, refreshAll,
+  goodCount, onlineDevices, deviceStats, runtimeState, recordReload
+} from './composables/useRuntimeStatus'
+
+const VIEW_KEY = 'mp.ui.view'
+
+const NAV = [
+  {
+    group: '总览',
+    items: [{ key: 'overview', label: '总览' }]
+  },
+  {
+    group: '运行',
+    items: [
+      { key: 'live', label: '实时监控' },
+      { key: 'sim', label: '仿真控制' }
+    ]
+  },
+  {
+    group: '配置',
+    items: [
+      { key: 'protocols', label: '协议配置' },
+      { key: 'tags', label: '设备与标签' }
+    ]
+  }
+]
 
 const checking = ref(true)
 const authed = ref(false)
-const activeView = ref('protocols')
+const activeView = ref('overview')
 const banner = ref('')
 const bannerKind = ref('ok')
 const showHelp = ref(false)
+const reloadBusy = ref(false)
+// 跨页跳转意图 (总览的「开始使用」/快捷动作 → 设备与标签页定位或新建)
+const navIntent = ref(null)
+// 配置工作台未保存修改标记 — 顶栏切页时据此拦一道 (此前切页会静默丢弃编辑)
+const configDirty = ref(false)
 
-const views = [
-  { key: 'live', label: '实时监控' },
-  { key: 'protocols', label: '协议配置' },
-  { key: 'tags', label: '设备与标签' },
-  { key: 'sim', label: '仿真控制' }
-]
+// ── 顶栏导航 ──
+const statusText = computed(() => {
+  const dev = deviceStats.value.length
+  return `${onlineDevices.value}/${dev} 设备在线 · ${goodCount.value} Good`
+})
 
 // 启动探测: 用已存 token 试探一次受保护端点; 401 → 登录页
 onMounted(async () => {
-  // v5: 任意请求 401 → 统一切回登录页 (此前各组件只各自报错, 用户被困在全按钮报错界面)
+  const saved = localStorage.getItem(VIEW_KEY)
+  if (saved && NAV.some(g => g.items.some(i => i.key === saved))) activeView.value = saved
+  // 任意请求 401 → 统一切回登录页 (此前各组件只各自报错, 用户被困在全按钮报错界面)
   setAuthLostHandler(() => {
     authed.value = false
     banner.value = ''
+    configDirty.value = false
+    stopRuntimeStatus()
     showBanner('err', '登录已失效, 请重新输入 Token')
   })
   try {
     await listConfigs('protocols')
     authed.value = true
+    startRuntimeStatus()
   } catch (e) {
     authed.value = false
     if (e.status === 0) showBanner('err', e.message)
@@ -39,13 +79,22 @@ onMounted(async () => {
   }
 })
 
+onUnmounted(() => {
+  stopRuntimeStatus()
+})
+
 function onAuthenticated() {
   authed.value = true
+  startRuntimeStatus()
 }
 
 function logout() {
+  if (configDirty.value &&
+      !confirm('当前配置有未保存的修改，退出登录后将丢失。确定退出？')) return
+  configDirty.value = false
   setToken('')
   authed.value = false
+  stopRuntimeStatus()
 }
 
 function showBanner(kind, msg) {
@@ -56,13 +105,39 @@ function showBanner(kind, msg) {
   }, 4000)
 }
 
+function go(view, intent) {
+  const leaving = view !== activeView.value
+  if (leaving && configDirty.value &&
+      !confirm('当前配置有未保存的修改，离开后将丢失。确定离开？')) return
+  if (leaving) configDirty.value = false
+  navIntent.value = intent || null
+  activeView.value = view
+  localStorage.setItem(VIEW_KEY, view)
+}
+
+function onNav(key) {
+  go(key, null)
+}
+
 async function onReload() {
+  if (reloadBusy.value) return
+  reloadBusy.value = true
   try {
     await reloadConfig()
+    recordReload(true, '手动热重载完成')
     showBanner('ok', '热重载完成')
+    refreshAll()
   } catch (e) {
+    recordReload(false, e.message)
     showBanner('err', '热重载失败: ' + e.message)
+  } finally {
+    reloadBusy.value = false
   }
+}
+
+// 保存/回滚后由配置工作台通知: 刷新全局配置统计 (设备/标签/协议数)
+async function onConfigChanged() {
+  await refreshAll()
 }
 </script>
 
@@ -71,54 +146,58 @@ async function onReload() {
 
   <LoginGate v-else-if="!authed" @authenticated="onAuthenticated" />
 
-  <div v-else class="layout">
-    <!-- 顶部固定导航栏 -->
+  <div v-else class="shell">
+    <!-- ── 顶栏: 品牌 + 主导航 + 全局状态与动作 ── -->
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">MP</span>
-        <span class="brand-name">MyProt 管理控制台</span>
+        <span class="brand-name">MyProt</span>
+        <span class="brand-sub">管理控制台</span>
       </div>
+
       <nav class="nav">
-        <button
-          v-for="v in views"
-          :key="v.key"
-          class="nav-item"
-          :class="{ active: activeView === v.key }"
-          @click="activeView = v.key"
-        >{{ v.label }}</button>
+        <template v-for="(g, gi) in NAV" :key="g.group">
+          <span v-if="gi > 0" class="nav-sep" aria-hidden="true"></span>
+          <button
+            v-for="it in g.items" :key="it.key"
+            class="nav-item" :class="{ active: activeView === it.key }"
+            @click="onNav(it.key)"
+          >{{ it.label }}</button>
+        </template>
       </nav>
-      <div class="topbar-actions">
-        <button class="btn ghost" @click="onReload">热重载</button>
-        <button class="btn ghost" @click="showHelp = true">使用文档</button>
-        <button class="btn ghost" @click="logout">退出登录</button>
+
+      <span class="spacer"></span>
+
+      <div class="tb-status" :title="runtimeState.lastUpdate ? '采集快照时间 ' + new Date(runtimeState.lastUpdate).toLocaleTimeString() : '尚无采集值'">
+        <span class="dot" :class="goodCount > 0 ? 'ok' : 'off'"></span>{{ statusText }}
+      </div>
+
+      <div class="tb-actions">
+        <button class="tb-btn" :disabled="reloadBusy" @click="onReload">
+          {{ reloadBusy ? '重载中…' : '热重载' }}
+        </button>
+        <button class="tb-btn" @click="showHelp = true">帮助</button>
+        <button class="tb-btn subtle" @click="logout">退出</button>
       </div>
     </header>
 
-    <main class="content">
-      <div v-if="banner" class="banner" :class="bannerKind">{{ banner }}</div>
-      <LivePanel v-if="activeView === 'live'" />
-      <SimPanel v-else-if="activeView === 'sim'" />
-      <ScopeManager v-else :key="activeView" :scope="activeView" />
-    </main>
-  </div>
+    <div v-if="banner" class="banner" :class="bannerKind">{{ banner }}</div>
 
-  <!-- 快速上手弹窗 -->
-  <div v-if="showHelp" class="help-mask" @click.self="showHelp = false">
-    <div class="help-card">
-      <div class="help-head">
-        <span>快速上手</span>
-        <button class="help-close" @click="showHelp = false">×</button>
-      </div>
-      <div class="help-body">
-        <ol>
-          <li><b>新建协议</b>：顶部「协议配置」→ 输入协议名，选「Modbus TCP 模板」点新建。</li>
-          <li><b>添加设备</b>：顶部「设备与标签」→「新增设备」，选协议、填主机/端口。</li>
-          <li><b>添加标签</b>：同页「新增标签」，选设备、操作、起始地址、数据类型。</li>
-          <li><b>看数据</b>：回「实时监控」查看采集值；需要模拟设备时用「仿真控制」。</li>
-        </ol>
-        <p class="help-tip">提示：保存配置后自动热重载；每个配置页都有「表单模式 / JSON 模式」两种编辑方式。</p>
-      </div>
-    </div>
+    <main class="content">
+      <OverviewPanel
+        v-if="activeView === 'overview'"
+        @navigate="go"
+      />
+      <LivePanel v-else-if="activeView === 'live'" @navigate="go" />
+      <SimPanel v-else-if="activeView === 'sim'" @navigate="go" />
+      <ScopeManager
+        v-else :key="activeView" :scope="activeView" :intent="navIntent"
+        @changed="onConfigChanged"
+        @dirty="configDirty = $event"
+      />
+    </main>
+
+    <HelpDrawer v-model="showHelp" :view="activeView" />
   </div>
 </template>
 
@@ -128,170 +207,168 @@ async function onReload() {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #64748b;
+  color: var(--mp-muted);
 }
-.layout {
+
+/* ── 骨架 ── */
+.shell {
   height: 100%;
   display: flex;
   flex-direction: column;
+  background: var(--mp-bg);
 }
-/* 顶部固定导航栏 */
+
+/* ── 顶栏: 品牌 + 主导航 + 全局状态与动作 ── */
 .topbar {
+  height: var(--mp-topbar-h);
   flex-shrink: 0;
-  height: 56px;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 16px;
-  background: #1e293b;
-  color: #cbd5e1;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+  gap: var(--mp-sp-3);
+  padding: 0 var(--mp-sp-4);
+  background: var(--mp-surface);
+  border-bottom: 1px solid var(--mp-border);
+  box-shadow: var(--mp-shadow-1);
   z-index: 10;
 }
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-weight: 600;
-  color: #fff;
+  gap: 8px;
   flex-shrink: 0;
 }
-.brand-name {
-  white-space: nowrap;
-}
 .brand-mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  background: #2563eb;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--mp-accent);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--mp-fs-xs);
+  font-weight: 700;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
+.brand-name {
+  font-size: var(--mp-fs-md);
+  font-weight: 600;
+  color: var(--mp-ink);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+.brand-sub {
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted-2);
+  white-space: nowrap;
+}
+
 .nav {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex: 1;
+  gap: 2px;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.nav-item {
-  text-align: center;
-  white-space: nowrap;
-  background: transparent;
-  border: none;
-  color: inherit;
-  padding: 8px 16px;
-  border-radius: 6px;
-}
-.nav-item:hover { background: rgba(255, 255, 255, .06); }
-.nav-item.active {
-  background: #2563eb;
-  color: #fff;
-}
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.nav::-webkit-scrollbar { display: none; }
+.nav-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--mp-border);
   flex-shrink: 0;
 }
-.btn.ghost {
-  font-size: 13px;
-  padding: 7px 12px;
-  border-radius: 6px;
+.nav-item {
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--mp-radius-sm);
   background: transparent;
-  border: none;
-  color: #cbd5e1;
+  color: var(--mp-muted);
+  font-size: var(--mp-fs-base);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+.nav-item:hover { background: var(--mp-surface-3); color: var(--mp-ink); }
+.nav-item.active {
+  background: var(--mp-accent-soft);
+  color: var(--mp-accent-hover);
+  font-weight: 600;
+}
+.spacer { flex: 1; }
+
+.tb-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--mp-radius-pill);
+  background: var(--mp-surface-2);
+  border: 1px solid var(--mp-border);
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tb-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mp-muted-2); }
+.tb-status .dot.ok { background: var(--mp-ok); }
+.tb-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.tb-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface);
+  color: var(--mp-ink-2);
+  font-size: var(--mp-fs-sm);
   white-space: nowrap;
 }
-.btn.ghost:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+.tb-btn:hover:not(:disabled) { border-color: var(--mp-border-strong); background: var(--mp-surface-2); }
+.tb-btn:disabled { opacity: .55; cursor: not-allowed; }
+.tb-btn.subtle { color: var(--mp-muted); border-color: transparent; background: transparent; }
+.tb-btn.subtle:hover { color: var(--mp-ink); background: var(--mp-surface-3); }
+
+.banner {
+  margin: var(--mp-sp-3) var(--mp-sp-5) 0;
+  padding: 8px 14px;
+  border-radius: var(--mp-radius-sm);
+  font-size: var(--mp-fs-sm);
+  flex-shrink: 0;
+}
+.banner.ok { background: var(--mp-ok-soft); color: var(--mp-ok-ink); }
+.banner.err { background: var(--mp-err-soft); color: var(--mp-err-ink); }
+
 .content {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  padding: 20px;
+  padding: var(--mp-sp-5);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-/* 内容区各视图组件 flex 撑满 (banner 提示条除外) */
-.content > :not(.banner) {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-}
+.content > :not(.banner) { flex: 1; min-height: 0; min-width: 0; }
 
-/* 窄屏: 导航横向滚动, 品牌名隐藏 */
-@media (max-width: 720px) {
+/* ── 响应式: 顶栏压缩, 导航横向滚动 ── */
+@media (max-width: 1200px) {
+  .brand-sub { display: none; }
+}
+@media (max-width: 1080px) {
+  .tb-status { display: none; }
+}
+@media (max-width: 900px) {
   .brand-name { display: none; }
-  .topbar { gap: 8px; padding: 0 8px; }
-  .nav { overflow-x: auto; }
-  .nav-item { padding: 8px 10px; }
+  .topbar { padding: 0 var(--mp-sp-3); gap: var(--mp-sp-2); }
+  .nav-item { padding: 0 9px; }
+  .tb-btn { padding: 5px 9px; }
 }
-.banner {
-  margin-bottom: 14px;
-  padding: 10px 14px;
-  border-radius: 6px;
-  font-size: 13px;
+@media (max-width: 720px) {
+  .content { padding: var(--mp-sp-3); }
+  .banner { margin: var(--mp-sp-2) var(--mp-sp-3) 0; }
+  .nav-sep { margin: 0 3px; }
 }
-.banner.ok { background: #dcfce7; color: #15803d; }
-.banner.err { background: #fee2e2; color: #b91c1c; }
-
-/* 快速上手弹窗 */
-.help-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, .5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-.help-card {
-  width: 480px;
-  max-width: calc(100vw - 40px);
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
-  overflow: hidden;
-}
-.help-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
-  font-weight: 600;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
-}
-.help-close {
-  border: none;
-  background: transparent;
-  font-size: 20px;
-  line-height: 1;
-  color: #94a3b8;
-  cursor: pointer;
-}
-.help-close:hover { color: #475569; }
-.help-body {
-  padding: 16px 18px;
-  font-size: 13px;
-  color: #334155;
-  line-height: 1.7;
-}
-.help-body ol {
-  margin: 0 0 12px;
-  padding-left: 20px;
-}
-.help-tip {
-  margin: 0;
-  padding: 10px 12px;
-  background: #f0f9ff;
-  border-radius: 6px;
-  color: #075985;
-  font-size: 12px;
+@media (max-width: 560px) {
+  .brand { display: none; }
 }
 </style>

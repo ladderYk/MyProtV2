@@ -4,9 +4,13 @@
 //        断流由浏览器自动重连; 手动刷新兜底走 latestValues() 快照接口
 //        变化行高亮 (changed), 质量徽标 Good/Bad/Uncertain
 import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
+import PageHeader from './PageHeader.vue'
+import StatusBadge from './StatusBadge.vue'
+import EmptyState from './EmptyState.vue'
 import { latestValues, dataStreamUrl, writeTag, listConfigs, getConfig } from '../api'
 
 const rows = ref([])          // [{name, device, value, quality, timestamp, changed}]
+const emit = defineEmits(['navigate'])   // 空状态里的跳转按钮 (去添加标签 / 去启动仿真)
 const keyword = ref('')       // 按标签名/设备过滤
 const deviceFilter = ref('')  // 设备筛选 ('' = 全部)
 const collapsed = reactive({}) // 设备分组折叠状态 (设备名 → bool)
@@ -25,7 +29,9 @@ const filtered = computed(() => {
   return rows.value.filter(r => {
     if (d && r.device !== d) return false
     if (!k) return true
+    const lbl = labelOf(r)
     return r.name.toLowerCase().includes(k) || r.device.toLowerCase().includes(k)
+      || (lbl !== '' && lbl.toLowerCase().includes(k))
   })
 })
 const goodCount = computed(() => rows.value.filter(r => r.quality === 'Good').length)
@@ -62,6 +68,13 @@ function fmtTime(ts) {
   const d = new Date(ts)
   const p = n => String(n).padStart(2, '0')
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+/// 质量 → 徽标语义 (Good 绿 / Bad 红 / 其余告警)
+function qualityKind(q) {
+  if (q === 'Good') return 'ok'
+  if (q === 'Bad') return 'bad'
+  return 'warn'
 }
 
 function fmtValue(v) {
@@ -193,6 +206,9 @@ const writeMsgKind = ref('ok')
 // TransportSize / Float 编码由写标签决定), 未匹配走 legacy 路径
 const writeTagIndex = ref({})   // 读标签名 → [写标签定义]
 const writeTagSel = ref('')     // 当前选中的写标签名 (一行可配多个写标签)
+const writeIndexReady = ref(false) // 写标签索引是否已成功加载 (失败时保留 legacy 全量写入入口)
+const tagMeta = ref({})         // 标签名 → { label, unit } (配置中的展示元数据)
+let writeIndexTimer = null
 
 // 写标签 finalType → 数值输入约束 (Float/Double 允许小数)
 function writeTagFloat(ft) { return ft === 'Float' || ft === 'Double' }
@@ -208,7 +224,9 @@ async function loadWriteTagIndex() {
     if (!names.length) return
     const doc = JSON.parse(await getConfig('tags', names[0]))
     const idx = {}
+    const meta = {}
     for (const t of (doc.tags || [])) {
+      meta[t.name] = { label: (t.label || '').trim(), unit: (t.unit || '').trim() }
       // v1.7 标签级写能力: writeOperation 非空 = 又读又写 (写目标即自身)
       if (t.direction !== 'write' && t.writeOperation) {
         if (!idx[t.name]) idx[t.name] = []
@@ -221,8 +239,25 @@ async function loadWriteTagIndex() {
         idx[t.readBackTag].push(t)
       }
     }
+    tagMeta.value = meta
     writeTagIndex.value = idx
+    writeIndexReady.value = true
   } catch (_) { /* 写标签索引不可用时退回 legacy 写路径 */ }
+}
+
+/// 该行是否提供写入入口: 索引已就绪时仅可写标签 (writeOperation / 写标签) 可写
+function canWrite(r) {
+  return !writeIndexReady.value || (writeTagIndex.value[r.name] || []).length > 0
+}
+
+/// 配置中的显示名称 / 工程单位 (未配置 → 空串, 展示时回退标签名 / 不显示单位)
+function labelOf(r) {
+  const m = r && tagMeta.value[r.name]
+  return m ? m.label : ''
+}
+function unitOf(r) {
+  const m = r && tagMeta.value[r.name]
+  return m ? m.unit : ''
 }
 
 function openWrite(r) {
@@ -276,33 +311,43 @@ async function submitWrite() {
   }
 }
 
-onMounted(() => { refresh(false); startStream(); loadWriteTagIndex() })
-onUnmounted(stopStream)
+onMounted(() => {
+  refresh(false)
+  startStream()
+  // 写标签索引错开首屏请求: App 启动 + 快照 + SSE 已占用限流突发额度,
+  // 立即再发 list/get 两个请求会触发 5 rps 限流 (429)
+  writeIndexTimer = setTimeout(loadWriteTagIndex, 1200)
+})
+onUnmounted(() => {
+  clearTimeout(writeIndexTimer)
+  stopStream()
+})
 </script>
 
 <template>
   <div class="live">
-    <header class="head">
-      <h2>实时监控</h2>
-      <span class="meta">
-        {{ rows.length }} 标签 · {{ goodCount }} Good
-        <template v-if="lastUpdate"> · 更新于 {{ fmtTime(lastUpdate) }}</template>
-      </span>
-    </header>
+    <PageHeader title="实时监控" desc="采集值快照与标签写入; 名称优先显示配置的中文名, 数值后为单位。">
+      <template #meta>
+        <StatusBadge :kind="streaming ? 'ok' : 'off'" :text="streaming ? '推送中' : '已暂停'" />
+        <span>{{ rows.length }} 标签 · {{ goodCount }} Good</span>
+        <span v-if="lastUpdate">· 更新于 {{ fmtTime(lastUpdate) }}</span>
+      </template>
+    </PageHeader>
 
     <div v-if="message" class="msg err">{{ message }}</div>
 
-    <div class="controls">
+    <div class="filter-bar">
       <input
         v-model="keyword"
         class="search"
         type="text"
-        placeholder="按标签名 / 设备过滤…"
+        placeholder="搜索标签名 / 中文名 / 设备…"
       />
       <select v-model="deviceFilter" class="device-select">
         <option value="">全部设备</option>
         <option v-for="d in devices" :key="d" :value="d">{{ d }}</option>
       </select>
+      <span class="bar-spacer"></span>
       <button class="btn small" :class="{ polling: streaming }" @click="streaming ? stopStream() : startStream()">
         {{ streaming ? '停止推送' : '实时推送' }}
       </button>
@@ -324,10 +369,18 @@ onUnmounted(stopStream)
           </thead>
           <tbody>
             <tr v-for="r in g.rows" :key="r.device + '.' + r.name" :class="{ changed: r.changed }">
-              <td class="mono name">{{ r.name }}</td>
-              <td class="mono value">{{ fmtValue(r.value) }}</td>
+              <td class="name">
+                <div v-if="labelOf(r)" class="tag-label">{{ labelOf(r) }}</div>
+                <div :class="['tag-name', { sub: !!labelOf(r) }]">{{ r.name }}</div>
+              </td>
+              <td class="mono value">
+                {{ fmtValue(r.value) }}<span
+                  v-if="unitOf(r) && r.value !== null && r.value !== undefined"
+                  class="unit"
+                >{{ unitOf(r) }}</span>
+              </td>
               <td>
-                <span class="badge" :class="r.quality.toLowerCase()">{{ r.quality }}</span>
+                <StatusBadge :kind="qualityKind(r.quality)" :text="r.quality" />
               </td>
               <td class="spark-cell">
                 <svg
@@ -346,79 +399,87 @@ onUnmounted(stopStream)
                 <span v-else class="dim">-</span>
               </td>
               <td class="mono dim">{{ fmtTime(r.timestamp) }}</td>
-              <td><button class="btn tiny" @click="openWrite(r)">写入</button></td>
+              <td>
+                <button v-if="canWrite(r)" class="btn tiny" @click="openWrite(r)">写入</button>
+                <span v-else class="dim" title="该标签未声明写能力">只读</span>
+              </td>
             </tr>
           </tbody>
         </table>
       </template>
-      <div v-if="!grouped.length && !busy" class="empty">
-        暂无数据 — 请先在「协议配置」创建协议，再到「设备与标签」添加设备和标签；
-        引擎轮询到第一批采集值后，这里会自动出现数据
-      </div>
+      <EmptyState
+        v-if="!grouped.length && !busy"
+        title="暂无采集数据"
+        desc="先在「协议配置」创建协议, 再到「设备与标签」添加设备与标签; 引擎轮询到第一批采集值后, 这里会自动出现数据。没有现场设备时可用「仿真控制」启动寄存器仿真。"
+        action-text="去添加标签"
+        secondary-text="去启动仿真"
+        @action="emit('navigate', 'tags', { add: 'tag' })"
+        @secondary="emit('navigate', 'sim', null)"
+      />
     </div>
 
-    <!-- v1.2 增: 写数据弹窗 (v1.6: 写标签定向 + Float 输入) -->
-    <div v-if="writeTarget" class="write-mask" @click.self="closeWrite()">
-      <div class="write-card">
-        <div class="write-head">
-          <span class="write-title">写入 — {{ writeTarget.device }}.{{ writeTarget.name }}</span>
-          <button class="write-close" @click="closeWrite()">×</button>
-        </div>
-        <div class="write-body">
-          <p class="write-hint" v-if="activeWriteTag">
-            <template v-if="activeWriteTag.direction === 'write'">
-              将定向到写标签 <b>{{ activeWriteTag.name }}</b>
-            </template>
-            <template v-else>
-              标签可写: 写操作 <b>{{ activeWriteTag.writeOperation }}</b>
-            </template>
-            ({{ activeWriteTag.finalType }});数值按该类型自动编码,
-            byteOrder/TransportSize 由标签 variables/writeVariables 决定
-          </p>
-          <p class="write-hint" v-else>
-            标量「数值」走单寄存器写 (0-65535, 如 Modbus FC06);<br />
-            「字节 (hex)」走变长写 (如 S7 WriteVar / Modbus FC16), 字节序与协议一致
-          </p>
-          <template v-if="(writeTagIndex[writeTarget.name] || []).length > 1">
-            <label class="f-label">写标签</label>
-            <select v-model="writeTagSel" class="f-input">
-              <option v-for="t in writeTagIndex[writeTarget.name]" :key="t.name" :value="t.name">
-                {{ t.name }} ({{ t.finalType }})
-              </option>
-            </select>
+    <!-- v1.2 增: 写入抽屉 (v1.6: 写标签定向 + Float 输入) — 不遮挡监控表格 -->
+    <el-drawer
+      v-if="writeTarget"
+      :model-value="true" size="420px" :title="'写入 — ' + writeTarget.name"
+      @update:model-value="v => { if (!v) closeWrite() }"
+    >
+      <div class="write-body">
+        <p v-if="activeWriteTag" class="write-hint">
+          <template v-if="activeWriteTag.direction === 'write'">
+            将定向到写标签 <b>{{ activeWriteTag.name }}</b>
           </template>
-          <label class="f-label">
-            {{ activeWriteTag && writeTagFloat(activeWriteTag.finalType)
-              ? '数值 (浮点, 自动转 IEEE754 大端)'
-              : (activeWriteTag ? `数值 (${activeWriteTag.finalType})` : '数值 (0-65535)') }}
-          </label>
-          <input
-            v-model.number="writeValue"
-            class="f-input"
-            type="number"
-            :step="activeWriteTag && writeTagFloat(activeWriteTag.finalType) ? 'any' : '1'"
-            :min="activeWriteTag ? undefined : 0"
-            :max="activeWriteTag ? undefined : 65535"
-            :disabled="!!writeBytes.trim()"
-            placeholder="留空则使用下方字节"
-          />
-          <label class="f-label">字节 (hex)</label>
-          <input v-model="writeBytes" class="f-input mono" type="text"
-                 :disabled="writeValue !== null && writeValue !== undefined && writeValue !== ''"
-                 placeholder="如 00 0A 或 41 20 00 00" />
-          <label class="f-check">
-            <input v-model="writeReadBack" type="checkbox" /> 写后读回校验 (readBack)
-          </label>
-        </div>
+          <template v-else>
+            标签可写: 写操作 <b>{{ activeWriteTag.writeOperation }}</b>
+          </template>
+          ({{ activeWriteTag.finalType }});数值按该类型自动编码,
+          byteOrder/TransportSize 由标签 variables/writeVariables 决定
+        </p>
+        <p v-else class="write-hint">
+          标量「数值」走单寄存器写 (0-65535, 如 Modbus FC06);<br />
+          「字节 (hex)」走变长写 (如 S7 WriteVar / Modbus FC16), 字节序与协议一致
+        </p>
+        <template v-if="(writeTagIndex[writeTarget.name] || []).length > 1">
+          <label class="f-label">写标签</label>
+          <select v-model="writeTagSel" class="f-input">
+            <option v-for="t in writeTagIndex[writeTarget.name]" :key="t.name" :value="t.name">
+              {{ t.name }} ({{ t.finalType }})
+            </option>
+          </select>
+        </template>
+        <label class="f-label">
+          {{ activeWriteTag && writeTagFloat(activeWriteTag.finalType)
+            ? '数值 (浮点, 自动转 IEEE754 大端)'
+            : (activeWriteTag ? `数值 (${activeWriteTag.finalType})` : '数值 (0-65535)') }}
+        </label>
+        <input
+          v-model.number="writeValue"
+          class="f-input mono"
+          type="number"
+          :step="activeWriteTag && writeTagFloat(activeWriteTag.finalType) ? 'any' : '1'"
+          :min="activeWriteTag ? undefined : 0"
+          :max="activeWriteTag ? undefined : 65535"
+          :disabled="!!writeBytes.trim()"
+          placeholder="留空则使用下方字节"
+        />
+        <label class="f-label">字节 (hex)</label>
+        <input v-model="writeBytes" class="f-input mono" type="text"
+               :disabled="writeValue !== null && writeValue !== undefined && writeValue !== ''"
+               placeholder="如 00 0A 或 41 20 00 00" />
+        <label class="f-check">
+          <input v-model="writeReadBack" type="checkbox" /> 写后读回校验 (readBack)
+        </label>
+      </div>
+      <template #footer>
         <div class="write-foot">
           <span v-if="writeMsg" class="write-msg" :class="writeMsgKind">{{ writeMsg }}</span>
-          <button class="btn cancel" @click="closeWrite()">取消</button>
-          <button class="btn primary" :disabled="writeBusy" @click="submitWrite()">
+          <button class="btn small" @click="closeWrite()">取消</button>
+          <button class="btn primary small" :disabled="writeBusy" @click="submitWrite()">
             {{ writeBusy ? '写入中…' : '确认写入' }}
           </button>
         </div>
-      </div>
-    </div>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
@@ -426,203 +487,186 @@ onUnmounted(stopStream)
 .live {
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
-.head {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  margin-bottom: 12px;
-}
-.head h2 { font-size: 16px; }
-.meta { font-size: 13px; color: #64748b; }
 
 .msg.err {
-  padding: 9px 14px;
-  border-radius: 6px;
-  margin-bottom: 12px;
-  font-size: 13px;
-  background: #fee2e2;
-  color: #b91c1c;
+  padding: 8px 12px;
+  border-radius: var(--mp-radius-sm);
+  margin-bottom: var(--mp-sp-3);
+  font-size: var(--mp-fs-sm);
+  background: var(--mp-err-soft);
+  color: var(--mp-err-ink);
 }
 
-.controls {
+/* 筛选条 — 常驻在表格上方, 不随表格内部滚动 */
+.filter-bar {
   display: flex;
-  gap: 12px;
-  margin-bottom: 12px;
+  align-items: center;
+  gap: var(--mp-sp-3);
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: var(--mp-sp-3);
+  background: var(--mp-surface);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius);
+  box-shadow: var(--mp-shadow-1);
+  flex-shrink: 0;
 }
+.bar-spacer { flex: 1; }
 .search {
   flex: 1;
-  max-width: 320px;
-  padding: 7px 12px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  min-width: 180px;
+  max-width: 340px;
+  height: var(--mp-control-h);
+  padding: 0 12px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
+  background: var(--mp-surface);
 }
-.search:focus { border-color: #2563eb; }
+.search:focus { border-color: var(--mp-accent); box-shadow: 0 0 0 3px var(--mp-accent-soft); }
 .device-select {
-  padding: 7px 10px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  height: var(--mp-control-h);
+  min-width: 150px;
+  padding: 0 10px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 13px;
-  color: #475569;
-  background: #fff;
-  min-width: 140px;
+  font-size: var(--mp-fs-base);
+  color: var(--mp-ink-2);
+  background: var(--mp-surface);
 }
-.device-select:focus { border-color: #2563eb; }
-.controls .polling { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+.device-select:focus { border-color: var(--mp-accent); }
+.filter-bar .polling {
+  background: var(--mp-accent-soft);
+  color: var(--mp-accent-hover);
+  border-color: var(--mp-accent-line);
+}
 
 .table-wrap {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  background: var(--mp-surface);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius);
+  box-shadow: var(--mp-shadow-1);
 }
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
 }
 th, td {
   text-align: left;
-  padding: 8px 16px;
-  border-bottom: 1px solid #f1f5f9;
+  padding: 0 16px;
+  height: var(--mp-row-h);
+  border-bottom: 1px solid var(--mp-surface-3);
 }
 th {
   position: sticky;
   top: 0;
-  background: #f8fafc;
-  color: #64748b;
+  background: var(--mp-surface-2);
+  color: var(--mp-muted);
+  font-size: var(--mp-fs-sm);
   font-weight: 600;
-  z-index: 1;
+  white-space: nowrap;
+  z-index: 2;
 }
+/* 数值列右对齐, 便于纵向比对 */
+th:nth-child(2) { text-align: right; }
+
 .group-head {
+  position: sticky;
+  top: var(--mp-row-h);
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 16px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 7px 16px;
+  background: var(--mp-surface-3);
+  border-bottom: 1px solid var(--mp-border);
   cursor: pointer;
   user-select: none;
 }
-.group-head:hover { background: #f1f5f9; }
-.group-arrow { width: 14px; color: #64748b; font-size: 12px; }
-.group-name { font-family: Consolas, monospace; font-weight: 600; color: #1d4ed8; font-size: 13px; }
-.group-meta { font-size: 12px; color: #94a3b8; }
-.mono { font-family: Consolas, monospace; }
-.dim { color: #94a3b8; }
-.name { font-weight: 600; }
-.value { font-size: 14px; }
-tr.changed td { background: #fffbeb; }
-tbody tr:hover td { background: #f8fafc; }
-tbody tr.changed:hover td { background: #fef3c7; }
-.th-op { width: 72px; }
-
-.badge {
-  display: inline-block;
-  padding: 1px 10px;
-  border-radius: 999px;
-  font-size: 11px;
+.group-head:hover { background: var(--mp-border); }
+.group-arrow { width: 14px; color: var(--mp-muted); font-size: var(--mp-fs-sm); }
+.group-name {
+  font-family: var(--mp-font-mono);
   font-weight: 600;
+  color: var(--mp-accent-hover);
+  font-size: var(--mp-fs-base);
 }
-.badge.good { background: #dcfce7; color: #15803d; }
-.badge.bad { background: #fee2e2; color: #b91c1c; }
-.badge.uncertain { background: #fef3c7; color: #b45309; }
-.empty { text-align: center; color: #94a3b8; padding: 40px 0; }
+.group-meta { font-size: var(--mp-fs-sm); color: var(--mp-muted); }
+.mono { font-family: var(--mp-font-mono); }
+.dim { color: var(--mp-muted-2); }
+.name { font-weight: 600; }
+.tag-label { font-size: var(--mp-fs-base); color: var(--mp-ink); }
+.tag-name { font-family: var(--mp-font-mono); font-size: var(--mp-fs-sm); color: var(--mp-ink-2); }
+.tag-name.sub { font-size: var(--mp-fs-xs); font-weight: 400; color: var(--mp-muted-2); margin-top: 1px; }
+.value { font-size: var(--mp-fs-md); text-align: right; font-variant-numeric: tabular-nums; }
+.unit { margin-left: 4px; font-size: var(--mp-fs-sm); font-weight: 400; color: var(--mp-muted); }
+tr.changed td { background: var(--mp-warn-soft); }
+tbody tr:nth-child(even) td { background: var(--mp-surface-2); }
+tbody tr:hover td { background: var(--mp-accent-soft); }
+tbody tr.changed:hover td { background: var(--mp-warn-soft); }
+.th-op { width: 84px; }
 
-/* v1.1 增: sparkline 单元格 — SVG 自动宽度, 高度 22 */
-.spark-cell { width: 110px; padding: 4px 12px; }
+/* sparkline 单元格 — SVG 自动宽度, 高度 22 */
+.spark-cell { width: 116px; padding: 0 12px; }
 .spark { display: block; width: 100%; height: 22px; }
 
-/* v1.2 增: 写数据弹窗 + 行内写入按钮 */
-.btn.tiny { padding: 2px 8px; font-size: 12px; }
-.write-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, .5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-.write-card {
-  width: 440px;
-  max-width: calc(100vw - 40px);
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
-  overflow: hidden;
-}
-.write-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 13px 18px;
-  font-weight: 600;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
-}
-.write-close {
-  border: none;
-  background: transparent;
-  font-size: 20px;
-  line-height: 1;
-  color: #94a3b8;
-  cursor: pointer;
-}
-.write-close:hover { color: #475569; }
-.write-body { padding: 16px 18px; }
+/* 写入抽屉 */
+.write-body { display: flex; flex-direction: column; }
 .write-hint {
-  margin: 0 0 12px;
+  margin: 0 0 var(--mp-sp-3);
   padding: 9px 12px;
-  background: #f0f9ff;
-  border-radius: 6px;
-  color: #075985;
-  font-size: 12px;
+  background: var(--mp-info-soft);
+  border-radius: var(--mp-radius-sm);
+  color: var(--mp-info-ink);
+  font-size: var(--mp-fs-sm);
   line-height: 1.6;
 }
 .f-label {
   display: block;
-  margin: 10px 0 4px;
-  font-size: 12px;
-  color: #64748b;
+  margin: 12px 0 4px;
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-muted);
 }
 .f-input {
   width: 100%;
-  padding: 8px 12px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
+  background: var(--mp-surface);
 }
-.f-input:focus { border-color: #2563eb; }
+.f-input:focus { border-color: var(--mp-accent); box-shadow: 0 0 0 3px var(--mp-accent-soft); }
 .f-check {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 12px;
-  font-size: 13px;
-  color: #334155;
+  margin-top: 14px;
+  font-size: var(--mp-fs-base);
+  color: var(--mp-ink-2);
 }
 .write-foot {
   display: flex;
   align-items: center;
   gap: 10px;
   justify-content: flex-end;
-  padding: 12px 18px;
-  background: #f8fafc;
-  border-top: 1px solid #e2e8f0;
 }
-.write-msg { margin-right: auto; font-size: 13px; }
-.write-msg.ok { color: #15803d; }
-.write-msg.err { color: #b91c1c; }
-.write-foot .btn.cancel {
-  background: #fff;
-  border: 1px solid #cbd5e1;
-  color: #475569;
+.write-msg { margin-right: auto; font-size: var(--mp-fs-sm); }
+.write-msg.ok { color: var(--mp-ok-ink); }
+.write-msg.err { color: var(--mp-err-ink); }
+
+@media (max-width: 720px) {
+  .search { max-width: none; }
+  .th-op { width: 64px; }
+  th, td { padding: 0 10px; }
 }
 </style>

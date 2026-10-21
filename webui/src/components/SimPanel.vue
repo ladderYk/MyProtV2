@@ -5,10 +5,15 @@
 // 配置流: listConfigs('protocols') + getConfig 拉全部协议文档 → 编辑 simulation 节
 //        → saveConfig 写回对应协议 JSON (热重载后生效)
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import PageHeader from './PageHeader.vue'
+import StatusBadge from './StatusBadge.vue'
+import EmptyState from './EmptyState.vue'
 import {
   simStatus, readSimRegisters, writeSimRegisters,
   listConfigs, getConfig, saveConfig
 } from '../api'
+
+const emit = defineEmits(['navigate'])   // 空状态 → 去协议配置设置仿真端口
 
 const sims = ref([])               // [{protocol, listenPort, registerCount}]
 const activeProto = ref('')        // 当前操作的仿真协议
@@ -47,20 +52,39 @@ async function refreshSims(keepSelection) {
   }
 }
 
-async function loadRegisters() {
+/// keepEdits=true 用于 3s 自动刷新: 只清理已不在当前窗口的编辑, 不静默丢弃用户输入
+async function loadRegisters(keepEdits) {
   if (!activeProto.value) return
   const s = Number(startAddr.value) || 0
   const c = Math.min(Math.max(Number(readCount.value) || 16, 1), 65536 - s)
   busy.value = true
   try {
     const r = await readSimRegisters(activeProto.value, s, c)
-    rows.value = (r.values || []).map((v, i) => ({ addr: r.start + i, value: v }))
-    edits.value = {}                 // 重拉后丢弃未提交的本地修改
+    const next = (r.values || []).map((v, i) => ({ addr: r.start + i, value: v }))
+    rows.value = next
+    if (keepEdits === true) {
+      const alive = {}
+      for (const row of next) alive[row.addr] = true
+      const kept = {}
+      for (const a of Object.keys(edits.value)) {
+        if (alive[a]) kept[a] = edits.value[a]
+      }
+      edits.value = kept
+    } else {
+      edits.value = {}               // 手动重拉才丢弃未提交的本地修改
+    }
   } catch (e) {
     flash('err', e.message)
   } finally {
     busy.value = false
   }
+}
+
+/// 手动读取: 有未提交编辑时先确认, 避免一次点击把改动清空
+function manualLoad() {
+  if (editCount.value &&
+      !confirm(`有 ${editCount.value} 行未提交的修改，重新读取将丢弃。继续？`)) return
+  loadRegisters(false)
 }
 
 async function commitRow(row) {
@@ -93,7 +117,7 @@ function onEditKey(addr, event) {
 
 function togglePoll() {
   if (pollTimer) { stopPoll(); return }
-  pollTimer = setInterval(loadRegisters, 3000)
+  pollTimer = setInterval(() => loadRegisters(true), 3000)
 }
 function stopPoll() {
   clearInterval(pollTimer)
@@ -167,7 +191,7 @@ async function saveSimConfig(p) {
 
 onMounted(async () => {
   await refreshSims(false)
-  await loadRegisters()
+  await loadRegisters(false)
   loadCfgDocs()
 })
 onUnmounted(stopPoll)
@@ -175,27 +199,33 @@ onUnmounted(stopPoll)
 
 <template>
   <div class="sim">
-    <header class="head">
-      <span class="sec-title">仿真控制台</span>
-      <span class="meta" v-if="sims.length">{{ sims.length }} 个仿真器在运行</span>
-    </header>
+    <PageHeader title="仿真控制" desc="手动读写仿真器寄存器, 供无现场设备时联调; 参数写入协议文件, 热重载后生效。">
+      <template #meta>
+        <StatusBadge :kind="sims.length ? 'ok' : 'off'" :text="sims.length ? sims.length + ' 个仿真器在运行' : '无运行中仿真器'" />
+        <span v-if="activeSim">当前: {{ activeSim.protocol }} · 端口 {{ activeSim.listenPort }}</span>
+      </template>
+    </PageHeader>
 
     <div v-if="message" class="msg" :class="messageKind">{{ message }}</div>
 
     <!-- 状态卡: 运行中的仿真器 -->
-    <div class="cards">
+    <div v-if="sims.length" class="cards">
       <div
         v-for="s in sims" :key="s.protocol"
         class="card" :class="{ active: s.protocol === activeProto }"
-        @click="activeProto = s.protocol; loadRegisters()"
+        @click="if (s.protocol !== activeProto) { activeProto = s.protocol; manualLoad() }"
       >
-        <div class="card-title">{{ s.protocol }}</div>
-        <div class="card-meta">端口 {{ s.listenPort }} · {{ s.registerCount }} 寄存器</div>
-      </div>
-      <div v-if="!sims.length" class="card empty-card">
-        无运行中仿真器 — 在「协议配置」里给协议的 simulation.listenPort 配置 &gt; 0 即自动启动
+        <div class="card-title"><i class="run-dot"></i>{{ s.protocol }}</div>
+        <div class="card-meta">端口 <span class="mono">{{ s.listenPort }}</span> · {{ s.registerCount }} 寄存器</div>
       </div>
     </div>
+    <EmptyState
+      v-else
+      title="没有运行中的仿真器"
+      desc="在「协议配置」里给某个协议的 simulation.listenPort 配置一个大于 0 的端口, 保存后仿真器会自动启动。"
+      action-text="去协议配置"
+      @action="emit('navigate', 'protocols', null)"
+    />
 
     <!-- 仿真参数配置 (持久化到协议文件, 热重载后生效) -->
     <details class="cfg">
@@ -243,7 +273,7 @@ onUnmounted(stopPoll)
       <div class="controls">
         <label>起始地址 <input v-model.number="startAddr" type="number" min="0" max="65535" /></label>
         <label>数量 <input v-model.number="readCount" type="number" min="1" max="4096" /></label>
-        <button class="btn primary small" :disabled="busy" @click="loadRegisters">读取</button>
+        <button class="btn primary small" :disabled="busy" @click="manualLoad">读取</button>
         <button class="btn small" :class="{ polling: pollTimer }" @click="togglePoll">
           {{ pollTimer ? '停止刷新' : '3s 自动刷新' }}
         </button>
@@ -289,136 +319,151 @@ onUnmounted(stopPoll)
 .sim {
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
-.head {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  margin-bottom: 12px;
-}
-.head .meta { font-size: 13px; color: #64748b; }
-.head h2 { font-size: 16px; }
 .msg {
-  padding: 9px 14px;
-  border-radius: 6px;
-  margin-bottom: 12px;
-  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: var(--mp-radius-sm);
+  margin-bottom: var(--mp-sp-3);
+  font-size: var(--mp-fs-sm);
 }
-.msg.ok { background: #dcfce7; color: #15803d; }
-.msg.err { background: #fee2e2; color: #b91c1c; }
+.msg.ok { background: var(--mp-ok-soft); color: var(--mp-ok-ink); }
+.msg.err { background: var(--mp-err-soft); color: var(--mp-err-ink); }
 
 .cards {
   display: flex;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: var(--mp-sp-3);
+  margin-bottom: var(--mp-sp-4);
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 .card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 12px 18px;
+  background: var(--mp-surface);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius);
+  padding: 10px 16px;
   cursor: pointer;
-  min-width: 180px;
+  min-width: 190px;
+  box-shadow: var(--mp-shadow-1);
+  transition: border-color .15s, box-shadow .15s;
 }
-.card:hover { border-color: #94a3b8; }
+.card:hover { border-color: var(--mp-border-strong); }
 .card.active {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, .15);
+  border-color: var(--mp-accent);
+  box-shadow: 0 0 0 2px var(--mp-accent-soft);
 }
 .card-title {
-  font-family: Consolas, monospace;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mp-font-mono);
   font-weight: 600;
-  font-size: 14px;
-  margin-bottom: 4px;
+  font-size: var(--mp-fs-md);
+  margin-bottom: 3px;
+  color: var(--mp-ink);
 }
-.card.active .card-title { color: #1d4ed8; }
-.card-meta { font-size: 12px; color: #64748b; }
-.empty-card { cursor: default; color: #94a3b8; }
+.run-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mp-ok);
+  flex-shrink: 0;
+}
+.card.active .card-title { color: var(--mp-accent-hover); }
+.card-meta { font-size: var(--mp-fs-sm); color: var(--mp-muted); }
 
 .controls {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-bottom: 12px;
-  font-size: 13px;
-  color: #475569;
+  margin-bottom: var(--mp-sp-3);
+  font-size: var(--mp-fs-base);
+  color: var(--mp-ink-2);
   flex-wrap: wrap;
 }
 .controls input {
   width: 90px;
-  padding: 5px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  height: var(--mp-control-h);
+  padding: 0 8px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
+  font-family: var(--mp-font-mono);
 }
-.controls input:focus { border-color: #2563eb; }
-.controls .polling { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
-.hint { font-size: 12px; color: #94a3b8; }
+.controls input:focus { border-color: var(--mp-accent); box-shadow: 0 0 0 2px var(--mp-accent-soft); }
+.controls .polling { background: var(--mp-accent-soft); color: var(--mp-accent-hover); border-color: var(--mp-accent-line); }
+.hint { font-size: var(--mp-fs-xs); color: var(--mp-muted); }
 
 .table-wrap {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  background: var(--mp-surface);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius);
+  box-shadow: var(--mp-shadow-1);
 }
 .regs {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
 }
 .regs th, .regs td {
   text-align: left;
-  padding: 7px 14px;
-  border-bottom: 1px solid #f1f5f9;
+  padding: 0 14px;
+  height: var(--mp-row-h);
+  border-bottom: 1px solid var(--mp-surface-3);
 }
 .regs th {
   position: sticky;
   top: 0;
-  background: #f8fafc;
-  color: #64748b;
+  background: var(--mp-surface-2);
+  color: var(--mp-muted);
+  font-size: var(--mp-fs-sm);
   font-weight: 600;
   z-index: 1;
 }
-.mono { font-family: Consolas, monospace; }
-.dim { color: #94a3b8; }
-tr.edited td { background: #fffbeb; }
-.regs tbody tr:hover td { background: #f8fafc; }
-.regs tr.edited:hover td { background: #fef3c7; }
+.mono { font-family: var(--mp-font-mono); }
+.dim { color: var(--mp-muted-2); }
+/* 十六进制列弱化, 当前值突出 */
+.regs td:nth-child(3) { font-size: var(--mp-fs-md); font-weight: 600; color: var(--mp-ink); }
+tr.edited td { background: var(--mp-warn-soft); }
+.regs tbody tr:nth-child(even) td { background: var(--mp-surface-2); }
+.regs tbody tr:hover td { background: var(--mp-accent-soft); }
+.regs tr.edited:hover td { background: var(--mp-warn-soft); }
 .val-input {
   width: 110px;
-  padding: 4px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
+  font-family: var(--mp-font-mono);
 }
-.val-input:focus { border-color: #2563eb; }
-.btn.tiny { padding: 3px 10px; font-size: 12px; }
-.btn.danger { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+.val-input:focus { border-color: var(--mp-accent); box-shadow: 0 0 0 2px var(--mp-accent-soft); }
 
 /* ── 仿真参数配置区 ── */
 .cfg {
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  background: var(--mp-surface);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius);
   padding: 10px 14px;
-  margin-bottom: 14px;
+  margin-bottom: var(--mp-sp-3);
   flex-shrink: 0;
+  box-shadow: var(--mp-shadow-1);
 }
 .cfg > summary {
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
   font-weight: 600;
-  color: #334155;
+  color: var(--mp-ink-2);
   user-select: none;
 }
-.cfg-sub { font-weight: 400; color: #94a3b8; font-size: 12px; }
+.cfg-sub { font-weight: 400; color: var(--mp-muted); font-size: var(--mp-fs-xs); }
 .cfg-card {
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid var(--mp-border);
   margin-top: 10px;
   padding-top: 10px;
 }
@@ -428,26 +473,28 @@ tr.edited td { background: #fffbeb; }
   justify-content: space-between;
   margin-bottom: 8px;
 }
-.cfg-name { font-weight: 600; color: #1d4ed8; }
+.cfg-name { font-weight: 600; color: var(--mp-accent-hover); font-family: var(--mp-font-mono); }
 .cfg-grid {
   display: flex;
   gap: 24px;
   margin-bottom: 8px;
-  font-size: 13px;
-  color: #475569;
+  font-size: var(--mp-fs-base);
+  color: var(--mp-ink-2);
 }
 .cfg-grid input {
   width: 120px;
-  padding: 4px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
+  font-family: var(--mp-font-mono);
   display: block;
   margin-top: 3px;
 }
-.cfg-grid input:focus, .kv-row input:focus { border-color: #2563eb; }
-.cfg-label { font-size: 13px; color: #475569; margin-bottom: 5px; }
+.cfg-grid input:focus, .kv-row input:focus { border-color: var(--mp-accent); box-shadow: 0 0 0 2px var(--mp-accent-soft); }
+.cfg-label { font-size: var(--mp-fs-base); color: var(--mp-ink-2); margin-bottom: 5px; }
 .kv-row {
   display: flex;
   align-items: center;
@@ -456,18 +503,20 @@ tr.edited td { background: #fffbeb; }
 }
 .kv-row input {
   width: 110px;
-  padding: 4px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 13px;
+  font-size: var(--mp-fs-base);
+  font-family: var(--mp-font-mono);
 }
-.kv-sep { color: #94a3b8; }
+.kv-sep { color: var(--mp-muted-2); }
 .ops-fold { margin-top: 8px; }
 .ops-fold > summary {
   cursor: pointer;
-  font-size: 12px;
-  color: #64748b;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted);
   user-select: none;
 }
 .ops-text {
@@ -475,11 +524,12 @@ tr.edited td { background: #fffbeb; }
   box-sizing: border-box;
   margin-top: 6px;
   padding: 8px 10px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 12px;
+  font-size: var(--mp-fs-xs);
   line-height: 1.5;
+  font-family: var(--mp-font-mono);
 }
-.ops-text:focus { border-color: #2563eb; }
+.ops-text:focus { border-color: var(--mp-accent); box-shadow: 0 0 0 2px var(--mp-accent-soft); }
 </style>

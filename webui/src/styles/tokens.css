@@ -1,0 +1,83 @@
+/* 设计 token — 全站唯一色值/度量来源
+   深色侧栏 + 浅色工作区; 组件内不再硬编码 hex, 统一引用本文件变量。
+   命名: --mp-* 为语义层, 数值层集中在文件后半段。 */
+:root {
+  /* ── 外壳 (深色侧栏 / 顶栏) ── */
+  --mp-shell: #0f172a;
+  --mp-shell-2: #16213a;
+  --mp-shell-line: #24324c;
+  --mp-shell-text: #cbd5e1;
+  --mp-shell-muted: #94a3b8;
+
+  /* ── 品牌色 ── */
+  --mp-accent: #2563eb;
+  --mp-accent-hover: #1d4ed8;
+  --mp-accent-soft: #eff6ff;
+  --mp-accent-line: #bfdbfe;
+
+  /* ── 工作区 ── */
+  --mp-bg: #f5f7fb;
+  --mp-surface: #ffffff;
+  --mp-surface-2: #f8fafc;
+  --mp-surface-3: #f1f5f9;
+  --mp-border: #e2e8f0;
+  --mp-border-strong: #cbd5e1;
+  --mp-ink: #0f172a;
+  --mp-ink-2: #334155;
+  --mp-muted: #64748b;
+  --mp-muted-2: #94a3b8;
+
+  /* ── 语义色 ── */
+  --mp-ok: #16a34a;
+  --mp-ok-soft: #dcfce7;
+  --mp-ok-ink: #15803d;
+  --mp-warn: #d97706;
+  --mp-warn-soft: #fef3c7;
+  --mp-warn-ink: #b45309;
+  --mp-err: #dc2626;
+  --mp-err-soft: #fee2e2;
+  --mp-err-ink: #b91c1c;
+  --mp-info-soft: #f0f9ff;
+  --mp-info-ink: #075985;
+
+  /* ── 圆角 ── */
+  --mp-radius-sm: 6px;
+  --mp-radius: 10px;
+  --mp-radius-pill: 999px;
+
+  /* ── 阴影 ── */
+  --mp-shadow-1: 0 1px 2px rgba(15, 23, 42, .06);
+  --mp-shadow-2: 0 4px 14px rgba(15, 23, 42, .08);
+  --mp-shadow-3: 0 20px 60px rgba(15, 23, 42, .28);
+
+  /* ── 骨架度量 ── */
+  --mp-sidebar-w: 240px;
+  --mp-sidebar-w-collapsed: 64px;
+  --mp-topbar-h: 56px;
+  --mp-row-h: 36px;
+  --mp-control-h: 32px;
+
+  /* ── 间距 (4 的倍数) ── */
+  --mp-sp-1: 4px;
+  --mp-sp-2: 8px;
+  --mp-sp-3: 12px;
+  --mp-sp-4: 16px;
+  --mp-sp-5: 20px;
+  --mp-sp-6: 24px;
+  --mp-sp-8: 32px;
+
+  /* ── 字体 ── */
+  --mp-font-ui: "Segoe UI", "Microsoft YaHei", sans-serif;
+  --mp-font-mono: Consolas, "Cascadia Mono", "Courier New", monospace;
+  --mp-fs-xs: 11px;
+  --mp-fs-sm: 12px;
+  --mp-fs-base: 13px;
+  --mp-fs-md: 14px;
+  --mp-fs-lg: 16px;
+  --mp-fs-xl: 20px;
+
+  /* ── 兼容旧 token (v5 表单/布局度量) ── */
+  --mp-form-label-width: 110px;
+  --mp-radius-card: var(--mp-radius);
+  --mp-subtle: var(--mp-surface-2);
+}

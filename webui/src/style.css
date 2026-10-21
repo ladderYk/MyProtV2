@@ -1,67 +1,86 @@
-/* 全局基础样式 + 按钮体系 */
-/* v5 设计 token (Refinement 2026-09-16): 表单/布局统一度量 */
-:root {
-  --mp-form-label-width: 110px;   /* 表单 label 统一宽度 (原 90/96/110/140 四套并存) */
-  --mp-radius: 6px;               /* 控件统一圆角 */
-  --mp-radius-card: 8px;          /* 卡片圆角 */
-  --mp-border: #e2e8f0;           /* 统一描边 */
-  --mp-subtle: #f8fafc;           /* 次级面板底 */
-}
+/* 全局基础样式 — 色值/度量全部取自 styles/tokens.css
+   顺序: Element Plus 样式 → tokens.css → element.css → style.css */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #app { height: 100%; }
+
 body {
-  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-  font-size: 14px;
-  color: #1e293b;
-  background: #f1f5f9;
+  font-family: var(--mp-font-ui);
+  font-size: var(--mp-fs-base);
+  color: var(--mp-ink-2);
+  background: var(--mp-bg);
+  -webkit-font-smoothing: antialiased;
 }
 button { font: inherit; cursor: pointer; }
-input, textarea { font: inherit; color: inherit; }
+input, textarea, select { font: inherit; color: inherit; }
+a { color: var(--mp-accent); }
 
+/* ── 按钮体系 (.btn) ──
+   默认 = 次级按钮 (白底描边); .primary = 主操作; .danger = 破坏性操作;
+   .ghost = 深色背景上的透明按钮; .tiny = 表格行内小按钮 */
 .btn {
-  border: 1px solid transparent;
-  border-radius: 6px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface);
+  color: var(--mp-ink-2);
   padding: 6px 14px;
+  font-size: var(--mp-fs-base);
   white-space: nowrap;
   flex-shrink: 0;
-  transition: background .15s, border-color .15s;
+  transition: background .15s, border-color .15s, color .15s;
 }
+.btn:hover:not(:disabled) { border-color: var(--mp-muted-2); background: var(--mp-surface-2); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.primary { background: #2563eb; color: #fff; }
-.btn.primary:hover:not(:disabled) { background: #1d4ed8; }
-.btn.danger { background: #fff; color: #b91c1c; border-color: #fecaca; }
-.btn.danger:hover:not(:disabled) { background: #fee2e2; }
-.btn.small { padding: 3px 10px; font-size: 13px; }
+.btn.primary {
+  background: var(--mp-accent);
+  border-color: var(--mp-accent);
+  color: #fff;
+}
+.btn.primary:hover:not(:disabled) { background: var(--mp-accent-hover); border-color: var(--mp-accent-hover); }
+.btn.danger { background: var(--mp-surface); color: var(--mp-err-ink); border-color: #fecaca; }
+.btn.danger:hover:not(:disabled) { background: var(--mp-err-soft); border-color: #fca5a5; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--mp-shell-text); }
+.btn.ghost:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: #fff; }
+.btn.small { padding: 4px 10px; font-size: var(--mp-fs-sm); }
+.btn.tiny { padding: 2px 8px; font-size: var(--mp-fs-xs); }
 
-/* ── 全局排版增强 ── */
-
-/* 细滚动条 (大屏/面板通用偏好) */
+/* ── 细滚动条 ── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+::-webkit-scrollbar-thumb { background: var(--mp-border-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--mp-muted-2); }
 ::-webkit-scrollbar-track { background: transparent; }
-* { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--mp-border-strong) transparent; }
 
-/* 面板标题: 左侧竖线装饰 (无背景, 非绝对定位) */
+/* ── 通用排版件 ── */
 .sec-title {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  font-size: 13px;
-  color: #334155;
+  font-size: var(--mp-fs-base);
+  color: var(--mp-ink-2);
 }
 .sec-title::before {
   content: '';
   width: 3px;
   height: 14px;
   border-radius: 2px;
-  background: #2563eb;
+  background: var(--mp-accent);
   flex-shrink: 0;
 }
+.mono { font-family: var(--mp-font-mono); }
+.dim { color: var(--mp-muted-2); }
+.text-muted { color: var(--mp-muted-2); font-size: var(--mp-fs-sm); }
 
-/* Element Plus 表单双列紧凑网格: el-form 加 .form-grid,
-   需跨列的字段 (长输入/键值编辑器) 在其 el-form-item 上加 .span2 */
+/* ── 面板卡片 (无 el-card 的原生容器) ── */
+.panel {
+  background: var(--mp-surface);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius);
+  box-shadow: var(--mp-shadow-1);
+}
+
+/* ── 表单双列紧凑网格: el-form 加 .form-grid,
+      需跨列的字段 (长输入/键值编辑器) 在其 el-form-item 上加 .span2 ── */
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -69,23 +88,19 @@ input, textarea { font: inherit; color: inherit; }
 }
 .form-grid > .el-form-item { margin-bottom: 14px; }
 .form-grid > .span2 { grid-column: 1 / -1; }
-/* v5: label 宽度统一走 token — 各表单不再各自硬编码 90/96/110/140px。
-   TagsForm 韧性/管理面两段字段名较长, 保留 140px 覆盖 (见其 scoped 样式)。 */
 .form-grid.el-form { --el-form-label-width: var(--mp-form-label-width); }
 @media (max-width: 1100px) {
   .form-grid { grid-template-columns: 1fr; }
 }
 
-/* v5: issue 跳转目标高亮 (focusIssue 定位反馈) */
+/* ── issue 跳转目标高亮 (focusIssue 定位反馈) ── */
 @keyframes mp-issue-flash {
   0% { background-color: rgba(37, 99, 235, .22); }
   100% { background-color: transparent; }
 }
-.mp-issue-flash {
-  animation: mp-issue-flash 1.6s ease-out 1;
-}
+.mp-issue-flash { animation: mp-issue-flash 1.6s ease-out 1; }
 
-/* v2 增: 窄屏自适应 — 主从分栏堆叠, 左列表变横排快捷键条 */
+/* ── 窄屏自适应 ── */
 @media (max-width: 900px) {
   .md-wrap { flex-direction: column; }
   .md-list { width: 100% !important; max-height: 200px; }
@@ -98,10 +113,9 @@ input, textarea { font: inherit; color: inherit; }
   .field .ctl { width: 100%; }
 }
 @media (max-width: 600px) {
-  .topbar { padding: 0 8px; }
-  .nav-item { padding: 6px 10px; font-size: 13px; }
-  .content { padding: 12px; }
   .card-body { padding: 10px; }
   .toolbar { flex-wrap: wrap; gap: 6px; }
   .main-tabs { overflow-x: auto; }
 }
+
+/* ── 深色侧栏对比度 (WCAG AA): 次要文字不低于 #94a3b8 ── */

@@ -37,6 +37,8 @@ const enumLabelDrafts = reactive({})
 // A: 新增定位 — 记录高亮行名与行 DOM, 新增后滚动可视 + 聚焦名称输入框
 const highlightName = ref('')
 const rowEls = reactive({})
+// 变量名草稿: 改名需校验/重建键, 失焦时提交; 输入过程中只更新草稿
+const nameDrafts = reactive({})
 
 function bindRow(name, el) {
   if (!el) { delete rowEls[name]; return }
@@ -102,6 +104,14 @@ function renameVar(oldName, newName) {
   }
   if (highlightName.value === oldName) highlightName.value = nn
   emit('change')
+}
+
+/// 失焦提交变量名; 空白/重名时草稿丢弃, 输入框回退到原变量名
+function commitRename(oldName) {
+  const draft = nameDrafts[oldName]
+  delete nameDrafts[oldName]
+  if (draft == null) return
+  renameVar(oldName, draft)
 }
 
 function setSource(name, source) {
@@ -259,8 +269,9 @@ function removeEnum(name, idx) {
         <!-- 变量名 -->
         <div class="c-name">
           <el-input
-            :model-value="name" size="small" spellcheck="false"
-            @change="nn => renameVar(name, nn)"
+            :model-value="nameDrafts[name] ?? name" size="small" spellcheck="false"
+            @update:model-value="d => nameDrafts[name] = d"
+            @change="commitRename(name)"
             @blur="clearHighlight(name)"
           />
         </div>
@@ -292,7 +303,7 @@ function removeEnum(name, idx) {
                 :model-value="v.expr ?? ''" size="small" style="min-width: 160px"
                 placeholder="如 {Payload:len} + 7 / {Payload:len} / 2"
                 spellcheck="false"
-                @change="val => setField(name, 'expr', val)"
+                @update:model-value="val => setField(name, 'expr', val)"
               />
             </div>
             <div class="f">
@@ -300,7 +311,7 @@ function removeEnum(name, idx) {
               <el-input
                 :model-value="v.label ?? ''" size="small"
                 placeholder="显示名"
-                @change="val => setField(name, 'label', val)"
+                @update:model-value="val => setField(name, 'label', val)"
               />
             </div>
             <div class="f">
@@ -308,7 +319,7 @@ function removeEnum(name, idx) {
               <el-input
                 :model-value="v.unit ?? ''" size="small"
                 placeholder="单位"
-                @change="val => setField(name, 'unit', val)"
+                @update:model-value="val => setField(name, 'unit', val)"
               />
             </div>
           </template>
@@ -321,7 +332,7 @@ function removeEnum(name, idx) {
                 :model-value="v.value ?? ''" size="small"
                 placeholder="默认值(可空)"
                 spellcheck="false"
-                @change="val => setField(name, 'value', val)"
+                @update:model-value="val => setField(name, 'value', val)"
               />
             </div>
             <div class="f">
@@ -329,7 +340,7 @@ function removeEnum(name, idx) {
               <el-input
                 :model-value="v.label ?? ''" size="small"
                 placeholder="显示名"
-                @change="val => setField(name, 'label', val)"
+                @update:model-value="val => setField(name, 'label', val)"
               />
             </div>
             <div class="f">
@@ -337,7 +348,7 @@ function removeEnum(name, idx) {
               <el-input
                 :model-value="v.unit ?? ''" size="small"
                 placeholder="单位"
-                @change="val => setField(name, 'unit', val)"
+                @update:model-value="val => setField(name, 'unit', val)"
               />
             </div>
             <div class="f f-wide">
@@ -386,7 +397,7 @@ function removeEnum(name, idx) {
                 <el-input
                   :model-value="v.params?.seed ?? ''" size="small"
                   placeholder="首次返回值"
-                  @change="val => setParam(name, 'seed', val)"
+                  @update:model-value="val => setParam(name, 'seed', val)"
                 />
               </div>
             </template>
@@ -396,14 +407,14 @@ function removeEnum(name, idx) {
                 <span class="p-label">from:</span>
                 <el-input
                   :model-value="v.params?.from ?? '0'" size="small"
-                  @change="val => setParam(name, 'from', val)"
+                  @update:model-value="val => setParam(name, 'from', val)"
                 />
               </div>
               <div class="f">
                 <span class="p-label">to:</span>
                 <el-input
                   :model-value="v.params?.to ?? 'end'" size="small"
-                  @change="val => setParam(name, 'to', val)"
+                  @update:model-value="val => setParam(name, 'to', val)"
                 />
               </div>
               <div class="f">
@@ -435,7 +446,7 @@ function removeEnum(name, idx) {
                   :model-value="v.params?.value ?? ''" size="small" style="min-width: 160px"
                   placeholder="算术表达式"
                   spellcheck="false"
-                  @change="val => setParam(name, 'value', val)"
+                  @update:model-value="val => setParam(name, 'value', val)"
                 />
               </div>
             </template>
@@ -456,14 +467,14 @@ function removeEnum(name, idx) {
                 <span class="p-label">from:</span>
                 <el-input
                   :model-value="v.params?.from ?? '0'" size="small"
-                  @change="val => setParam(name, 'from', val)"
+                  @update:model-value="val => setParam(name, 'from', val)"
                 />
               </div>
               <div class="f">
                 <span class="p-label">to:</span>
                 <el-input
                   :model-value="v.params?.to ?? 'end'" size="small"
-                  @change="val => setParam(name, 'to', val)"
+                  @update:model-value="val => setParam(name, 'to', val)"
                 />
               </div>
               <div class="f">
@@ -483,7 +494,7 @@ function removeEnum(name, idx) {
               <el-input
                 :model-value="v.label ?? ''" size="small"
                 placeholder="显示名"
-                @change="val => setField(name, 'label', val)"
+                @update:model-value="val => setField(name, 'label', val)"
               />
             </div>
           </template>
@@ -506,27 +517,30 @@ function removeEnum(name, idx) {
   justify-content: space-between;
   margin-bottom: 8px;
 }
-.vt-title { font-size: 12px; color: #475569; font-weight: 600; }
+.vt-title { font-size: var(--mp-fs-sm); color: var(--mp-ink-2); font-weight: 600; }
 .vt-table { display: flex; flex-direction: column; gap: 6px; }
 .vt-row {
   display: grid;
-  grid-template-columns: 130px 100px 1fr 60px;
+  grid-template-columns: 150px 104px 1fr 60px;
   gap: 6px;
   align-items: center;
 }
 .vt-head-row {
-  font-size: 12px;
-  color: #64748b;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted);
   font-weight: 600;
   padding: 0 4px 4px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--mp-border);
 }
 .vt-row:not(.vt-head-row) { padding: 2px 0; }
+/* 变量名/表达式: 等宽字体 */
+.c-name :deep(.el-input__inner),
+.c-body :deep(.el-input__inner) { font-family: var(--mp-font-mono); }
 /* A: 新增定位高亮 — 蓝环浅底, 一眼看到刚新增的行 */
 .vt-row.vt-row-new {
-  border-radius: 6px;
-  background: #eff6ff;
-  box-shadow: inset 0 0 0 1px #3b82f6;
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--mp-accent);
 }
 .c-act { text-align: right; }
 .c-body {
@@ -537,21 +551,21 @@ function removeEnum(name, idx) {
 }
 .p-label {
   font-size: 11px;
-  color: #64748b;
-  font-family: Consolas, monospace;
+  color: var(--mp-muted);
+  font-family: var(--mp-font-mono);
   flex-shrink: 0;
 }
 .p-hint {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--mp-muted-2);
   line-height: 1.4;
 }
 .p-hint code {
-  background: #f1f5f9;
+  background: var(--mp-surface-3);
   padding: 0 4px;
   border-radius: 3px;
-  font-family: Consolas, monospace;
-  color: #475569;
+  font-family: var(--mp-font-mono);
+  color: var(--mp-ink-2);
 }
 .enum-edit {
   display: flex;
@@ -560,12 +574,12 @@ function removeEnum(name, idx) {
   gap: 4px;
   min-height: 30px;
   padding: 2px 4px;
-  border: 1px dashed #e2e8f0;
+  border: 1px dashed var(--mp-border);
   border-radius: 4px;
-  background: #fafbfc;
+  background: var(--mp-surface-2);
 }
 .enum-chip {
-  font-family: Consolas, monospace;
+  font-family: var(--mp-font-mono);
   font-size: 11px;
   height: 22px;
   line-height: 20px;
@@ -577,7 +591,7 @@ function removeEnum(name, idx) {
   box-shadow: none;
   padding: 0 6px;
 }
-.enum-input :deep(.el-input__inner) { height: 22px; font-size: 12px; }
+.enum-input :deep(.el-input__inner) { height: 22px; font-size: var(--mp-fs-xs); }
 /* v4.2: 卡片布局 — 一个变量一张卡 (全局变量段用)。
    行1 = 名称 + 来源 + 删除; 行2 = 配置体 (字段数随来源/策略变化, 卡内弹性均分) */
 /* v4.3: 字段组 — 标签与其控件成对, 换行时不会被拆散 (表格/卡片共用) */
@@ -612,11 +626,11 @@ function removeEnum(name, idx) {
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface);
 }
-.vt-cards .vt-row:hover { border-color: #cbd5e1; }
+.vt-cards .vt-row:hover { border-color: var(--mp-border-strong); }
 /* 卡头: 名称(左) + 来源/删除(右) 一行; c-body 用 order 排到其后另起一行 */
 .vt-cards .c-name { flex: 0 1 260px; min-width: 140px; order: 1; }
 .vt-cards .c-src { flex: 0 0 130px; order: 2; margin-left: auto; }
@@ -630,7 +644,7 @@ function removeEnum(name, idx) {
   gap: 8px 14px;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px dashed #eef2f7;
+  border-top: 1px dashed var(--mp-border);
 }
 .vt-cards .f-wide { grid-column: 1 / -1; }
 .vt-cards .f .p-label {

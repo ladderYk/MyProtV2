@@ -44,26 +44,34 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   margin-left: 4px;
   border-radius: 50%;
-  background: #e2e8f0;
-  color: #475569;
-  font-size: 11px;
+  border: 1px solid var(--mp-border);
+  background: var(--mp-surface-3);
+  color: var(--mp-muted);
+  font-size: 10px;
+  font-weight: 600;
   line-height: 1;
   cursor: help;
   user-select: none;
   flex: 0 0 auto;
+  transition: background .15s, color .15s, border-color .15s;
 }
-.field-help:hover { background: #cbd5e1; color: #1e293b; }
+.field-help:hover {
+  background: var(--mp-accent-soft);
+  border-color: var(--mp-accent-line);
+  color: var(--mp-accent-hover);
+}
 </style>
 
 <style>
 /* 长文案换行 + 限制宽度 (非 scoped: 作用于 teleport 出去的 popper) */
 .field-help-popper {
-  max-width: 420px;
-  line-height: 1.5;
+  max-width: 400px;
+  font-size: var(--mp-fs-sm);
+  line-height: 1.55;
   white-space: normal;
 }
 </style>

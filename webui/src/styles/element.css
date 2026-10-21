@@ -1,0 +1,141 @@
+/* Element Plus 主题覆盖 — 与 tokens.css 对齐
+   原则: 只改设计变量与结构性外观 (圆角/密度/表头底色), 不用 !important 批量改写;
+   组件内不要再硬编码 hex 色值。 */
+:root {
+  /* 品牌色 + 派生阶梯 (Element Plus 依赖 light-3/5/7/8/9 做 hover/禁用/描边) */
+  --el-color-primary: var(--mp-accent);
+  --el-color-primary-dark-2: var(--mp-accent-hover);
+  --el-color-primary-light-3: #60a5fa;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: var(--mp-accent-soft);
+
+  --el-color-success: var(--mp-ok);
+  --el-color-success-light-9: var(--mp-ok-soft);
+  --el-color-warning: var(--mp-warn);
+  --el-color-warning-light-9: var(--mp-warn-soft);
+  --el-color-danger: var(--mp-err);
+  --el-color-danger-light-9: var(--mp-err-soft);
+  --el-color-info: var(--mp-muted);
+
+  /* 文本与描边 */
+  --el-text-color-primary: var(--mp-ink);
+  --el-text-color-regular: var(--mp-ink-2);
+  --el-text-color-secondary: var(--mp-muted);
+  --el-text-color-placeholder: var(--mp-muted-2);
+  --el-border-color: var(--mp-border-strong);
+  --el-border-color-light: var(--mp-border);
+  --el-border-color-lighter: var(--mp-border);
+  --el-border-color-extra-light: var(--mp-surface-3);
+  --el-fill-color-blank: var(--mp-surface);
+  --el-fill-color-light: var(--mp-surface-2);
+  --el-fill-color-lighter: var(--mp-surface-2);
+  --el-bg-color: var(--mp-surface);
+  --el-bg-color-overlay: var(--mp-surface);
+  --el-bg-color-page: var(--mp-bg);
+
+  /* 密度: 13px 基准, 控件 32px, 表格 36px */
+  --el-font-size-base: var(--mp-fs-base);
+  --el-font-size-small: var(--mp-fs-sm);
+  --el-font-size-extra-small: var(--mp-fs-xs);
+  --el-border-radius-base: var(--mp-radius-sm);
+  --el-border-radius-small: 4px;
+  --el-component-size: var(--mp-control-h);
+  --el-component-size-small: 26px;
+  --el-component-size-large: 38px;
+  --el-font-family: var(--mp-font-ui);
+
+  /* 表格 */
+  --el-table-border-color: var(--mp-border);
+  --el-table-header-bg-color: var(--mp-surface-2);
+  --el-table-header-text-color: var(--mp-muted);
+  --el-table-row-hover-bg-color: var(--mp-surface-2);
+  --el-table-text-color: var(--mp-ink-2);
+
+  /* 卡片 / 弹层 */
+  --el-card-border-color: var(--mp-border);
+  --el-box-shadow-light: var(--mp-shadow-1);
+  --el-box-shadow: var(--mp-shadow-2);
+  --el-dialog-border-radius: var(--mp-radius);
+}
+
+html { font-size: var(--mp-fs-md); }
+
+body {
+  font-family: var(--mp-font-ui);
+  font-size: var(--mp-fs-base);
+  color: var(--mp-ink-2);
+  background: var(--mp-bg);
+}
+
+/* ── 卡片: 统一圆角/描边/极轻阴影, 表头用次级底色 ── */
+.el-card {
+  border-radius: var(--mp-radius);
+  box-shadow: var(--mp-shadow-1);
+}
+.el-card__header {
+  padding: 10px var(--mp-sp-4);
+  border-bottom-color: var(--mp-border);
+  background: var(--mp-surface-2);
+  font-size: var(--mp-fs-base);
+  font-weight: 600;
+  color: var(--mp-ink-2);
+}
+.el-card__body { padding: var(--mp-sp-4); }
+
+/* ── 表单: 统一行距与 label 色 ── */
+.el-form-item__label {
+  color: var(--mp-muted);
+  font-size: var(--mp-fs-base);
+}
+.el-form-item { margin-bottom: 16px; }
+
+/* ── 输入类控件: 圆角与聚焦描边统一 ── */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: var(--mp-radius-sm);
+}
+.el-textarea__inner {
+  font-family: var(--mp-font-mono);
+  line-height: 1.55;
+}
+
+/* ── 分段控件 / tabs: 去掉默认下划线重量, 走「分段」观感 ── */
+.el-tabs__item {
+  font-size: var(--mp-fs-base);
+  height: 34px;
+}
+.el-tabs--card > .el-tabs__header { border-bottom-color: var(--mp-border); }
+
+/* ── 表格: 表头次级底色 + 行高 36 ── */
+.el-table th.el-table__cell {
+  background: var(--mp-surface-2);
+  color: var(--mp-muted);
+  font-weight: 600;
+}
+.el-table .el-table__cell { padding: 6px 0; }
+
+/* ── 弹层: 抽屉/对话框标题区统一 ── */
+.el-drawer__header {
+  margin-bottom: 0;
+  padding: var(--mp-sp-4) var(--mp-sp-5);
+  border-bottom: 1px solid var(--mp-border);
+  color: var(--mp-ink);
+  font-weight: 600;
+  font-size: var(--mp-fs-md);
+}
+.el-drawer__body { padding: var(--mp-sp-5); }
+
+/* ── 提示条 / 标签 ── */
+.el-alert { border-radius: var(--mp-radius-sm); }
+.el-tag { border-radius: 4px; }
+
+/* ── 折叠面板: 更紧凑 ── */
+.el-collapse-item__header { font-size: var(--mp-fs-base); }
+.el-collapse-item__content { font-size: var(--mp-fs-base); }
+
+/* ── 按钮: 与 .btn 体系一致的高度 ── */
+.el-button { font-weight: 500; }
+.el-button--small { font-size: var(--mp-fs-sm); }

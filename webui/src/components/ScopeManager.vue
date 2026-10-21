@@ -3,6 +3,7 @@
 // scope=protocols: 可新建/删除; scope=tags: 固定单文件 tags.json (不提供删除)
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
+import PageHeader from './PageHeader.vue'
 import JsonEditor from './JsonEditor.vue'
 import ProtocolForm from './ProtocolForm.vue'
 import TagsForm from './TagsForm.vue'
@@ -12,8 +13,12 @@ import {
 } from '../api'
 
 const props = defineProps({
-  scope: { type: String, required: true }
+  scope: { type: String, required: true },
+  // 跨页跳转意图 (总览页「开始使用」/快捷动作):
+  //   { create:true } 新建协议 | { add:'device'|'tag' } | { device:'PLC-001' } | { focus:issue }
+  intent: { type: Object, default: null }
 })
+const emit = defineEmits(['changed', 'dirty'])   // changed: 保存/删除/回滚后刷新全局统计; dirty: 顶栏切页守卫
 
 const isProtocols = props.scope === 'protocols'
 const titles = { protocols: '协议配置', tags: '设备与标签' }
@@ -25,8 +30,11 @@ const doc = ref(null)            // 解析后的配置对象 (表单数据源)
 const parseError = ref('')
 const activeTab = ref('form')    // 编辑模式: form | json
 const revision = ref(0)          // JSON→表单同步代数, 变更时强制重建表单组件
+const jsonTouched = ref(false)   // JSON 模式下是否真正改过内容 (决定切回表单是否重建)
 const backups = ref([])
 const dirty = ref(false)
+watch(dirty, v => emit('dirty', v))
+const baseline = ref('')         // 已保存内容的规范化文本 (判断是否真的改回原值)
 const message = ref('')
 const messageKind = ref('ok')
 const newName = ref('')
@@ -36,8 +44,11 @@ const itemKw = ref('')              // 协议列表搜索关键字
 // ── 方案 2: 结构化校验问题 (自检 / 保存被拒) ──
 const issues = ref([])              // [{severity,ruleId,subject,field,message}]
 const issueHead = ref('')           // 面板标题 (含计数)
+const showIssues = ref(false)       // 可折叠问题横幅: 默认只显示计数, 展开看清单
 const formRef = ref(null)           // 当前表单组件实例 (focusIssue 跳转用)
+const newNameEl = ref(null)         // 「新建协议」输入框 (外部跳转可自动聚焦)
 const issueErrors = computed(() => issues.value.filter(i => i.severity === 'error').length)
+const issueWarnings = computed(() => issues.value.filter(i => i.severity !== 'error').length)
 
 /// 左侧协议列表过滤 (空关键字 = 全部)
 const filteredItems = computed(() => {
@@ -46,6 +57,9 @@ const filteredItems = computed(() => {
 })
 
 const formComponent = computed(() => (isProtocols ? ProtocolForm : TagsForm))
+const pageDesc = computed(() => (isProtocols
+  ? '每个协议定义传输、成帧、变量与操作; 保存后自动热重载'
+  : '设备绑定协议与连接地址, 标签定义采集点位与写能力'))
 
 function flash(kind, msg) {
   messageKind.value = kind
@@ -80,8 +94,12 @@ async function open(name) {
     return
   }
   try {
+    // 先取内容再切 selected, 避免请求失败/较慢时旧内容顶在新文件名下显示
+    const text = await getConfig(props.scope, name)
     selected.value = name
-    setDocFromText(await getConfig(props.scope, name))
+    setDocFromText(text, true)
+    jsonTouched.value = false
+    setBaseline(text)
     dirty.value = false
     backups.value = await listBackups(props.scope, name)
   } catch (e) {
@@ -95,14 +113,45 @@ function onSelectTab(name) {
 }
 
 // 由 JSON 文本设置文档 (打开文件 / JSON 编辑器输入)
-function setDocFromText(text) {
+// bump=true 时强制重建表单 (切换配置项); JSON 逐字输入不 bump, 避免每敲一个字符重建表单
+function setDocFromText(text, bump) {
   rawText.value = text
   try {
     doc.value = JSON.parse(text)
     parseError.value = ''
-    revision.value++
+    if (bump) revision.value++
   } catch (e) {
     parseError.value = e.message
+    // 磁盘上的配置本身损坏时也进入 JSON 模式, 否则用户只能看到「加载中…」且无法修复
+    activeTab.value = 'json'
+  }
+}
+
+/// 规范化序列化: 对象键排序 + 紧凑输出 — 忽略键序/缩进差异比较内容
+function canonical(v) {
+  if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']'
+  if (v && typeof v === 'object') {
+    return '{' + Object.keys(v).sort()
+      .map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}'
+  }
+  return JSON.stringify(v === undefined ? null : v)
+}
+
+/// 记录基线 (打开文件 / 保存成功)
+function setBaseline(text) {
+  try {
+    baseline.value = canonical(JSON.parse(text))
+  } catch (_) {
+    baseline.value = ''
+  }
+}
+
+/// 与基线一致时撤销「未保存」— 改回原值不应再提示保存
+function refreshDirty(text) {
+  try {
+    dirty.value = canonical(JSON.parse(text)) !== baseline.value
+  } catch (_) {
+    dirty.value = true                      // 语法错误期间仍视为有修改
   }
 }
 
@@ -111,13 +160,14 @@ function onDocChange(obj) {
   doc.value = obj
   rawText.value = JSON.stringify(obj, null, 2)
   parseError.value = ''
-  dirty.value = true
+  refreshDirty(rawText.value)
 }
 
 // JSON 编辑器 → 表单
 function onRawChange(text) {
-  dirty.value = true
-  setDocFromText(text)
+  jsonTouched.value = true
+  setDocFromText(text, false)
+  refreshDirty(text)
 }
 
 // 表单/JSON 模式切换 (JSON 语法错误时禁止切回表单)
@@ -125,6 +175,11 @@ function showForm() {
   if (parseError.value) {
     ElMessage.warning('JSON 存在语法错误，无法切换到表单: ' + parseError.value)
     return
+  }
+  // 只有 JSON 内容真的改过才重建表单; 单纯切页签保留表单内的选中节点/页签
+  if (jsonTouched.value) {
+    revision.value++
+    jsonTouched.value = false
   }
   activeTab.value = 'form'
 }
@@ -139,9 +194,11 @@ async function onSave() {
   }
   try {
     await saveConfig(props.scope, selected.value, rawText.value)
+    setBaseline(rawText.value)
     dirty.value = false
     flash('ok', '已保存并触发热重载')
     backups.value = await listBackups(props.scope, selected.value)
+    emit('changed')                        // 外层刷新全局统计/热重载结果
   } catch (e) {
     flash('err', e.message)                // 服务端深度校验失败信息 (纯文本兜底)
     await explainSaveFailure()             // 方案 2: 取结构化原因 → 可点击清单
@@ -183,12 +240,13 @@ function setIssues(rep, title) {
   issues.value = rep.issues || []
   const count = `${rep.errorCount || 0} 项错误 / ${rep.warningCount || 0} 项警告`
   issueHead.value = `${title}: ${count}` + (issues.value.length ? ' — 点击条目跳转' : '')
+  showIssues.value = issues.value.length > 0   // 有结果时自动展开, 无问题则保持收起
 }
 
 /// 点击条目 → 表单定位 (协议: 区块/操作; 标签: 设备/标签)
 async function onIssueClick(it) {
-  if (activeTab.value !== 'form') {       // JSON 模式下表单未挂载 → 先切回表单
-    if (!doc.value) { flash('err', '请先修正 JSON 语法错误再定位'); return }
+  if (activeTab.value !== 'form') {       // JSON 模式下 → 先切回表单
+    if (parseError.value) { flash('err', '请先修正 JSON 语法错误再定位'); return }
     showForm()
     await nextTick()
   }
@@ -208,10 +266,12 @@ async function onDelete(name) {
       selected.value = ''
       rawText.value = ''
       doc.value = null
+      baseline.value = ''
       backups.value = []
     }
     await refreshList()
     flash('ok', `已删除 ${target}`)
+    emit('changed')
   } catch (e) {
     flash('err', e.message)
   }
@@ -485,6 +545,7 @@ async function onCreate() {
     await refreshList()
     await open(name)
     flash('ok', `已创建 ${name}.json`)
+    emit('changed')
   } catch (e) {
     flash('err', e.message)
   }
@@ -496,12 +557,47 @@ async function onRestore(tag) {
     await restoreBackup(props.scope, selected.value, tag)
     await open(selected.value)
     flash('ok', `已回滚到 ${tag}`)
+    emit('changed')
   } catch (e) {
     flash('err', e.message)
   }
 }
 
-onMounted(refreshList)
+// ── 跨页跳转意图 (总览页 → 本页) ──
+// 组件挂载后或 intent 变化时执行一次: 新建协议聚焦输入框 / 选中设备 / 新增设备标签 / 定位问题
+let pendingIntent = props.intent
+async function applyIntent() {
+  const it = pendingIntent
+  if (!it) return
+  pendingIntent = null
+  await nextTick()
+  if (isProtocols) {
+    if (it.create && newNameEl.value) newNameEl.value.focus()
+    return
+  }
+  const f = formRef.value
+  if (!f) return
+  if (it.device && typeof f.focusDevice === 'function') {
+    if (f.focusDevice(it.device)) flash('ok', `已定位到设备「${it.device}」`)
+  } else if (it.add === 'device' && typeof f.addDevice === 'function') {
+    f.addDevice()
+  } else if (it.add === 'tag' && typeof f.addTag === 'function') {
+    f.addTag()
+  } else if (it.focus && typeof f.focusIssue === 'function') {
+    const hint = f.focusIssue(it.focus)
+    if (hint) flash('ok', hint)
+  }
+}
+
+onMounted(async () => {
+  await refreshList()
+  await applyIntent()
+})
+watch(() => props.intent, async v => {
+  if (!v) return
+  pendingIntent = v
+  await applyIntent()
+})
 
 // v5: 未保存修改守卫 — 关闭/刷新标签页时浏览器原生确认 (应用内切换已有 confirm;
 //   此前 F5/关页直接静默丢失全部编辑)
@@ -511,11 +607,15 @@ function onBeforeUnload(e) {
   e.returnValue = ''
 }
 window.addEventListener('beforeunload', onBeforeUnload)
-onUnmounted(() => window.removeEventListener('beforeunload', onBeforeUnload))
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload)
+  emit('dirty', false)
+})
 watch(() => props.scope, () => {
   selected.value = ''
   rawText.value = ''
   doc.value = null
+  baseline.value = ''
   backups.value = []
   refreshList()
 })
@@ -523,9 +623,12 @@ watch(() => props.scope, () => {
 
 <template>
   <div class="workbench">
-    <header class="head">
-      <h2>{{ titles[scope] || scope }}</h2>
-    </header>
+    <PageHeader :title="titles[scope] || scope" :desc="pageDesc">
+      <template #meta>
+        <span v-if="isProtocols">共 {{ items.length }} 个协议</span>
+        <span v-else>设备与标签统一维护在同一个文件</span>
+      </template>
+    </PageHeader>
 
     <div v-if="message" class="msg" :class="messageKind">
       <button class="msg-close" title="关闭" @click="dismissMessage">×</button>
@@ -541,6 +644,10 @@ watch(() => props.scope, () => {
     <div class="edit-pane">
       <!-- v4: 协议列表左置 (搜索 + 列表 + 新建); 编辑区在右 -->
       <aside v-if="isProtocols" class="cfg-list">
+        <div class="cfg-list-head">
+          <span>协议</span>
+          <span class="cfg-count">{{ items.length }}</span>
+        </div>
         <div class="cfg-search">
           <input v-model="itemKw" placeholder="搜索协议" />
         </div>
@@ -563,8 +670,8 @@ watch(() => props.scope, () => {
             <option value="seer">SEER AGV 模板</option>
             <option value="blank">空白骨架</option>
           </select>
-          <input v-model="newName" placeholder="新协议名" @keyup.enter="onCreate" />
-          <button class="btn small primary" @click="onCreate">新建</button>
+          <input ref="newNameEl" v-model="newName" placeholder="新协议名" @keyup.enter="onCreate" />
+          <button class="btn small primary" :disabled="!newName.trim()" @click="onCreate">新建</button>
         </div>
       </aside>
 
@@ -572,12 +679,23 @@ watch(() => props.scope, () => {
       <div class="cfg-main">
 
       <!-- 内容区 (tags 单页直出, protocols 需先选中 tab) -->
-      <template v-if="selected && (doc || activeTab === 'json')">
+      <template v-if="selected && (doc || parseError)">
         <div class="toolbar">
-          <span class="file-name">{{ selected }}{{ isProtocols ? '.json' : '' }}</span>
+          <span class="file-name mono">{{ selected }}{{ isProtocols ? '.json' : '' }}</span>
           <span v-if="dirty" class="dirty-mark">未保存</span>
           <span class="spacer"></span>
-          <div class="mode-switch">
+          <!-- 历史备份: 低频动作收进下拉, 不再常驻一行 -->
+          <el-dropdown v-if="backups.length" trigger="click" @command="onRestore">
+            <button class="btn small">历史备份 ({{ backups.length }})</button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item v-for="tag in backups" :key="tag" :command="tag">
+                  回滚到 {{ tag }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <div class="segmented">
             <button :class="{ active: activeTab === 'form' }" @click="showForm">表单</button>
             <button :class="{ active: activeTab === 'json' }" @click="showJson">JSON</button>
           </div>
@@ -587,13 +705,13 @@ watch(() => props.scope, () => {
           <button class="btn primary small" :disabled="!dirty" @click="onSave">保存</button>
         </div>
 
-        <!-- 方案 2: 结构化校验问题清单 (点击条目 → 表单跳转定位) -->
-        <div v-if="issues.length" class="issue-panel" :class="{ 'has-err': issueErrors > 0 }">
-          <div class="issue-head">
-            <span>{{ issueHead }}</span>
-            <button class="msg-close" title="关闭" @click="issues = []">×</button>
-          </div>
-          <ul class="issue-list">
+        <!-- 方案 2: 结构化校验问题清单 — 可折叠横幅, 默认只显示计数 -->
+        <div v-if="issues.length" class="issue-banner" :class="{ 'has-err': issueErrors > 0 }">
+          <button class="issue-summary" @click="showIssues = !showIssues">
+            <span class="issue-caret">{{ showIssues ? '▾' : '▸' }}</span>
+            <span class="issue-title">{{ issueHead }}</span>
+          </button>
+          <ul v-show="showIssues" class="issue-list">
             <li v-for="(it, i) in issues" :key="i" @click="onIssueClick(it)">
               <span class="issue-sev" :class="it.severity">{{ it.severity === 'error' ? '错误' : '警告' }}</span>
               <code class="issue-rule">{{ it.ruleId }}</code>
@@ -601,19 +719,13 @@ watch(() => props.scope, () => {
               <span class="issue-msg">{{ it.message }}</span>
             </li>
           </ul>
-        </div>
-
-        <div v-if="backups.length" class="backup-bar">
-          <span class="backup-label">历史备份:</span>
-          <span v-for="tag in backups" :key="tag" class="backup-item">
-            {{ tag }}
-            <a href="#" @click.prevent="onRestore(tag)">回滚</a>
-          </span>
+          <button class="msg-close" title="关闭" @click="issues = []">×</button>
         </div>
 
         <div class="pane-body">
-          <!-- v1.23.1: 须等 doc 就绪再挂载表单 (open() 先设 selected 后异步取内容, 否则以 null 挂载抛 TypeError) -->
-          <div v-if="activeTab === 'form' && doc" class="form-fill">
+          <!-- v1.23.1: 须等 doc 就绪再挂载表单 (open() 先设 selected 后异步取内容, 否则以 null 挂载抛 TypeError)
+               v1.30: 改用 v-show — 切到 JSON 时保留表单实例, 回来不再丢失设备/标签选中态 -->
+          <div v-if="doc" v-show="activeTab === 'form'" class="form-fill">
             <component
               ref="formRef"
               :is="formComponent"
@@ -622,7 +734,7 @@ watch(() => props.scope, () => {
               @update:model-value="onDocChange"
             />
           </div>
-          <JsonEditor v-else v-model="rawText" @update:model-value="onRawChange" />
+          <JsonEditor v-if="activeTab === 'json'" v-model="rawText" @update:model-value="onRawChange" />
         </div>
       </template>
       <div v-else class="placeholder">
@@ -637,38 +749,38 @@ watch(() => props.scope, () => {
 .workbench {
   display: flex;
   flex-direction: column;
-}
-.head h2 {
-  font-size: 16px;
-  margin-bottom: 12px;
+  gap: var(--mp-sp-3);
+  min-height: 0;
 }
 .msg {
-  padding: 9px 28px 9px 14px;
-  border-radius: 6px;
-  margin-bottom: 12px;
-  font-size: 13px;
+  flex: none;
+  padding: 9px 30px 9px 14px;
+  border-radius: var(--mp-radius-sm);
+  font-size: var(--mp-fs-sm);
   position: relative;
   max-height: 260px;
   overflow: auto;
 }
-.msg.ok { background: #dcfce7; color: #15803d; }
-.msg.err { background: #fee2e2; color: #b91c1c; }
+.msg.ok { background: var(--mp-ok-soft); color: var(--mp-ok-ink); }
+.msg.err { background: var(--mp-err-soft); color: var(--mp-err-ink); }
 .msg-head { font-weight: 600; }
 .msg-list { margin: 6px 0 0 18px; padding: 0; }
 .msg-list li { margin: 2px 0; }
 .msg-close {
-  position: absolute; top: 4px; right: 6px;
+  position: absolute; top: 5px; right: 7px;
   border: 0; background: transparent; cursor: pointer;
+  border-radius: 4px;
   font-size: 16px; line-height: 1; color: inherit; opacity: .55;
 }
-.msg-close:hover { opacity: 1; }
+.msg-close:hover { opacity: 1; background: rgba(15, 23, 42, .06); }
 
 .edit-pane {
   flex: 1;
   min-height: 0;
-  background: #fff;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  background: var(--mp-surface);
+  border-radius: var(--mp-radius);
+  border: 1px solid var(--mp-border);
+  box-shadow: var(--mp-shadow-1);
   display: flex;
   flex-direction: row;   /* v4: 协议列表左置 — 列表 + 编辑区并排 */
   overflow: hidden;
@@ -676,29 +788,60 @@ watch(() => props.scope, () => {
 
 /* v4: 协议列表 (左) — 搜索 + 列表 + 新建 */
 .cfg-list {
-  width: 220px;
+  width: 232px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-right: 1px solid var(--mp-border);
+  background: var(--mp-surface-2);
+}
+.cfg-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 6px;
+  flex-shrink: 0;
+  font-size: var(--mp-fs-xs);
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--mp-muted);
+}
+.cfg-count {
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: var(--mp-radius-pill);
+  background: var(--mp-surface-3);
+  color: var(--mp-muted);
+  font-size: var(--mp-fs-xs);
+  font-variant-numeric: tabular-nums;
 }
 .cfg-search {
-  padding: 10px;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 0 10px 8px;
+  border-bottom: 1px solid var(--mp-border);
   flex-shrink: 0;
 }
 .cfg-search input {
   width: 100%;
-  padding: 5px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  height: var(--mp-control-h);
+  padding: 0 9px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface);
+  color: var(--mp-ink);
   outline: none;
-  font-size: 12px;
+  font-size: var(--mp-fs-sm);
   box-sizing: border-box;
+  transition: border-color .15s, box-shadow .15s;
 }
-.cfg-search input:focus { border-color: #2563eb; }
+.cfg-search input::placeholder { color: var(--mp-muted-2); }
+.cfg-search input:focus {
+  border-color: var(--mp-accent);
+  box-shadow: 0 0 0 2px var(--mp-accent-soft);
+}
 .cfg-items {
   list-style: none;
   margin: 0;
@@ -708,45 +851,63 @@ watch(() => props.scope, () => {
   overflow-y: auto;
 }
 .cfg-items li {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 8px;
-  border-radius: 6px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--mp-radius-sm);
   cursor: pointer;
-  font-size: 13px;
-  color: #334155;
-  transition: background 0.15s;
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-ink-2);
+  transition: background .15s, color .15s;
 }
-.cfg-items li:hover { background: #eef2f7; }
-.cfg-items li.active { background: #e0edff; color: #1d4ed8; font-weight: 600; }
+.cfg-items li:hover { background: var(--mp-surface-3); }
+.cfg-items li.active {
+  background: var(--mp-accent-soft);
+  color: var(--mp-accent-hover);
+  font-weight: 600;
+}
+/* 选中态: 左侧指示条 + 浅底, 不只靠颜色区分 */
+.cfg-items li.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--mp-accent);
+}
 .cfg-item-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: Consolas, monospace;
-  font-size: 12.5px;
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-sm);
 }
 .cfg-del {
   border: 0;
   background: transparent;
-  color: #94a3b8;
+  color: var(--mp-muted-2);
   cursor: pointer;
   font-size: 15px;
   line-height: 1;
   padding: 0 3px;
+  border-radius: 4px;
   opacity: 0;
   flex-shrink: 0;
 }
 .cfg-items li:hover .cfg-del,
 .cfg-items li.active .cfg-del { opacity: .7; }
-.cfg-del:hover { color: #dc2626; opacity: 1; }
+.cfg-del:hover { color: var(--mp-err); opacity: 1; }
 .cfg-empty {
   padding: 10px;
-  font-size: 12px;
-  color: #94a3b8;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted-2);
   text-align: center;
 }
 /* 编辑区 (右) — 工具栏 + 内容, 纵向填满 */
@@ -762,9 +923,9 @@ watch(() => props.scope, () => {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #f59e0b;
+  background: var(--mp-warn);
   margin-left: 4px;
-  vertical-align: middle;
+  flex-shrink: 0;
 }
 .create-area {
   display: flex;
@@ -773,138 +934,157 @@ watch(() => props.scope, () => {
   padding-bottom: 8px;
   flex-shrink: 0;
 }
-.create-area select {
-  padding: 5px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  outline: none;
-  font-size: 12px;
-  color: #475569;
-  background: #fff;
-  white-space: nowrap;
-}
+.create-area select,
 .create-area input {
-  width: 130px;
-  padding: 5px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  height: var(--mp-control-h);
+  padding: 0 8px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: var(--mp-radius-sm);
   outline: none;
-  font-size: 12px;
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-ink-2);
+  background: var(--mp-surface);
+  transition: border-color .15s, box-shadow .15s;
 }
-.create-area select:focus, .create-area input:focus { border-color: #2563eb; }
+.create-area input { width: 130px; }
+.create-area select { white-space: nowrap; }
+.create-area select:focus,
+.create-area input:focus {
+  border-color: var(--mp-accent);
+  box-shadow: 0 0 0 2px var(--mp-accent-soft);
+}
 /* v4: 列表底部新建区 (纵向堆叠) */
 .create-area.stacked {
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
   padding: 10px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--mp-border);
   flex-shrink: 0;
 }
 .create-area.stacked select,
 .create-area.stacked input { width: 100%; box-sizing: border-box; }
 
 .toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 4;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-bottom: 1px solid #e2e8f0;
-  background: #f8fafc;
+  gap: var(--mp-sp-2);
+  flex-wrap: wrap;
+  flex: none;
+  padding: 8px var(--mp-sp-3);
+  border-bottom: 1px solid var(--mp-border);
+  background: var(--mp-surface-2);
 }
 .file-name {
-  font-family: Consolas, monospace;
-  font-size: 13px;
-  color: #475569;
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-ink-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
+  max-width: 280px;
 }
 .dirty-mark {
-  font-size: 12px;
-  color: #d97706;
-  background: #fef3c7;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-warn-ink);
+  background: var(--mp-warn-soft);
   border-radius: 4px;
   padding: 1px 8px;
   flex-shrink: 0;
 }
 .spacer { flex: 1; }
 
-/* 表单/JSON 模式切换 (按钮组) */
-.mode-switch {
-  display: flex;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  overflow: hidden;
+/* 表单/JSON 模式切换 (分段控件) */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--mp-surface-3);
+  border-radius: var(--mp-radius-sm);
+  flex-shrink: 0;
 }
-.mode-switch button {
+.segmented button {
   border: none;
-  background: #fff;
-  color: #475569;
-  padding: 5px 12px;
-  font-size: 12px;
+  background: transparent;
+  color: var(--mp-muted);
+  height: 24px;
+  padding: 0 12px;
+  font-size: var(--mp-fs-xs);
+  border-radius: 4px;
   cursor: pointer;
+  transition: background .15s, color .15s;
 }
-.mode-switch button + button { border-left: 1px solid #e2e8f0; }
-.mode-switch button.active {
-  background: #2563eb;
-  color: #fff;
-}
-
-.backup-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  padding: 7px 14px;
-  font-size: 12px;
-  background: #fffbeb;
-  border-bottom: 1px solid #fde68a;
-  color: #92400e;
-}
-.backup-item a {
-  color: #1d4ed8;
-  margin-left: 6px;
+.segmented button:hover { color: var(--mp-ink-2); }
+.segmented button.active {
+  background: var(--mp-surface);
+  color: var(--mp-ink);
+  font-weight: 600;
+  box-shadow: var(--mp-shadow-1);
 }
 
 /* 内容区: 表单 (双栏自滚动) / JSON 编辑器 */
+/* 必须是纵向 flex: JsonEditor 根节点靠 flex:1 撑满, 否则 textarea 只剩默认几行高 */
 .pane-body {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: auto;
-  padding: 12px 14px 16px;
+  padding: var(--mp-sp-3) var(--mp-sp-4) var(--mp-sp-5);
 }
 .form-fill {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 .placeholder {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #94a3b8;
+  color: var(--mp-muted-2);
+  font-size: var(--mp-fs-sm);
 }
 
-/* 方案 2: 校验问题清单 (条目可点击定位) */
-.issue-panel {
-  border: 1px solid #fca5a5;
-  background: #fef2f2;
-  border-radius: 6px;
-  margin-bottom: 12px;
-  padding: 8px 10px;
+/* 方案 2: 校验问题清单 — 可折叠横幅 (条目可点击定位) */
+.issue-banner {
+  position: relative;
+  flex: none;
+  border-bottom: 1px solid var(--mp-warn-soft);
+  background: #fffbeb;
 }
-.issue-panel.has-err { border-color: #f87171; }
-.issue-head {
+.issue-banner.has-err {
+  border-bottom-color: #fecaca;
+  background: var(--mp-err-soft);
+}
+.issue-summary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 34px 8px var(--mp-sp-4);
+  border: 0;
+  background: transparent;
+  color: var(--mp-warn-ink);
+  font-size: var(--mp-fs-sm);
   font-weight: 600;
-  color: #b91c1c;
-  margin-bottom: 6px;
+  text-align: left;
 }
-.issue-list { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow: auto; }
+.issue-banner.has-err .issue-summary { color: var(--mp-err-ink); }
+.issue-caret {
+  font-size: 11px;
+  color: var(--mp-muted);
+  flex: none;
+}
+.issue-title { min-width: 0; }
+.issue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--mp-sp-4) 8px;
+  max-height: 260px;
+  overflow: auto;
+}
 .issue-list li {
   display: flex;
   align-items: baseline;
@@ -912,30 +1092,30 @@ watch(() => props.scope, () => {
   padding: 5px 6px;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--mp-fs-xs);
   line-height: 1.6;
 }
-.issue-list li:hover { background: #fee2e2; }
+.issue-list li:hover { background: rgba(15, 23, 42, .06); }
 .issue-sev {
   flex: none;
   padding: 1px 6px;
   border-radius: 3px;
   font-size: 11px;
   color: #fff;
-  background: #dc2626;
+  background: var(--mp-err);
 }
-.issue-sev.warning { background: #d97706; }
+.issue-sev.warning { background: var(--mp-warn); }
 .issue-rule {
   flex: none;
-  font-family: Consolas, monospace;
+  font-family: var(--mp-font-mono);
   font-size: 11px;
   color: #7c2d12;
   background: #ffedd5;
   padding: 1px 5px;
   border-radius: 3px;
 }
-.issue-subj { flex: none; color: #1e293b; }
-.issue-msg { color: #7f1d1d; word-break: break-all; }
+.issue-subj { flex: none; color: var(--mp-ink); }
+.issue-msg { color: var(--mp-ink-2); word-break: break-all; }
 
 /* 窄屏降级: 协议列表转为顶部横排 */
 @media (max-width: 720px) {
@@ -944,8 +1124,9 @@ watch(() => props.scope, () => {
     width: auto;
     max-height: 38vh;
     border-right: 0;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid var(--mp-border);
   }
   .cfg-items { flex: none; max-height: 22vh; }
+  .file-name { max-width: 100%; }
 }
 </style>

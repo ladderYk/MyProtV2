@@ -38,31 +38,43 @@ const validity = computed(() => {
 </template>
 
 <style scoped>
+/* 专家模式: 深色代码面板, 与浅色表单形成明确对比 */
 .editor {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  border: 1px solid #1e293b;
+  border-radius: var(--mp-radius-sm);
+  overflow: hidden;
+  background: #0f172a;
 }
 .area {
   flex: 1;
   width: 100%;
+  min-height: 240px;
   resize: none;
   border: none;
   outline: none;
-  padding: 14px;
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 13px;
-  line-height: 1.55;
-  color: #0f172a;
-  background: #fff;
+  padding: 14px 16px;
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-base);
+  line-height: 1.6;
+  color: #e2e8f0;
+  background: #0f172a;
+  caret-color: #60a5fa;
   white-space: pre;
+  tab-size: 2;
 }
+.area::selection { background: rgba(37, 99, 235, .45); }
 .status {
   padding: 6px 14px;
-  font-size: 12px;
-  border-top: 1px solid #e2e8f0;
+  font-size: var(--mp-fs-xs);
+  font-family: var(--mp-font-mono);
+  border-top: 1px solid #1e293b;
+  background: #0b1220;
+  color: #94a3b8;
 }
-.status.valid { color: #15803d; background: #f0fdf4; }
-.status.invalid { color: #b91c1c; background: #fef2f2; }
+.status.valid { color: #4ade80; }
+.status.invalid { color: #fca5a5; }
 </style>

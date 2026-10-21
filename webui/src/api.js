@@ -21,7 +21,40 @@ export function setAuthLostHandler(fn) { authLostHandler = fn }
 // v5: 全局请求超时 — 后端挂起时 fetch 不再永久 pending (此前无 AbortSignal, 界面假死)
 const REQUEST_TIMEOUT_MS = 15000
 
-async function request(method, url, rawBody) {
+// v6: 客户端节流 + 429 退避重试
+//   后端默认 rateLimitRps=5 / burst=10 (configs/server.json)。快速切页会瞬间发出
+//   多个配置请求 (列表 + 内容 + 备份 + 校验), 直接透传 "rate limit exceeded" 会让
+//   页面出现空列表/空表单。这里用同参数的令牌桶削峰 (burst 留 2 个余量给 SSE),
+//   万一仍被限流则退避重试, 不把限流错误直接暴露给界面。
+const CLIENT_RPS = 5
+const CLIENT_BURST = 8
+const RETRY_429 = 3
+let tokens = CLIENT_BURST
+let lastRefill = Date.now()
+let tokenGate = Promise.resolve()
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+/// 获取一个请求令牌; 不足时等待补齐 (与后端令牌桶算法一致)
+function acquireToken() {
+  const run = async () => {
+    for (;;) {
+      const now = Date.now()
+      tokens = Math.min(CLIENT_BURST, tokens + (now - lastRefill) * CLIENT_RPS / 1000)
+      lastRefill = now
+      if (tokens >= 1) { tokens -= 1; return }
+      await sleep(Math.ceil((1 - tokens) * 1000 / CLIENT_RPS))
+    }
+  }
+  const p = tokenGate.then(run)
+  tokenGate = p.catch(() => {})
+  return p
+}
+
+// 相同 GET 在途时复用 — App 启动探测与运行状态聚合会同时请求同一份配置
+const inflightGets = new Map()
+
+async function requestOnce(method, url, rawBody) {
   const headers = {}
   const token = getToken()
   if (token) headers['Authorization'] = 'Bearer ' + token
@@ -53,6 +86,26 @@ async function request(method, url, rawBody) {
     throw new ApiError(res.status, msg)
   }
   return text
+}
+
+async function request(method, url, rawBody) {
+  const send = async () => {
+    for (let attempt = 0; ; attempt++) {
+      await acquireToken()
+      try {
+        return await requestOnce(method, url, rawBody)
+      } catch (e) {
+        if (e.status !== 429 || attempt >= RETRY_429) throw e
+        await sleep(400 * (attempt + 1))
+      }
+    }
+  }
+  if (method !== 'GET') return send()
+  const existing = inflightGets.get(url)
+  if (existing) return existing
+  const p = send().finally(() => inflightGets.delete(url))
+  inflightGets.set(url, p)
+  return p
 }
 
 // ── 配置 CRUD ──
@@ -98,12 +151,16 @@ export async function reloadConfig() {
 // 每项 {name,type,required,default?,description?,enum?,children?}。
 // 用于替换前端硬编码的枚举候选 (finalType/byteOrder 等), 避免与引擎漂移。
 // 带进程内缓存 — 注册表内容由后端构建决定, 同一次会话内不会变化。
-let _schemaCache = null
+// 缓存 Promise 而非结果: 首屏多个组件会并发请求, 共享同一在途请求避免被限流 (429);
+// 失败时清空缓存, 允许后续重试
+let _schemaPromise = null
 export async function getSchema() {
-  if (!_schemaCache) {
-    _schemaCache = JSON.parse(await request('GET', '/api/config/schema'))
+  if (!_schemaPromise) {
+    _schemaPromise = request('GET', '/api/config/schema')
+      .then(text => JSON.parse(text))
+      .catch(err => { _schemaPromise = null; throw err })
   }
-  return _schemaCache
+  return _schemaPromise
 }
 
 // ── 仿真数据面 (/api/sim/*): 运行时手动读写仿真器寄存器 ──

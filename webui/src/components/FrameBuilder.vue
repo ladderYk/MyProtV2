@@ -524,43 +524,43 @@ const stats = computed(() => {
   flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
+  background: var(--mp-surface-2);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
 }
 .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
-.btn-icon { font-size: 12px; margin-right: 4px; }
+.btn-icon { font-size: var(--mp-fs-xs); margin-right: 4px; }
 .mx-2 { margin: 0 8px; }
 .ml-2 { margin-left: 8px; }
 .fb-table-wrap { overflow-x: auto; }
 .fb-table { width: 100%; }
 .hex-input :deep(.el-input__inner) {
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 12px;
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-xs);
 }
-.text-muted { color: #94a3b8; font-size: 12px; }
+.text-muted { color: var(--mp-muted-2); font-size: var(--mp-fs-xs); }
 .var-info { display: flex; flex-wrap: wrap; gap: 4px; }
 .fb-errors { margin-top: 8px; }
 .fb-raw-mode {
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface);
   overflow: hidden;
 }
 .raw-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+  padding: 8px 12px; background: var(--mp-surface-2); border-bottom: 1px solid var(--mp-border);
 }
-.raw-title { font-size: 13px; color: #475569; font-weight: 500; }
+.raw-title { font-size: var(--mp-fs-sm); color: var(--mp-ink-2); font-weight: 500; }
 .raw-textarea {
   width: 100%; min-height: 200px; padding: 12px;
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 12px; line-height: 1.6;
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-xs); line-height: 1.6;
   border: none; outline: none; resize: vertical;
   background: #1e1e1e; color: #d4d4d4;
 }
 .raw-hint {
-  padding: 8px 12px; font-size: 12px; color: #94a3b8;
-  background: #f8fafc; border-top: 1px solid #e2e8f0;
+  padding: 8px 12px; font-size: var(--mp-fs-xs); color: var(--mp-muted);
+  background: var(--mp-surface-2); border-top: 1px solid var(--mp-border);
 }
 </style>
