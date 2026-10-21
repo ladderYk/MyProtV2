@@ -258,6 +258,10 @@ const Fields& SchemaRegistry::TagFields() {
         Plain("deviceId", "string", true, "", "所属设备 ID, 须存在于 devices"),
         Plain("operation", "string", true, "",
               "操作名, 须存在于所引协议的 operations"),
+        Plain("label", "string", false, "",
+              "显示名称 (中文/工程名), 仅供 Web UI 与报表展示; 空 = 显示 name"),
+        Plain("unit", "string", false, "",
+              "工程单位 (如 °C / mm/s / %), 实时监控在数值后展示; 空 = 不显示"),
         Plain("variables", "map", false, "",
               "操作模板变量表 { 变量名: 无符号整数 } e.g. {\"StartAddress\":0}"),
                 // ── 标签级写能力 (唯一写声明点) ──

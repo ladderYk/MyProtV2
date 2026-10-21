@@ -927,6 +927,8 @@ struct DeviceConfig {
 
 struct TagDefinition {
     std::string name;                   // 全局唯一 (e.g. "PLC-001.Temperature")
+    std::string label;                  // 显示名称 (中文/工程名); 仅展示元数据, 引擎不消费
+    std::string unit;                   // 工程单位 (e.g. "°C", "%"); 仅展示元数据
     std::string deviceId;
     std::string operation;              // 操作名 (e.g. "ReadHoldingRegisters")
     // 跨协议字节单位 (v1.25/v1.28 收敛): StartByteAddress / ByteCount;

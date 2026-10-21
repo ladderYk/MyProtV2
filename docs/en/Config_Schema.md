@@ -667,6 +667,8 @@ How credentials take effect: `username` / `password` are injected during the han
 | Field | Type | Req | Default | Description |
 |------|------|:--:|------|------|
 | `name` | string | ✓ | — | Globally unique; recommend the `"<deviceId>.<pointName>"` style |
+| `label` | string | ✗ | `""` | Display name (human-readable/Chinese) for the Web UI and reports only; empty = show `name` |
+| `unit` | string | ✗ | `""` | Engineering unit (e.g. `°C`, `mm/s`, `%`) rendered after the value in the live monitor; empty = hidden |
 | `deviceId` | string | ✓ | — | References a `DeviceConfig.id` |
 | `operation` | string | ✓ | — | References an operation name in the device's protocol (read semantics; for a `direction=write` write tag this is the write operation) |
 | `variables` | map\<string, uint32\> | ✗ | `{}` | Template variables, uniformly using **cross-protocol byte units**, e.g. `{"StartByteAddress": 0, "ByteCount": 4}`; protocol-family units (`StartAddress` / `RegisterCount`) are derived by the protocol JSON's `outputs`, not written in the tag |

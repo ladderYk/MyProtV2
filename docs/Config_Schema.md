@@ -591,6 +591,8 @@ configs/
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |------|------|:--:|------|------|
 | `name` | string | ✓ | — | 全局唯一，建议 `"<deviceId>.<测点名>"` 风格 |
+| `label` | string | ✗ | `""` | 显示名称（中文/工程名），仅供 Web UI 与报表展示；空 = 显示 `name` |
+| `unit` | string | ✗ | `""` | 工程单位（如 `°C`、`mm/s`、`%`），实时监控在数值后展示；空 = 不显示 |
 | `deviceId` | string | ✓ | — | 引用 `DeviceConfig.id` |
 | `operation` | string | ✓ | — | 引用该设备协议中的操作名（读语义；`direction=write` 写标签时即写操作） |
 | `variables` | map\<string, uint32\> | ✗ | `{}` | 模板变量，统一用**跨协议字节单位**，如 `{"StartByteAddress": 0, "ByteCount": 4}`；协议族单位（`StartAddress` / `RegisterCount`）由协议 JSON 的 `outputs` 派生，不写在标签里 |
@@ -631,6 +633,8 @@ configs/
 ```jsonc
 {
   "name": "PLC-001.Temperature",
+  "label": "1号炉温度",
+  "unit": "°C",
   "deviceId": "PLC-001",
   "operation": "ReadHoldingRegisters",
   "variables": { "StartByteAddress": 4, "ByteCount": 4 },

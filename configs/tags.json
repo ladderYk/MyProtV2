@@ -49,6 +49,7 @@
   "tags": [
     {
       "name": "PLC-001.Coil0",
+      "label": "线圈 0",
       "deviceId": "PLC-001",
       "operation": "ReadCoils",
       "variables": {
@@ -61,6 +62,7 @@
     },
     {
       "name": "PLC-001.Coil0_3",
+      "label": "线圈 3",
       "deviceId": "PLC-001",
       "operation": "ReadCoils",
       "variables": {
@@ -73,6 +75,7 @@
     },
     {
       "name": "PLC-001.Di0",
+      "label": "离散输入 0",
       "deviceId": "PLC-001",
       "operation": "ReadDiscreteInputs",
       "variables": {
@@ -85,6 +88,7 @@
     },
     {
       "name": "PLC-001.HR0",
+      "label": "保持寄存器 0",
       "deviceId": "PLC-001",
       "operation": "ReadHoldingRegisters",
       "variables": {
@@ -96,6 +100,7 @@
     },
     {
       "name": "PLC-001.HR1",
+      "label": "保持寄存器 1",
       "deviceId": "PLC-001",
       "operation": "ReadHoldingRegisters",
       "variables": {
@@ -107,6 +112,7 @@
     },
     {
       "name": "PLC-001.HR2",
+      "label": "保持寄存器 2",
       "deviceId": "PLC-001",
       "operation": "ReadHoldingRegisters",
       "variables": {
@@ -118,6 +124,7 @@
     },
     {
       "name": "PLC-001.HR100",
+      "label": "保持寄存器 100",
       "deviceId": "PLC-001",
       "operation": "ReadHoldingRegisters",
       "variables": {
@@ -129,6 +136,7 @@
     },
     {
       "name": "PLC-001.Float10",
+      "label": "浮点寄存器 10",
       "deviceId": "PLC-001",
       "operation": "ReadHoldingRegisters",
       "writeOperation": "WriteMultipleRegisters",
@@ -141,6 +149,7 @@
     },
     {
       "name": "PLC-001.Int32_40",
+      "label": "长整型寄存器 40",
       "deviceId": "PLC-001",
       "operation": "ReadHoldingRegisters",
       "writeOperation": "WriteMultipleRegisters",
@@ -153,6 +162,7 @@
     },
     {
       "name": "PLC-001.IR0",
+      "label": "输入寄存器 0",
       "deviceId": "PLC-001",
       "operation": "ReadInputRegisters",
       "variables": {
@@ -164,6 +174,7 @@
     },
     {
       "name": "PLC-001.HR20",
+      "label": "保持寄存器 20",
       "deviceId": "PLC-001",
       "operation": "ReadHoldingRegisters",
       "variables": {
@@ -175,6 +186,7 @@
     },
     {
       "name": "PLC-001.HR30",
+      "label": "保持寄存器 30",
       "deviceId": "PLC-001",
       "operation": "ReadHoldingRegisters",
       "variables": {
@@ -186,6 +198,7 @@
     },
     {
       "name": "PLC_1200.DBW0",
+      "label": "DB1 字 0",
       "deviceId": "PLC_1200",
       "operation": "ReadVarWord",
       "variables": {
@@ -201,6 +214,7 @@
     },
     {
       "name": "PLC_1200.DBD4",
+      "label": "DB1 浮点 4",
       "deviceId": "PLC_1200",
       "operation": "ReadVarWord",
       "writeOperation": "WriteVarWord",
@@ -216,6 +230,7 @@
     },
     {
       "name": "PLC_1200.DBX0_1",
+      "label": "DB1 位 0.1",
       "deviceId": "PLC_1200",
       "operation": "ReadVarBit",
       "writeOperation": "WriteVarBit",
@@ -232,6 +247,7 @@
     },
     {
       "name": "AGV1.RobotStatus",
+      "label": "机器人状态",
       "deviceId": "AGV1",
       "operation": "GetRobotStatus",
       "scanRateMs": 1000,
@@ -240,6 +256,7 @@
     },
     {
       "name": "AGV1.RobotPosition",
+      "label": "机器人位置",
       "deviceId": "AGV1",
       "operation": "GetPosition",
       "scanRateMs": 500,
@@ -248,6 +265,8 @@
     },
     {
       "name": "AGV1.BatteryLevel",
+      "label": "电池电量",
+      "unit": "%",
       "deviceId": "AGV1",
       "operation": "GetBattery",
       "scanRateMs": 5000,
@@ -256,6 +275,7 @@
     },
     {
       "name": "AGV1.SendJson",
+      "label": "发送指令",
       "deviceId": "AGV1",
       "direction": "write",
       "operation": "SendJson",

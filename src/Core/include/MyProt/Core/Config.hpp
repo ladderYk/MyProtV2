@@ -437,6 +437,8 @@ struct ScaleConverter {
 
 struct TagDefinition {
     std::string name;                   // globally unique (e.g. "PLC-001.Temperature")
+    std::string label;                  // optional display name (human-readable / Chinese) for UI and reports; no engine semantics
+    std::string unit;                   // optional engineering unit shown next to the value (e.g. "degC", "%"); display metadata only
     std::string deviceId;
     std::string operation;              // operation name (e.g. "ReadHoldingRegisters")
         // tag variable table - cross-protocol byte units:
