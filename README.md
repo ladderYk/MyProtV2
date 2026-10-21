@@ -72,11 +72,95 @@ cmake --build build-linux -j
 ./scripts/ci-linux.sh
 ```
 
-Binaries are written to `bin/<Config>/` (e.g. `bin/Release/MyProt.App`). Run them from the
-repository root so the relative `configs/` and `webui/dist` paths resolve:
+Binaries are written to `bin/<Config>/` (e.g. `bin/Release/MyProt.App`). Relative paths
+are resolved against the current directory first, then fall back to the executable
+directory and its parent, so the program can start from any directory:
 
 ```bash
 ./bin/Release/MyProt.App --config configs --port 8080
+```
+
+Package a release (bundles `configs/` and `webui/dist/`):
+
+```bash
+./scripts/package-linux.sh
+```
+
+Artifacts:
+
+- `dist/` — runnable layout: `bin/MyProt.App`, `configs/`, `webui/dist/`
+- `build-linux-package/package/MyProt-<version>-Linux-<arch>.tar.gz` — release tarball
+
+After extracting, the program can start from any directory: a relative `--config` is
+looked up in the current directory, the executable directory, then its parent;
+`webRoot=webui/dist` also falls back to `<configDir>/../webui/dist`.
+
+```bash
+./bin/MyProt.App --port 8080                # package root
+/opt/myprot/bin/MyProt.App --port 8080      # any directory
+```
+
+The management plane listens on 127.0.0.1 by default. To allow external access:
+
+```bash
+./bin/MyProt.App --port 8080 --bind 0.0.0.0
+```
+
+Or edit `configs/tags.json` (`webApi` is part of the root config, not `server.json`):
+
+```json
+"webApi": { "bindAddress": "0.0.0.0" }
+```
+
+Then open `http://<device-ip>:8080/`. For non-loopback binding, enable authentication:
+
+```json
+"webApi": { "bindAddress": "0.0.0.0", "requireAuth": true }
+```
+
+and set `export MYPROT_API_TOKEN=<token>`; otherwise write/config endpoints are exposed
+without authentication.
+
+### ARM64 (aarch64)
+
+Cross-compile on an x86_64 host (Ubuntu/Debian):
+
+```bash
+sudo apt install g++-aarch64-linux-gnu
+./scripts/package-linux-arm64.sh
+```
+
+Artifacts: `dist-aarch64/` and
+`build-linux-aarch64-package/package/MyProt-2.0-Linux-aarch64.tar.gz`.
+
+Statically linked by default, so the target glibc version does not matter.
+For a dynamic build:
+
+```bash
+LINKER_FLAGS= ./scripts/package-linux-arm64.sh
+```
+
+### ARMv7 (32-bit ARM, armv7l)
+
+Cross-compile on an x86_64 host:
+
+```bash
+sudo apt install g++-arm-linux-gnueabihf
+./scripts/package-linux-armv7.sh
+```
+
+Artifacts: `dist-armv7/` and
+`build-linux-armv7-package/package/MyProt-2.0-Linux-armv7l.tar.gz`.
+
+Statically linked by default (~3.2 MB), runs directly on Debian 11/12,
+Raspberry Pi OS and other armv7 systems.
+
+Alternatively, build natively on the target machine:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMYPROT_BUILD_TESTS=OFF
+cmake --build build -j
+cmake --install build --prefix dist
 ```
 
 Platform differences are isolated in two places: `src/Core/include/MyProt/Core/Platform.hpp`

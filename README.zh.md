@@ -72,11 +72,89 @@ cmake --build build-linux -j
 ./scripts/ci-linux.sh
 ```
 
-可执行文件输出到 `bin/<Config>/`（如 `bin/Release/MyProt.App`）。请从仓库根目录启动，
-以便相对路径 `configs/`、`webui/dist` 正确解析：
+可执行文件输出到 `bin/<Config>/`（如 `bin/Release/MyProt.App`）。相对路径优先按
+当前工作目录解析，找不到时自动回退到可执行文件目录及其上一级，因此从仓库根目录
+或任意目录启动均可：
 
 ```bash
 ./bin/Release/MyProt.App --config configs --port 8080
+```
+
+打包发布（自动带上 `configs/` 与 `webui/dist/`）：
+
+```bash
+./scripts/package-linux.sh
+```
+
+产物：
+
+- `dist/` — 可直接运行的发布目录：`bin/MyProt.App`、`configs/`、`webui/dist/`
+- `build-linux-package/package/MyProt-<version>-Linux-<arch>.tar.gz` — 发布压缩包
+
+解包后可从任意目录启动：相对 `--config` 按当前目录 → 可执行文件目录 → 上一级目录
+依次查找；静态前端 `webui/dist` 也会回退到 `<configDir>/../webui/dist`。
+
+```bash
+./bin/MyProt.App --port 8080                # 发布包根目录
+/opt/myprot/bin/MyProt.App --port 8080      # 任意目录
+```
+
+默认只监听 127.0.0.1。允许外部访问：
+
+```bash
+./bin/MyProt.App --port 8080 --bind 0.0.0.0
+```
+
+或编辑 `configs/tags.json`（`webApi` 属于根配置，不在 `server.json`）：
+
+```json
+"webApi": { "bindAddress": "0.0.0.0" }
+```
+
+然后访问 `http://<设备IP>:8080/`。非环回监听建议同时开启鉴权：
+
+```json
+"webApi": { "bindAddress": "0.0.0.0", "requireAuth": true }
+```
+
+并设置 `export MYPROT_API_TOKEN=<token>`，否则写/配置接口无需认证即可访问。
+
+### ARM64（aarch64）
+
+在 x86_64 主机上交叉编译（Ubuntu/Debian）：
+
+```bash
+sudo apt install g++-aarch64-linux-gnu
+./scripts/package-linux-arm64.sh
+```
+
+产物：`dist-aarch64/`、`build-linux-aarch64-package/package/MyProt-2.0-Linux-aarch64.tar.gz`。
+
+默认静态链接，不依赖目标机 glibc 版本。需要动态链接时：
+
+```bash
+LINKER_FLAGS= ./scripts/package-linux-arm64.sh
+```
+
+### ARMv7（32 位 ARM，armv7l）
+
+在 x86_64 主机上交叉编译：
+
+```bash
+sudo apt install g++-arm-linux-gnueabihf
+./scripts/package-linux-armv7.sh
+```
+
+产物：`dist-armv7/`、`build-linux-armv7-package/package/MyProt-2.0-Linux-armv7l.tar.gz`。
+
+默认静态链接（约 3.2 MB），可直接在 Debian 11/12、树莓派 OS 等 armv7 系统运行。
+
+也可以在目标机上原生编译：
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMYPROT_BUILD_TESTS=OFF
+cmake --build build -j
+cmake --install build --prefix dist
 ```
 
 平台差异只集中在两处：`src/Core/include/MyProt/Core/Platform.hpp`

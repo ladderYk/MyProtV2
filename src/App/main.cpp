@@ -1,5 +1,6 @@
 // src/App/main.cpp — MyProt V2 网关生产入口
-// 用法: MyProt.App.exe [--config <dir>] [--port N]  (无参数默认 configs:8080)
+// 用法: MyProt.App.exe [--config <dir>] [--port N] [--bind <ipv4>]
+//       (无参数默认 configs:8080, 仅环回监听)
 // E2E 测试序列已迁至 MyProt.E2E 独立工程 (2026-08-25)。
 #include <cstdlib>
 #include <iostream>
@@ -38,6 +39,55 @@ using namespace MyProt::App;
 // ══════════════════════════════════════════════════════════════════════
 
 namespace {
+
+/// 可用的配置目录必须包含 tags.json。
+bool IsConfigDir(const std::string& dir) {
+    return MyProt::Core::Platform::FileExists(
+        dir + MyProt::Service::ConfigLayout::kTagsFilePath);
+}
+
+/// 相对配置目录: 先按当前工作目录 (旧行为), 再按可执行文件目录及其上级
+/// (发布包布局: <root>/bin/MyProt.App + <root>/configs)。
+std::string ResolveConfigDir(const std::string& requested) {
+    namespace P = MyProt::Core::Platform;
+    if (requested.empty() || P::IsAbsolutePath(requested) || IsConfigDir(requested)) {
+        return requested;
+    }
+    const std::string exeDir = P::GetExecutableDir();
+    if (exeDir.empty()) return requested;
+
+    const std::string candidates[2] = {
+        P::JoinPath(exeDir, requested),
+        P::JoinPath(P::JoinPath(exeDir, ".."), requested)
+    };
+    for (std::size_t i = 0; i < 2; ++i) {
+        if (IsConfigDir(candidates[i])) return P::NormalizePath(candidates[i]);
+    }
+    return requested;
+}
+
+/// 相对静态前端目录: 先按 CWD, 再按配置目录上级 / 可执行目录查找。
+std::string ResolveWebRoot(const std::string& configDir,
+                           const std::string& webRoot) {
+    namespace P = MyProt::Core::Platform;
+    if (webRoot.empty() || P::IsAbsolutePath(webRoot)
+            || P::FileExists(P::JoinPath(webRoot, "index.html"))) {
+        return webRoot;
+    }
+    const std::string exeDir = P::GetExecutableDir();
+    const std::string candidates[3] = {
+        P::JoinPath(P::JoinPath(configDir, ".."), webRoot),
+        P::JoinPath(exeDir, webRoot),
+        P::JoinPath(P::JoinPath(exeDir, ".."), webRoot)
+    };
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (!candidates[i].empty()
+                && P::FileExists(P::JoinPath(candidates[i], "index.html"))) {
+            return P::NormalizePath(candidates[i]);
+        }
+    }
+    return webRoot;
+}
 
 /// TypedValue → 控制台文本 (生产数据回调打印用)
 std::string TypedToText(const MyProt::Core::TypedValue& v) {
@@ -79,7 +129,8 @@ void SetupLoggingFromEnv() {
     }
 }
 
-int RunProduction(const std::string& configDir, uint16_t apiPort) {
+int RunProduction(const std::string& configDir, uint16_t apiPort,
+                  const std::string& bindOverride) {
     MyProt::Core::Platform::EnableUtf8Console();
     InstallCrashDiagnostics();
     SetupLoggingFromEnv();
@@ -98,9 +149,18 @@ int RunProduction(const std::string& configDir, uint16_t apiPort) {
                   loaded.error().context.empty()
                       ? ""
                       : (" (" + loaded.error().context + ")").c_str());
-        fprintf(stderr, "\n[main] 配置加载失败 exitCode=2. 按 Enter 关闭窗口...\n");
+        const std::string cwd = MyProt::Core::Platform::GetCurrentDir();
+        fprintf(stderr, "\n[main] 配置加载失败 exitCode=2.\n");
+        fprintf(stderr, "  配置目录: %s\n", configDir.c_str());
+        fprintf(stderr, "  当前目录: %s\n",
+                cwd.empty() ? "(unknown)" : cwd.c_str());
+        fprintf(stderr, "  提示: 请在发布包根目录启动, 或用 --config 指定绝对路径\n");
         fflush(stderr);
+#ifdef _WIN32
+        // Windows 双击启动时保留窗口; Linux/SSH 不阻塞
+        fprintf(stderr, "按 Enter 关闭窗口...\n");
         std::getchar();
+#endif
         return 2;
     }
 
@@ -256,14 +316,17 @@ int RunProduction(const std::string& configDir, uint16_t apiPort) {
     // 端口取命令行 --port。ADR-0008 §2: 默认不对外暴露, 远程管理需显式改 0.0.0.0。
     // 修复: 旧实现无条件覆盖为 "0.0.0.0:<port>", 既令该配置项失效, 又把管理面
     //       暴露到所有网卡 (与 ConfigDeepValidator 校验的字段不一致)。
-    std::string bindHost = apiCfg.bindAddress.empty()
-        ? std::string("127.0.0.1") : apiCfg.bindAddress;
+    std::string bindHost = !bindOverride.empty()
+        ? bindOverride
+        : (apiCfg.bindAddress.empty() ? std::string("127.0.0.1")
+                                      : apiCfg.bindAddress);
     const std::size_t colonPos = bindHost.rfind(':');
     if (colonPos != std::string::npos && bindHost.find(':') == colonPos) {
         bindHost = bindHost.substr(0, colonPos);   // 丢弃配置内端口, 端口以 --port 为准
     }
     if (bindHost.empty()) bindHost = "127.0.0.1";
     apiCfg.bindAddress = bindHost + ":" + std::to_string(apiPort);
+    apiCfg.webRoot = ResolveWebRoot(configDir, apiCfg.webRoot);
 
     // 安全提醒: 非环回绑定 + 未启用鉴权 = 管理面写/配置接口无认证暴露 (ADR-0008 §3)
     if (bindHost != "127.0.0.1" && bindHost != "localhost" && bindHost != "::1"
@@ -367,6 +430,7 @@ int RunProduction(const std::string& configDir, uint16_t apiPort) {
 int main(int argc, char* argv[]) {
     // 无参数 = 默认启动网关 (configs 目录, API 8080); 不再默认执行 E2E 测试
     std::string dir = "configs";
+    std::string bindAddr;
     unsigned long portArg = 8080;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -374,11 +438,13 @@ int main(int argc, char* argv[]) {
             dir = argv[++i];
         } else if (a == "--port" && i + 1 < argc) {
             portArg = std::strtoul(argv[++i], 0, 10);
+        } else if (a == "--bind" && i + 1 < argc) {
+            bindAddr = argv[++i];
         } else if (!a.empty() && a[0] >= '0' && a[0] <= '9') {
             portArg = std::strtoul(a.c_str(), 0, 10);   // 兼容旧式位置端口参数
         }
     }
     const uint16_t port = (portArg > 0 && portArg < 65536)
                               ? static_cast<uint16_t>(portArg) : 8080;
-    return RunProduction(dir, port);
+    return RunProduction(ResolveConfigDir(dir), port, bindAddr);
 }

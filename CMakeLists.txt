@@ -193,10 +193,40 @@ if(MYPROT_BUILD_TESTS)
 endif()
 
 # ── 输出目录 (与 VS 的 bin/<Config> 布局对齐) ──
+# 交叉编译追加目标架构子目录, 避免与主机产物互相覆盖
+if(CMAKE_CROSSCOMPILING)
+    set(MYPROT_BIN_DIR ${MYPROT_ROOT}/bin/$<CONFIG>/${CMAKE_SYSTEM_PROCESSOR})
+else()
+    set(MYPROT_BIN_DIR ${MYPROT_ROOT}/bin/$<CONFIG>)
+endif()
 set_target_properties(MyProt.App PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${MYPROT_ROOT}/bin/$<CONFIG>)
+    RUNTIME_OUTPUT_DIRECTORY ${MYPROT_BIN_DIR})
 if(MYPROT_BUILD_TESTS)
     set_target_properties(MyProt.Core.Tests MyProt.Engine.Tests MyProt.Service.Tests
                           MyProt.Transport.Tests MyProt.E2E PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${MYPROT_ROOT}/bin/$<CONFIG>)
+        RUNTIME_OUTPUT_DIRECTORY ${MYPROT_BIN_DIR})
 endif()
+
+# ── 安装 / 打包布局 ──
+# 安装后目录 (默认相对路径可直接工作):
+#   <prefix>/bin/MyProt.App
+#   <prefix>/configs/protocols/*.json + tags.json
+#   <prefix>/webui/dist/*            (存在时一并安装, 静态前端)
+# 从 <prefix> 运行: ./bin/MyProt.App    (默认 --config configs, webRoot=webui/dist)
+install(TARGETS MyProt.App RUNTIME DESTINATION bin)
+install(DIRECTORY ${MYPROT_ROOT}/configs/
+        DESTINATION configs
+        PATTERN "*.bak.*" EXCLUDE)
+if(EXISTS ${MYPROT_ROOT}/webui/dist)
+    install(DIRECTORY ${MYPROT_ROOT}/webui/dist/
+            DESTINATION webui/dist)
+endif()
+
+# CPack: cpack -G TGZ → <build>/package/MyProt-<version>-Linux-<arch>.tar.gz
+set(CPACK_PACKAGE_NAME "MyProt")
+set(CPACK_PACKAGE_VENDOR "MyProt")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "MyProt V2 protocol gateway")
+set(CPACK_PACKAGE_FILE_NAME "MyProt-${PROJECT_VERSION}-Linux-${CMAKE_SYSTEM_PROCESSOR}")
+set(CPACK_PACKAGE_DIRECTORY ${CMAKE_BINARY_DIR}/package)
+set(CPACK_GENERATOR "TGZ")
+include(CPack)

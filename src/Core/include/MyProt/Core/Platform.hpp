@@ -43,7 +43,104 @@ inline std::wstring ToWide(const std::string& s) {
     ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], n);
     return w;
 }
+
+/// UTF-16 -> UTF-8. Empty result on invalid input.
+inline std::string FromWide(const std::wstring& w) {
+    if (w.empty()) return std::string();
+    const int n = ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1,
+                                       nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return std::string();
+    std::string s(static_cast<size_t>(n) - 1, '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, &s[0], n, nullptr, nullptr);
+    return s;
+}
 #endif
+
+/// Current working directory as a UTF-8 path. Empty on failure.
+inline std::string GetCurrentDir() {
+#if defined(_WIN32)
+    const DWORD len = ::GetCurrentDirectoryW(0, nullptr);
+    if (len == 0) return std::string();
+    std::vector<wchar_t> buf(static_cast<size_t>(len));
+    const DWORD written = ::GetCurrentDirectoryW(len, &buf[0]);
+    if (written == 0 || written >= len) return std::string();
+    return FromWide(std::wstring(&buf[0], static_cast<size_t>(written)));
+#else
+    char buf[4096];
+    if (::getcwd(buf, sizeof(buf)) == nullptr) return std::string();
+    return std::string(buf);
+#endif
+}
+
+/// Absolute path of the running executable. Empty on failure.
+inline std::string GetExecutablePath() {
+#if defined(_WIN32)
+    std::vector<wchar_t> buf(MAX_PATH);
+    for (;;) {
+        const DWORD n = ::GetModuleFileNameW(NULL, &buf[0],
+                                             static_cast<DWORD>(buf.size()));
+        if (n == 0) return std::string();
+        if (n < buf.size()) return FromWide(std::wstring(&buf[0], n));
+        buf.resize(buf.size() * 2);
+    }
+#else
+    char buf[4096];
+    const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return std::string();
+    buf[n] = '\0';
+    return std::string(buf);
+#endif
+}
+
+/// Directory containing the running executable. Empty on failure.
+inline std::string GetExecutableDir() {
+    const std::string exe = GetExecutablePath();
+    const std::size_t slash = exe.find_last_of("/\\");
+    return slash == std::string::npos ? std::string() : exe.substr(0, slash);
+}
+
+/// True when the path is absolute (POSIX '/', Windows drive or UNC).
+inline bool IsAbsolutePath(const std::string& path) {
+    if (path.empty()) return false;
+#if defined(_WIN32)
+    if (path.size() >= 2 && path[1] == ':') {
+        const char c = path[0];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) return true;
+    }
+    return path[0] == '\\' || path[0] == '/';
+#else
+    return path[0] == '/';
+#endif
+}
+
+/// Join two path segments with a single separator.
+inline std::string JoinPath(const std::string& base, const std::string& child) {
+    if (base.empty()) return child;
+    if (child.empty()) return base;
+    const char last = base[base.size() - 1];
+    if (last == '/' || last == '\\') return base + child;
+    return base + "/" + child;
+}
+
+/// Collapse '.', '..' and duplicate separators into an absolute path.
+/// Returns the input unchanged when it cannot be resolved (e.g. missing path).
+inline std::string NormalizePath(const std::string& path) {
+    if (path.empty()) return path;
+#if defined(_WIN32)
+    const std::wstring w = ToWide(path);
+    if (w.empty()) return path;
+    DWORD n = ::GetFullPathNameW(w.c_str(), 0, NULL, NULL);
+    if (n == 0) return path;
+    std::vector<wchar_t> buf(static_cast<size_t>(n));
+    n = ::GetFullPathNameW(w.c_str(), n, &buf[0], NULL);
+    if (n == 0 || n >= buf.size()) return path;
+    return FromWide(std::wstring(&buf[0], n));
+#else
+    char buf[4096];
+    if (::realpath(path.c_str(), buf) == NULL) return path;
+    return std::string(buf);
+#endif
+}
 
 /// Read an environment variable. Returns an empty string when unset.
 inline std::string GetEnv(const char* name) {

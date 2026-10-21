@@ -4,6 +4,9 @@
 build/
 build-linux*/
 bin/
+dist/
+dist-aarch64/
+dist-armv7/
 *.suo
 *.user
 *.sdf
