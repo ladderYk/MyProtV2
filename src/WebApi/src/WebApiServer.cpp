@@ -478,11 +478,14 @@ WebApiServer::Response WebApiServer::Route(const std::string& method,
     using Service::ConfigScope;
 
     // ── /health 免认证 (存活探针) ──
+    // authRequired: 前端据此决定是否展示登录页与「退出」; 关闭认证时退出无意义
     if (path == "/health") {
         if (method != "GET") {
             return Response(405, "application/json", "{\"error\":\"method not allowed\"}");
         }
-        return Response(200, "application/json", "{\"status\":\"ok\"}");
+        return Response(200, "application/json",
+                        std::string("{\"status\":\"ok\",\"authRequired\":") +
+                            (_config.requireAuth ? "true" : "false") + "}");
     }
 
     // ── /metrics 免认证 (Prometheus 抓取; architecture/05 可观测性) ──

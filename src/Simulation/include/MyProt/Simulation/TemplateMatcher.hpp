@@ -53,6 +53,10 @@ public:
     /// Match returns only the first in compile order, so actual routing may defy config intent (warning only, does not block)
     const std::vector<std::string>& Ambiguities() const { return _ambiguities; }
 
+    /// Byte offset of the {Name:raw} variable-length tail within the request frame; -1 when absent or invalid.
+    /// Shares the CompileLine grammar with matching, so simulator write extraction stays aligned with recognition.
+    static int RawSegmentOffset(const std::vector<std::string>& requestTemplate);
+
 private:
     struct Segment {
         enum Kind { Literal, Variable, Wildcard, Raw } kind;

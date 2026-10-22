@@ -116,6 +116,25 @@ bool TemplateMatcher::CompileLine(const std::string& raw,
     return true;
 }
 
+int TemplateMatcher::RawSegmentOffset(
+        const std::vector<std::string>& requestTemplate) {
+    // 逐行累加定长字节, 遇到 raw 尾段即返回其起始偏移。
+    // 文法与 CompileLine 完全一致, 避免仿真写取数与模板识别脱节。
+    std::size_t off = 0;
+    for (std::size_t i = 0; i < requestTemplate.size(); ++i) {
+        std::vector<Segment> segs;
+        std::size_t lineSize = 0;
+        if (!CompileLine(requestTemplate[i], segs, lineSize)) return -1;
+        for (std::size_t s = 0; s < segs.size(); ++s) {
+            if (segs[s].kind == Segment::Raw) {
+                return static_cast<int>(off);
+            }
+        }
+        off += lineSize;
+    }
+    return -1;
+}
+
 void TemplateMatcher::Compile() {
     _ops.clear();
     _ambiguities.clear();

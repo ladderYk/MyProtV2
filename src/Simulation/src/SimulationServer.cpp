@@ -37,6 +37,7 @@ bool ExprReferences(const std::string& expr, const std::string& name) {
 ///   kind       ← 操作自身的 kind
 ///   addressVar ← outputs 中 expr 引用合约键 StartByteAddress 的 derivedLength 名
 ///   countVar   ← outputs 中 expr 引用合约键 ByteCount 的 derivedLength 名
+///   dataOffset ← write 且未显式声明时, 取 requestTemplate 中 {Name:raw} 尾段的起始偏移
 /// 已显式声明的字段不被覆盖 (server.json 优先, 便于协议无法表达时的例外配置).
 void DeriveSimDescriptors(const Core::ProtocolConfig& proto,
                           const Core::OperationConfig& op,
@@ -57,6 +58,12 @@ void DeriveSimDescriptors(const Core::ProtocolConfig& proto,
                 cfg.countVar = it->first;
             }
         }
+    }
+    // write 数据区偏移: server.json 显式声明优先; 未声明时由 requestTemplate
+    // 的 {Name:raw} 尾段自动推导 (如 Modbus FC16), 避免写请求静默丢弃。
+    if (cfg.kind == "write" && cfg.dataOffset < 0) {
+        const int off = TemplateMatcher::RawSegmentOffset(op.requestTemplate);
+        if (off >= 0) cfg.dataOffset = off;
     }
 }
 
@@ -112,6 +119,13 @@ bool SimulationServer::Start(std::string& err) {
         if (plan.cfg.kind != "read" && plan.cfg.kind != "write") continue;
         if (plan.cfg.addressVar.empty()) continue;
         if (plan.cfg.kind == "read" && plan.cfg.countVar.empty()) continue;
+        if (plan.cfg.kind == "write" && plan.cfg.dataOffset < 0) {
+            // 无 raw 尾段且未显式声明偏移: 写帧无法定位数据区 — 明确告警而非静默不应答
+            std::fprintf(stderr,
+                "[SimMatcher][warn] protocol '%s' op '%s': write has no dataOffset "
+                "and no {..:raw} tail; write frames will be ignored\n",
+                _protocol.protocolName.c_str(), opName.c_str());
+        }
         _plans[opName] = plan;
     }
 

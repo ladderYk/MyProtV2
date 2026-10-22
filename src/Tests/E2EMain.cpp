@@ -1628,6 +1628,8 @@ int RunE2E() {
                                     && !healthResp.empty());
         Check("GET /health body ok",
               healthResp.find("\"ok\"") != std::string::npos);
+        Check("GET /health reports authRequired",
+              healthResp.find("\"authRequired\":false") != std::string::npos);
 
         // 列表端点 閳?鎼存柨鎯?modbus
         const std::string listResp = HttpGet(
@@ -1724,6 +1726,18 @@ int RunE2E() {
         writeOp.responseParser.dataStartIndex = 12;   // FC06 回显请求: 数据区自第 12 字节起
         proto.operations["WriteSingleRegister"] = writeOp;
 
+        // FC16 变长写: 数据区由 {WriteValue:raw} 尾段承载。server.json 未声明
+        // dataOffset 时, 仿真器应从该尾段自动推导 (回归: 内置仿真器 FC16 静默丢包).
+        MyProt::Core::OperationConfig writeMultiOp;
+        writeMultiOp.name = "WriteMultipleRegisters";
+        writeMultiOp.requestTemplate = {
+            "{TransactionId:X4}", "00", "00", "00", "0B",
+            "01", "10", "{StartAddress:X4}", "{RegisterCount:X4}", "04", "{WriteValue:raw}"
+        };
+        writeMultiOp.responseParser.validCondition = "resp[7]==0x10";
+        writeMultiOp.responseParser.dataStartIndex = 12;
+        proto.operations["WriteMultipleRegisters"] = writeMultiOp;
+
                 // simulation 位于 ServerConfig (不在 ProtocolConfig) — 测试中
         //       使用独立的 SimulationConfig 实例喂给 SimulationServer.
         MyProt::Core::SimulationConfig sim;
@@ -1740,6 +1754,10 @@ int RunE2E() {
         { MyProt::Core::SimOperationConfig so; so.kind = "write";
           so.addressVar = "StartAddress"; so.dataOffset = 10;
           sim.operations["WriteSingleRegister"] = so; }
+        { MyProt::Core::SimOperationConfig so; so.kind = "write";
+          so.addressVar = "StartAddress";
+          // 不声明 dataOffset: 验证由 {WriteValue:raw} 尾段自动推导
+          sim.operations["WriteMultipleRegisters"] = so; }
 
         // 自定义应答模板操作 (P1#8): FC "10" 区分形状; 应答非 echo →
         // TID/UID/Addr+Value 变体 + 固定 FC + 自定义尾缀 AA BB
@@ -1919,6 +1937,35 @@ int RunE2E() {
                 Check("数据区校验一致",
                       simServer.Store().ReadRegisters(5, 1).size() == 2
                       && simServer.Store().ReadRegisters(5, 1)[0] == 0x30);
+            }
+
+            // ── FC16 变长写闭环: dataOffset 由 raw 尾段自动推导 ──
+            Check("14-17: raw 尾段偏移自动推导 (FC16 dataOffset=13)",
+                  MyProt::Simulation::TemplateMatcher::RawSegmentOffset(
+                      writeMultiOp.requestTemplate) == 13);
+            {
+                std::unordered_map<std::string, uint32_t> mvars;
+                mvars["StartAddress"] = 20;
+                mvars["RegisterCount"] = 2;
+                std::unordered_map<std::string, std::string> mbytes;
+                mbytes["WriteValue"] = "41480000";   // 12.5f (大端)
+                auto reqM = builder.BuildBytes(
+                    proto.operations["WriteMultipleRegisters"],
+                    mvars, mbytes, {}, autoProvider);
+                Check("14-18: FC16 变长写请求构建", reqM.has_value());
+                if (reqM.has_value()) {
+                    client.SetReadTimeoutMs(2000);
+                    Check("14-19: FC16 请求帧长 17", reqM.value().size() == 17);
+                    const std::vector<uint8_t> respM =
+                        client.SendReceive(reqM.value());
+                    Check("14-20: FC16 应答 12 字节且 FC=0x10",
+                          respM.size() == 12 && respM[7] == 0x10);
+                    const std::vector<uint8_t> regs =
+                        simServer.Store().ReadRegisters(20, 2);
+                    Check("14-21: FC16 数据落盘 (0x4148/0x0000)",
+                          regs.size() == 4 && regs[0] == 0x41 && regs[1] == 0x48
+                          && regs[2] == 0x00 && regs[3] == 0x00);
+                }
             }
 
             // ── 自定义应答模板闭环 (P1#8): 寄存器 9 = 777 → 模板应答逐字节校验 ──

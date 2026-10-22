@@ -120,7 +120,7 @@ public:
 
 | 方法 + 路径 | 功能 | 鉴权 |
 |------|------|------|
-| `GET /health` | 存活探针 | 免认证 |
+| `GET /health` | 存活探针，返回 `{"status":"ok","authRequired":bool}`；前端据此决定是否展示登录页与「退出」 | 免认证 |
 | `GET /*`（非 `/api` 路径）| 静态前端托管（webRoot，默认 `webui/dist`，Vue 构建产物；防路径穿越）| 免认证 |
 | `POST /api/config/reload` | 手动触发热重载 | Bearer + 限流 |
 | `GET /api/config/schema` | 字段注册表下发（UI 动态表单供数） | Bearer + 限流 |
