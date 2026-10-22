@@ -6,6 +6,7 @@
 // 直接变更传入的响应式 map 对象, 通过 emit('change') 通知父级落盘.
 import { reactive, ref, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
+import { t } from '../i18n'
 import FieldHelp from './FieldHelp.vue'
 import { VAR_HELP } from '../variableHelp'
 
@@ -21,7 +22,7 @@ const props = defineProps({
 const emit = defineEmits(['change'])
 
 const isOutputs = () => props.mode === 'outputs'
-const headerTitle = () => props.title || (isOutputs() ? '派生输出 (derivedLength)' : '输入变量 (inputs)')
+const headerTitle = () => props.title || t(isOutputs() ? '派生输出 (derivedLength)' : '输入变量 (inputs)')
 
 const AC_STRATEGIES = [
   { value: 'autoIncrement', label: '自增计数 (autoIncrement)', hint: '单调递增的 uint, seed=首次返回值' },
@@ -91,7 +92,7 @@ function renameVar(oldName, newName) {
   const nn = (newName || '').trim()
   if (!nn || nn === oldName) return
   const m = props.modelValue
-  if (m[nn]) { ElMessage.warning('已存在同名变量'); return }
+  if (m[nn]) { ElMessage.warning(t('已存在同名变量')); return }
   m[nn] = m[oldName]
   delete m[oldName]
   if (enumDrafts[nn] == null && enumDrafts[oldName] != null) {
@@ -152,7 +153,7 @@ function setStrategy(name, strategy) {
 
 function strategyHint(s) {
   const m = AC_STRATEGIES.find(x => x.value === s)
-  return m ? m.hint : ''
+  return m ? t(m.hint) : ''
 }
 
 // 字段写入: 空串/空值删除键; 数字字符串智能转 Number
@@ -217,10 +218,10 @@ function addEnum(name) {
   const draft = (enumDrafts[name] || '').trim()
   if (!draft) return
   const val = coerceEnumValue(draft)
-  if (val === null) { ElMessage.warning('枚举值须为整数 (或 0x 十六进制)'); return }
+  if (val === null) { ElMessage.warning(t('枚举值须为整数 (或 0x 十六进制)')); return }
   if (!Array.isArray(v.enum)) v.enum = []
   if (v.enum.some(x => enumMemberValue(x) === val)) {
-    ElMessage.warning('已存在该值'); enumDrafts[name] = ''; return
+    ElMessage.warning(t('已存在该值')); enumDrafts[name] = ''; return
   }
   const lbl = (enumLabelDrafts[name] || '').trim()
   // 有标签 → {value, label} 对象; 无标签 → 裸数字简写 (后端两种形态均合法)
@@ -243,23 +244,23 @@ function removeEnum(name, idx) {
   <div class="vt">
     <div class="vt-head">
       <span class="vt-title">{{ headerTitle() }}</span>
-      <el-button type="primary" size="small" plain @click="addVar">新增变量</el-button>
+      <el-button type="primary" size="small" plain @click="addVar">{{ t('新增变量') }}</el-button>
     </div>
 
     <el-alert
       v-if="!entries().length"
       type="info" :closable="false" show-icon
       :title="isOutputs()
-        ? '尚无派生输出。长度/数量字段在此声明为 derivedLength。'
-        : '尚无变量。模板 {占位符} 引用的变量须在此声明。'"
+        ? t('尚无派生输出。长度/数量字段在此声明为 derivedLength。')
+        : t('尚无变量。模板 {占位符} 引用的变量须在此声明。')"
     />
 
     <div v-if="entries().length" class="vt-table" :class="{ 'vt-cards': layout === 'cards' }">
       <div v-if="layout === 'table'" class="vt-row vt-head-row">
-        <div class="c-name">变量名</div>
-        <div class="c-src">来源<FieldHelp :text="VAR_HELP.source" /></div>
-        <div class="c-body">配置</div>
-        <div class="c-act">操作</div>
+        <div class="c-name">{{ t('变量名') }}</div>
+        <div class="c-src">{{ t('来源') }}<FieldHelp :text="VAR_HELP.source" /></div>
+        <div class="c-body">{{ t('配置') }}</div>
+        <div class="c-act">{{ t('操作') }}</div>
       </div>
 
       <div v-for="[name, v] in entries()" :key="name" class="vt-row"
@@ -301,7 +302,7 @@ function removeEnum(name, idx) {
               <span class="p-label">expr:<FieldHelp :text="VAR_HELP.expr" /></span>
               <el-input
                 :model-value="v.expr ?? ''" size="small" style="min-width: 160px"
-                placeholder="如 {Payload:len} + 7 / {Payload:len} / 2"
+                :placeholder="t('如 {Payload:len} + 7 / {Payload:len} / 2')"
                 spellcheck="false"
                 @update:model-value="val => setField(name, 'expr', val)"
               />
@@ -310,7 +311,7 @@ function removeEnum(name, idx) {
               <span class="p-label">label:</span>
               <el-input
                 :model-value="v.label ?? ''" size="small"
-                placeholder="显示名"
+                :placeholder="t('显示名')"
                 @update:model-value="val => setField(name, 'label', val)"
               />
             </div>
@@ -318,7 +319,7 @@ function removeEnum(name, idx) {
               <span class="p-label">unit:</span>
               <el-input
                 :model-value="v.unit ?? ''" size="small"
-                placeholder="单位"
+                :placeholder="t('单位')"
                 @update:model-value="val => setField(name, 'unit', val)"
               />
             </div>
@@ -330,7 +331,7 @@ function removeEnum(name, idx) {
               <span class="p-label">value:</span>
               <el-input
                 :model-value="v.value ?? ''" size="small"
-                placeholder="默认值(可空)"
+                :placeholder="t('默认值(可空)')"
                 spellcheck="false"
                 @update:model-value="val => setField(name, 'value', val)"
               />
@@ -339,7 +340,7 @@ function removeEnum(name, idx) {
               <span class="p-label">label:</span>
               <el-input
                 :model-value="v.label ?? ''" size="small"
-                placeholder="显示名"
+                :placeholder="t('显示名')"
                 @update:model-value="val => setField(name, 'label', val)"
               />
             </div>
@@ -347,7 +348,7 @@ function removeEnum(name, idx) {
               <span class="p-label">unit:</span>
               <el-input
                 :model-value="v.unit ?? ''" size="small"
-                placeholder="单位"
+                :placeholder="t('单位')"
                 @update:model-value="val => setField(name, 'unit', val)"
               />
             </div>
@@ -362,14 +363,14 @@ function removeEnum(name, idx) {
               >{{ enumMemberLabel(val) }}</el-tag>
               <el-input
                 :model-value="enumDrafts[name] || ''" size="small" class="enum-input"
-                placeholder="+ 值 (回车)"
+                :placeholder="t('+ 值 (回车)')"
                 spellcheck="false"
                 @update:model-value="d => { enumDrafts[name] = d }"
                 @keyup.enter="addEnum(name)"
               />
               <el-input
                 :model-value="enumLabelDrafts[name] || ''" size="small" class="enum-input"
-                placeholder="标签 (选填)"
+                :placeholder="t('标签 (选填)')"
                 spellcheck="false"
                 @update:model-value="d => { enumLabelDrafts[name] = d }"
                 @keyup.enter="addEnum(name)"
@@ -387,7 +388,7 @@ function removeEnum(name, idx) {
                 :title="strategyHint(v.strategy || '')"
                 @change="s => setStrategy(name, s)"
               >
-                <el-option v-for="s in AC_STRATEGIES" :key="s.value" :label="s.label" :value="s.value" />
+                <el-option v-for="s in AC_STRATEGIES" :key="s.value" :label="t(s.label)" :value="s.value" />
               </el-select>
             </div>
 
@@ -396,7 +397,7 @@ function removeEnum(name, idx) {
                 <span class="p-label">seed:</span>
                 <el-input
                   :model-value="v.params?.seed ?? ''" size="small"
-                  placeholder="首次返回值"
+                  :placeholder="t('首次返回值')"
                   @update:model-value="val => setParam(name, 'seed', val)"
                 />
               </div>
@@ -423,8 +424,8 @@ function removeEnum(name, idx) {
                   :model-value="v.params?.as || 'length'" size="small"
                   @change="val => setParam(name, 'as', val)"
                 >
-                  <el-option label="length (字节数)" value="length" />
-                  <el-option label="value (字节解释)" value="value" />
+                  <el-option :label="t('length (字节数)')" value="length" />
+                  <el-option :label="t('value (字节解释)')" value="value" />
                 </el-select>
               </div>
               <div v-if="v.params?.as === 'value'" class="f">
@@ -444,7 +445,7 @@ function removeEnum(name, idx) {
                 <span class="p-label">expr:</span>
                 <el-input
                   :model-value="v.params?.value ?? ''" size="small" style="min-width: 160px"
-                  placeholder="算术表达式"
+                  :placeholder="t('算术表达式')"
                   spellcheck="false"
                   @update:model-value="val => setParam(name, 'value', val)"
                 />
@@ -493,7 +494,7 @@ function removeEnum(name, idx) {
               <span class="p-label">label:</span>
               <el-input
                 :model-value="v.label ?? ''" size="small"
-                placeholder="显示名"
+                :placeholder="t('显示名')"
                 @update:model-value="val => setField(name, 'label', val)"
               />
             </div>
@@ -502,7 +503,7 @@ function removeEnum(name, idx) {
 
         <!-- 操作 -->
         <div class="c-act">
-          <el-button size="small" type="danger" text @click="removeVar(name)">删除</el-button>
+          <el-button size="small" type="danger" text @click="removeVar(name)">{{ t('删除') }}</el-button>
         </div>
       </div>
     </div>

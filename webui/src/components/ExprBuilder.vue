@@ -5,6 +5,7 @@
 
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
+import { t } from '../i18n'
 import {
   ElInput, ElSelect, ElOption, ElButton, ElTag, ElTooltip,
   ElCollapse, ElCollapseItem, ElDivider, ElAlert, ElDialog
@@ -81,17 +82,17 @@ const varReferences = computed(() => {
   // 特殊引用：{Name:len} 获取载荷字节长度
   props.availableVars.filter(v => v.type === 'payload' || v.name === 'WriteValue').forEach(v => {
     refs.push({
-      label: `${v.name}:len (字节长度)`,
+      label: `${v.name}:len ` + t('(字节长度)'),
       value: `{${v.name}:len}`,
-      desc: `获取 ${v.name} 的实际字节长度`,
+      desc: t('获取 {name} 的实际字节长度', { name: v.name }),
       type: 'len'
     })
   })
   // 特殊引用：{Frame:fixed} 固定帧头长度
   refs.push({
-    label: 'Frame:fixed (固定帧头长度)',
+    label: 'Frame:fixed ' + t('(固定帧头长度)'),
     value: '{Frame:fixed}',
-    desc: '请求模板中固定十六进制段的总字节数',
+    desc: t('请求模板中固定十六进制段的总字节数'),
     type: 'frame'
   })
   return refs
@@ -109,7 +110,7 @@ watch([expr, () => JSON.stringify(props.contextVars)], async () => {
     previewValue.value = r ? r.value : null
     const runtime = r ? r.runtimeRefs : []
     previewNotice.value = runtime.length
-      ? `含运行期变量 ${[...new Set(runtime)].join(', ')} — 运行期才有值, 此处无法静态求值`
+      ? t('含运行期变量 {vars} — 运行期才有值, 此处无法静态求值', { vars: [...new Set(runtime)].join(', ') })
       : ''
     previewRefs.value = r ? r.refs.map(n => ({
       name: n,
@@ -183,13 +184,13 @@ function safeEval(str) {
   // 简单的表达式求值器，支持 + - * / % ( )
   // 使用 Function 构造器但限制字符集
   if (!/^[\d\s+\-*/%().]+$/.test(str)) {
-    throw new Error('表达式包含非法字符，仅支持数字、+ - * / % ( )')
+    throw new Error(t('表达式包含非法字符, 仅支持数字、+ - * / % ( )'))
   }
   try {
     // eslint-disable-next-line no-new-func
     return Function('"use strict"; return (' + str + ')')()
   } catch (e) {
-    throw new Error('表达式语法错误: ' + e.message)
+    throw new Error(t('表达式语法错误: {msg}', { msg: e.message }))
   }
 }
 
@@ -211,13 +212,13 @@ function insertVarRef(item) {
 
 // 片段插入
 function insertSnippet(snippet) {
-  if (expr.value && !confirm(`将在光标处插入片段「${snippet.name}」，继续？`)) return
+  if (expr.value && !confirm(t('将在光标处插入片段「{name}」, 继续？', { name: t(snippet.name) }))) return
   insertAtCursor(snippet.expr)
 }
 
 // 清空表达式
 function clearExpr() {
-  if (expr.value && !confirm('清空表达式？')) return
+  if (expr.value && !confirm(t('清空表达式？'))) return
   expr.value = ''
 }
 
@@ -231,19 +232,19 @@ onMounted(() => {
     <!-- 工具栏 -->
     <div class="eb-toolbar">
       <div class="toolbar-group">
-        <span class="toolbar-label">运算符：</span>
+        <span class="toolbar-label">{{ t('运算符：') }}</span>
         <el-button
           v-for="o in OPERATORS" :key="o.op" size="small" text
-          @click="insertAtCursor(o.op)" :title="o.desc"
+          @click="insertAtCursor(o.op)" :title="t(o.desc)"
         >{{ o.op }}</el-button>
       </div>
 
       <el-divider direction="vertical" class="mx-2" />
 
       <div class="toolbar-group">
-        <span class="toolbar-label">变量引用：</span>
+        <span class="toolbar-label">{{ t('变量引用：') }}</span>
         <el-select
-          placeholder="选择变量插入"
+          :placeholder="t('选择变量插入')"
           style="width: 220px"
           filterable
           allow-create
@@ -261,8 +262,8 @@ onMounted(() => {
       <el-divider direction="vertical" class="mx-2" />
 
       <div class="toolbar-group">
-        <el-button size="small" @click="clearExpr" type="danger" plain>清空</el-button>
-        <el-switch v-model="showPreview" inline-prompt active-text="预览开" inactive-text="预览关" />
+        <el-button size="small" @click="clearExpr" type="danger" plain>{{ t('清空') }}</el-button>
+        <el-switch v-model="showPreview" inline-prompt :active-text="t('预览开')" :inactive-text="t('预览关')" />
       </div>
     </div>
 
@@ -271,7 +272,7 @@ onMounted(() => {
       <textarea
         v-model="expr"
         class="expr-textarea"
-        placeholder="输入 derivedLength 表达式，如：(StartByteAddress * 8) % 256\n支持：变量名、{Var:len}、{Frame:fixed}、+ - * / % ( )"
+        :placeholder="t('输入 derivedLength 表达式, 如:') + '\n' + t('支持: 变量名、{Var:len}、{Frame:fixed}、+ - * / % ( )')"
         spellcheck="false"
         @keydown.tab.prevent="e => insertAtCursor('  ')"
       />
@@ -279,23 +280,23 @@ onMounted(() => {
       <!-- 实时预览 -->
       <div v-if="showPreview" class="eb-preview" :class="{ error: previewError }">
         <div class="preview-header">
-          <span class="preview-title">实时求值预览</span>
-          <el-tag v-if="previewError" size="small" type="danger">求值失败</el-tag>
-          <el-tag v-else-if="previewNotice" size="small" type="warning">含运行期变量</el-tag>
+          <span class="preview-title">{{ t('实时求值预览') }}</span>
+          <el-tag v-if="previewError" size="small" type="danger">{{ t('求值失败') }}</el-tag>
+          <el-tag v-else-if="previewNotice" size="small" type="warning">{{ t('含运行期变量') }}</el-tag>
           <el-tag v-else-if="previewValue !== null" size="small" type="success">{{ formatFloat(previewValue) }}</el-tag>
-          <el-tag v-else size="small" type="info">等待输入</el-tag>
+          <el-tag v-else size="small" type="info">{{ t('等待输入') }}</el-tag>
         </div>
         <div v-if="previewError" class="preview-error">{{ previewError }}</div>
         <div v-else-if="previewNotice" class="preview-notice">{{ previewNotice }}</div>
         <div v-else-if="previewValue !== null" class="preview-result">
-          当前上下文计算结果：<code>{{ formatFloat(previewValue) }}</code>
+          {{ t('当前上下文计算结果：') }}<code>{{ formatFloat(previewValue) }}</code>
           <div class="preview-context" v-if="previewRefs.length">
-            依赖变量：
+            {{ t('依赖变量：') }}
             <el-tag
               v-for="rv in previewRefs" :key="rv.name" size="small" effect="plain"
               :type="rv.runtime ? 'warning' : ''"
-              :title="rv.runtime ? '运行期注入, 静态预览按 0 试算' : ''"
-            >{{ rv.name }}{{ rv.runtime ? ' (运行期)' : (rv.val !== undefined ? ' = ' + rv.val : '') }}</el-tag>
+              :title="rv.runtime ? t('运行期注入, 静态预览按 0 试算') : ''"
+            >{{ rv.name }}{{ rv.runtime ? t(' (运行期)') : (rv.val !== undefined ? ' = ' + rv.val : '') }}</el-tag>
           </div>
         </div>
       </div>
@@ -303,14 +304,14 @@ onMounted(() => {
 
     <!-- 常用片段库 -->
     <el-collapse class="eb-snippets" accordion>
-      <el-collapse-item name="snippets" :title="`常用片段库 (${SNIPPETS.length})`">
+      <el-collapse-item name="snippets" :title="t('常用片段库 ({n})', { n: SNIPPETS.length })">
         <div class="snippet-list">
           <div v-for="s in SNIPPETS" :key="s.name" class="snippet-item" @click="insertSnippet(s)">
             <div class="snippet-main">
-              <span class="snippet-name">{{ s.name }}</span>
+              <span class="snippet-name">{{ t(s.name) }}</span>
               <code class="snippet-expr">{{ s.expr }}</code>
             </div>
-            <div class="snippet-desc">{{ s.desc }}</div>
+            <div class="snippet-desc">{{ t(s.desc) }}</div>
           </div>
         </div>
       </el-collapse-item>
@@ -318,11 +319,11 @@ onMounted(() => {
 
     <!-- 变量参考表 -->
     <el-collapse class="eb-snippets" accordion>
-      <el-collapse-item name="vars" :title="`可用变量引用 (${varReferences.length})`">
+      <el-collapse-item name="vars" :title="t('可用变量引用 ({n})', { n: varReferences.length })">
         <div class="var-ref-table">
           <table>
             <thead>
-              <tr><th>引用写法</th><th>说明</th><th>类型</th></tr>
+              <tr><th>{{ t('引用写法') }}</th><th>{{ t('说明') }}</th><th>{{ t('类型') }}</th></tr>
             </thead>
             <tbody>
               <tr v-for="vr in varReferences" :key="vr.value">
@@ -338,20 +339,20 @@ onMounted(() => {
 
     <!-- 语法帮助 -->
     <el-collapse class="eb-snippets" accordion>
-      <el-collapse-item name="help" title="语法规则速查">
+      <el-collapse-item name="help" :title="t('语法规则速查')">
         <div class="help-content">
-          <h4>基础语法</h4>
+          <h4>{{ t('基础语法') }}</h4>
           <ul>
-            <li><code>变量名</code> — 直接引用协议 inputs/outputs 中定义的变量值</li>
-            <li><code>{VarName:len}</code> — 获取载荷变量的实际字节长度（仅 payload 类型）</li>
-            <li><code>{Frame:fixed}</code> — 请求模板中固定十六进制段的总字节数</li>
+            <li><code>{{ t('变量名') }}</code> — {{ t('直接引用协议 inputs/outputs 中定义的变量值') }}</li>
+            <li><code>{VarName:len}</code> — {{ t('获取载荷变量的实际字节长度 (仅 payload 类型)') }}</li>
+            <li><code>{Frame:fixed}</code> — {{ t('请求模板中固定十六进制段的总字节数') }}</li>
           </ul>
-          <h4>运算符</h4>
+          <h4>{{ t('运算符') }}</h4>
           <ul>
-            <li><code>+ - * / %</code> — 加减乘除取模（% 为取模，非百分比）</li>
-            <li><code>( )</code> — 括号控制优先级</li>
+            <li><code>+ - * / %</code> — {{ t('加减乘除取模 (% 为取模, 非百分比)') }}</li>
+            <li><code>( )</code> — {{ t('括号控制优先级') }}</li>
           </ul>
-          <h4>典型 S7 模式</h4>
+          <h4>{{ t('典型 S7 模式') }}</h4>
           <ul>
             <li><code>AddrLo: (StartByteAddress * 8) % 256</code></li>
             <li><code>AddrMid: ((StartByteAddress * 8) / 256) % 256</code></li>
@@ -360,7 +361,7 @@ onMounted(() => {
             <li><code>Length (Word): ByteCount / 2</code></li>
             <li><code>Length (DWord/Real): ByteCount / 4</code></li>
           </ul>
-          <h4>典型 Modbus 模式</h4>
+          <h4>{{ t('典型 Modbus 模式') }}</h4>
           <ul>
             <li><code>ByteCount: {WriteValue:len}</code></li>
             <li><code>RegisterCount: {WriteValue:len} / 2</code></li>

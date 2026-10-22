@@ -1,19 +1,18 @@
 <script setup>
-// 总览 — 全局状态 + 首次使用清单 + 配置健康 + 快捷动作 + 设备概览
+// 总览 — 全局状态 + 首次使用清单 + 配置健康 + 设备概览
 // 数据全部来自现有接口 (经 useRuntimeStatus 单例聚合, 避免每页重复轮询)
 import { ref, computed, onMounted } from 'vue'
 import PageHeader from './PageHeader.vue'
 import StatusBadge from './StatusBadge.vue'
 import EmptyState from './EmptyState.vue'
 import { validateConfig } from '../api'
+import { t } from '../i18n'
 import {
   runtimeState, refreshAll, deviceStats, goodCount, badCount, onlineDevices, tagTotal
 } from '../composables/useRuntimeStatus'
 
 const emit = defineEmits(['navigate'])
 
-const WELCOME_KEY = 'mp.ui.welcomeDismissed'
-const showWelcome = ref(localStorage.getItem(WELCOME_KEY) !== '1')
 
 // ── 配置校验 (标签侧; 协议侧较重, 不在此并发拉取) ──
 const health = ref({ state: 'idle', errorCount: 0, warningCount: 0, issues: [] })
@@ -44,12 +43,10 @@ onMounted(async () => {
   loadHealth()
 })
 
-function dismissWelcome() {
-  showWelcome.value = false
-  localStorage.setItem(WELCOME_KEY, '1')
-}
 
 // ── 开始使用清单 ──
+// 首屏数值快照未就绪时卡片显示「—」, 避免瞬间误报「0/4 在线、0/28 Good」
+const valuesReady = computed(() => !!runtimeState.lastUpdate)
 const checklist = computed(() => {
   const hasProtocol = runtimeState.protocols.length > 0
   const hasDevice = runtimeState.devices.length > 0
@@ -57,25 +54,27 @@ const checklist = computed(() => {
   const hasGood = goodCount.value > 0
   return [
     {
-      key: 'protocol', done: hasProtocol, title: '至少 1 个协议',
-      hint: hasProtocol ? `已有 ${runtimeState.protocols.length} 个协议` : '协议定义请求模板与变量契约',
-      action: '去协议配置', view: 'protocols', intent: null
+      key: 'protocol', done: hasProtocol, title: t('至少 1 个协议'),
+      hint: hasProtocol ? t('已有 {n} 个协议', { n: runtimeState.protocols.length }) : t('协议定义请求模板与变量契约'),
+      action: t('去协议配置'), view: 'protocols', intent: null
     },
     {
-      key: 'device', done: hasDevice, title: '至少 1 台设备',
-      hint: hasDevice ? `已有 ${runtimeState.devices.length} 台设备` : '设备绑定协议与连接地址',
-      action: '去添加设备', view: 'tags', intent: { add: 'device' }
+      key: 'device', done: hasDevice, title: t('至少 1 台设备'),
+      hint: hasDevice ? t('已有 {n} 台设备', { n: runtimeState.devices.length }) : t('设备绑定协议与连接地址'),
+      action: t('去添加设备'), view: 'tags', intent: { add: 'device' }
     },
     {
-      key: 'tag', done: hasTag, title: '至少 1 个标签',
-      hint: hasTag ? `已有 ${runtimeState.tags.length} 个标签` : '标签决定采集哪个地址、如何解码',
-      action: '去添加标签', view: 'tags', intent: { add: 'tag' }
+      key: 'tag', done: hasTag, title: t('至少 1 个标签'),
+      hint: hasTag ? t('已有 {n} 个标签', { n: runtimeState.tags.length }) : t('标签决定采集哪个地址、如何解码'),
+      action: t('去添加标签'), view: 'tags', intent: { add: 'tag' }
     },
     {
-      key: 'data', done: hasGood, title: '看到第一个 Good 值',
-      hint: hasGood ? `当前 ${goodCount.value} 个标签质量 Good`
-        : (hasTag ? '已配置但无 Good — 检查设备连接, 或启动仿真' : '配置标签后引擎轮询即产生数据'),
-      action: hasTag ? '去看实时监控' : '去启动仿真',
+      key: 'data', done: hasGood, title: t('看到第一个 Good 值'),
+      hint: !valuesReady.value
+        ? t('正在读取采集值…')
+        : (hasGood ? t('当前 {n} 个标签质量 Good', { n: goodCount.value })
+          : (hasTag ? t('已配置但无 Good — 检查设备连接, 或启动仿真') : t('配置标签后引擎轮询即产生数据'))),
+      action: hasTag ? t('去看实时监控') : t('去启动仿真'),
       view: hasTag ? 'live' : 'sim', intent: null
     }
   ]
@@ -92,7 +91,7 @@ function fmtTime(ts) {
 
 const reloadText = computed(() => {
   const r = runtimeState.lastReload
-  if (!r) return '本次会话尚未触发热重载'
+  if (!r) return t('尚未触发')
   return `${fmtTime(r.at)} · ${r.msg}`
 })
 
@@ -101,60 +100,65 @@ const reloadText = computed(() => {
 const unknownCount = computed(() => Math.max(0, tagTotal.value - goodCount.value - badCount.value))
 const tagHint = computed(() => {
   const parts = []
-  if (badCount.value) parts.push(`${badCount.value} 个非 Good`)
-  if (unknownCount.value) parts.push(`${unknownCount.value} 个无数据`)
-  if (!parts.length) return '质量统计来自最新快照'
-  return (goodCount.value > 0 ? '另有 ' : '') + parts.join(' · ')
+  if (badCount.value) parts.push(t('{n} 个非 Good', { n: badCount.value }))
+  if (unknownCount.value) parts.push(t('{n} 个无数据', { n: unknownCount.value }))
+  if (!parts.length) return t('质量统计来自最新快照')
+  return (goodCount.value > 0 ? t('另有 ') : '') + parts.join(' · ')
 })
 
 const stats = computed(() => [
   {
-    key: 'dev', label: '设备在线', value: `${onlineDevices.value}/${runtimeState.devices.length}`,
-    hint: '至少一个 Good 值视为在线', tone: onlineDevices.value > 0 ? 'ok' : 'off', view: 'tags'
+    key: 'dev', label: t('设备在线'),
+    value: valuesReady.value ? `${onlineDevices.value}/${runtimeState.devices.length}` : '—',
+    hint: valuesReady.value ? t('至少一个 Good 值视为在线') : t('正在读取运行状态…'),
+    tone: onlineDevices.value > 0 ? 'ok' : 'off', view: 'tags'
   },
   {
-    key: 'tag', label: '标签 Good', value: `${goodCount.value}/${tagTotal.value}`,
-    hint: tagHint.value, tone: goodCount.value > 0 ? 'ok' : 'off', view: 'live'
+    key: 'tag', label: t('标签 Good'),
+    value: valuesReady.value ? `${goodCount.value}/${tagTotal.value}` : '—',
+    hint: valuesReady.value ? tagHint.value : t('正在读取采集值…'),
+    tone: goodCount.value > 0 ? 'ok' : 'off', view: 'live'
   },
   {
-    key: 'proto', label: '协议', value: String(runtimeState.protocols.length),
-    hint: '协议配置数', tone: 'info', view: 'protocols'
+    key: 'proto', label: t('协议'), value: String(runtimeState.protocols.length),
+    hint: t('协议配置数'), tone: 'info', view: 'protocols'
   },
   {
-    key: 'sim', label: '仿真器', value: String(runtimeState.simulators.length),
-    hint: '运行中的仿真端口数', tone: runtimeState.simulators.length ? 'info' : 'off', view: 'sim'
+    key: 'sim', label: t('仿真器'),
+    value: valuesReady.value ? String(runtimeState.simulators.length) : '—',
+    hint: valuesReady.value ? t('运行中的仿真端口数') : t('正在读取运行状态…'),
+    tone: runtimeState.simulators.length ? 'info' : 'off', view: 'sim'
   }
 ])
 
-const quickActions = [
-  { label: '新建协议', view: 'protocols', intent: { create: true } },
-  { label: '新增设备', view: 'tags', intent: { add: 'device' } },
-  { label: '新增标签', view: 'tags', intent: { add: 'tag' } },
-  { label: '打开实时监控', view: 'live', intent: null }
-]
+// 健康状态 → 紧凑徽标/文案 (清单折叠后仍要能一眼看到)
+const healthBadge = computed(() => {
+  if (health.value.state !== 'ok') return null
+  if (health.value.errorCount) return { kind: 'bad', text: t('{n} 错误', { n: health.value.errorCount }) }
+  if (health.value.warningCount) return { kind: 'warn', text: t('{n} 警告', { n: health.value.warningCount }) }
+  return { kind: 'ok', text: t('无问题') }
+})
+const healthMuted = computed(() => {
+  if (health.value.state === 'loading') return t('校验中…')
+  if (health.value.state === 'none') return t('尚未创建标签配置')
+  if (health.value.state === 'err') return t('校验接口不可用')
+  return '—'
+})
 
 function nav(view, intent) { emit('navigate', view, intent || null) }
 </script>
 
 <template>
   <div class="overview">
-    <PageHeader title="总览" desc="系统当前状态与配置完成度; 首次使用按清单从上到下走一遍即可。">
+    <PageHeader :title="t('总览')" :desc="t('系统当前状态与配置完成度; 未完成项会给出下一步入口。')">
       <template #actions>
         <button class="btn small" :disabled="runtimeState.loading" @click="refreshAll()">
-          {{ runtimeState.loading ? '刷新中…' : '刷新' }}
+          {{ runtimeState.loading ? t('刷新中…') : t('刷新') }}
         </button>
       </template>
     </PageHeader>
 
     <div class="scroll">
-      <!-- 首次使用欢迎条 (可关闭, 不阻塞操作) -->
-      <div v-if="showWelcome" class="welcome">
-        <div class="welcome-text">
-          <b>第一次使用?</b> 从「开始使用」清单开始 — 协议 → 设备 → 标签 → 数据, 每步都有直达入口。
-        </div>
-        <button class="welcome-close" title="不再显示" @click="dismissWelcome">×</button>
-      </div>
-
       <!-- ① 状态卡行 -->
       <div class="stat-row">
         <button
@@ -167,19 +171,31 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
         </button>
       </div>
 
-      <div class="cols">
-        <!-- ② 开始使用清单 -->
-        <section class="panel block">
-          <header class="block-head">
-            <h2 class="block-title">开始使用</h2>
-            <span class="block-meta">{{ doneCount }}/{{ checklist.length }}</span>
-          </header>
+      <!-- ② 开始使用: 未完成时展开清单, 就绪后折叠为一行摘要 -->
+      <section class="panel block">
+        <header class="block-head">
+          <h2 class="block-title">{{ t('开始使用') }}</h2>
+          <span class="block-meta">{{ doneCount }}/{{ checklist.length }}</span>
+        </header>
+
+        <div v-if="ready" class="ready-row">
+          <StatusBadge kind="ok" :text="t('配置已就绪')" />
+          <span class="ready-summary">
+            {{ t('{devices} 台设备 · {tags} 个标签 · {good} 个 Good', { devices: runtimeState.devices.length, tags: tagTotal, good: goodCount }) }}
+          </span>
+          <span class="ready-spacer"></span>
+          <span class="health-inline">
+            {{ t('标签配置') }}
+            <StatusBadge v-if="healthBadge" :kind="healthBadge.kind" :text="healthBadge.text" />
+            <span v-else class="health-muted">{{ healthMuted }}</span>
+          </span>
+          <span class="health-inline">{{ t('最近热重载 · {text}', { text: reloadText }) }}</span>
+          <button class="link-btn" @click="loadHealth">{{ t('重新校验') }}</button>
+        </div>
+
+        <template v-else>
           <div class="progress">
             <div class="progress-bar" :style="{ width: (doneCount / checklist.length * 100) + '%' }"></div>
-          </div>
-          <div v-if="ready" class="ready">
-            <StatusBadge kind="ok" text="配置已就绪" />
-            <span class="ready-text">协议、设备、标签与采集值均已就绪, 可在「实时监控」查看与写入。</span>
           </div>
           <ul class="checklist">
             <li v-for="c in checklist" :key="c.key" class="check-item" :class="{ done: c.done }">
@@ -189,65 +205,40 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
                 <div class="check-hint">{{ c.hint }}</div>
               </div>
               <button v-if="!c.done" class="btn small" @click="nav(c.view, c.intent)">{{ c.action }}</button>
-              <span v-else class="check-done">已完成</span>
+              <span v-else class="check-done">{{ t('已完成') }}</span>
             </li>
           </ul>
-        </section>
+          <div class="check-foot">
+            <span class="health-inline">
+              {{ t('标签配置') }}
+              <StatusBadge v-if="healthBadge" :kind="healthBadge.kind" :text="healthBadge.text" />
+              <span v-else class="health-muted">{{ healthMuted }}</span>
+            </span>
+            <span class="health-inline">{{ t('最近热重载 · {text}', { text: reloadText }) }}</span>
+            <button class="link-btn" @click="loadHealth">{{ t('重新校验') }}</button>
+          </div>
+        </template>
 
-        <!-- ③ 配置健康 + ④ 快捷动作 -->
-        <div class="side-col">
-          <section class="panel block">
-            <header class="block-head">
-              <h2 class="block-title">配置健康</h2>
-              <button class="link-btn" @click="loadHealth">重新校验</button>
-            </header>
-            <div class="health-row">
-              <span class="health-label">标签配置</span>
-              <template v-if="health.state === 'ok'">
-                <StatusBadge v-if="health.errorCount" kind="bad" :text="`${health.errorCount} 错误`" />
-                <StatusBadge v-if="health.warningCount" kind="warn" :text="`${health.warningCount} 警告`" />
-                <StatusBadge v-if="!health.errorCount && !health.warningCount" kind="ok" text="无问题" />
-              </template>
-              <span v-else-if="health.state === 'loading'" class="health-muted">校验中…</span>
-              <span v-else-if="health.state === 'none'" class="health-muted">尚未创建标签配置</span>
-              <span v-else-if="health.state === 'err'" class="health-muted">校验接口不可用</span>
-              <span v-else class="health-muted">—</span>
-            </div>
-            <button
-              v-if="health.issues.length"
-              class="health-issues" @click="nav('tags', { focus: health.issues[0] })"
-            >
-              查看 {{ health.issues.length }} 条问题 →
-            </button>
-            <div class="health-row">
-              <span class="health-label">最近热重载</span>
-              <span class="health-muted">{{ reloadText }}</span>
-            </div>
-          </section>
-
-          <section class="panel block">
-            <header class="block-head"><h2 class="block-title">快捷动作</h2></header>
-            <div class="quick-grid">
-              <button v-for="q in quickActions" :key="q.label" class="quick-btn" @click="nav(q.view, q.intent)">
-                {{ q.label }}
-              </button>
-            </div>
-          </section>
-        </div>
-      </div>
+        <button
+          v-if="health.issues.length"
+          class="health-issues" @click="nav('tags', { focus: health.issues[0] })"
+        >
+          {{ t('查看 {n} 条问题 →', { n: health.issues.length }) }}
+        </button>
+      </section>
 
       <!-- ⑤ 设备概览表 -->
       <section class="panel block">
         <header class="block-head">
-          <h2 class="block-title">设备概览</h2>
-          <span class="block-meta">{{ deviceStats.length }} 台 · 点击行进入标签配置</span>
+          <h2 class="block-title">{{ t('设备概览') }}</h2>
+          <span class="block-meta">{{ t('{n} 台 · 点击行进入标签配置', { n: deviceStats.length }) }}</span>
         </header>
         <div v-if="deviceStats.length" class="table-wrap">
           <table class="dev-table">
             <thead>
               <tr>
-                <th>设备 ID</th><th>协议</th><th>地址</th><th>标签数</th>
-                <th>Good / Bad</th><th>最后更新</th>
+                <th>{{ t('设备 ID') }}</th><th>{{ t('协议') }}</th><th>{{ t('地址') }}</th><th>{{ t('标签数') }}</th>
+                <th>{{ t('Good / Bad') }}</th><th>{{ t('最后更新') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -268,9 +259,9 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
         </div>
         <EmptyState
           v-else
-          title="还没有设备"
-          desc="设备把协议与现场地址绑定起来; 添加第一台设备后, 这里会显示在线与采集状态。"
-          action-text="新增设备"
+          :title="t('还没有设备')"
+          :desc="t('设备把协议与现场地址绑定起来; 添加第一台设备后, 这里会显示在线与采集状态。')"
+          :action-text="t('新增设备')"
           @action="nav('tags', { add: 'device' })"
         />
       </section>
@@ -281,26 +272,6 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
 <style scoped>
 .overview { display: flex; flex-direction: column; min-height: 0; }
 .scroll { flex: 1; min-height: 0; overflow-y: auto; padding-right: 2px; }
-
-/* 欢迎条 */
-.welcome {
-  display: flex;
-  align-items: center;
-  gap: var(--mp-sp-3);
-  padding: 10px 12px 10px 14px;
-  margin-bottom: var(--mp-sp-4);
-  border: 1px solid var(--mp-accent-line);
-  background: var(--mp-accent-soft);
-  border-radius: var(--mp-radius);
-  font-size: var(--mp-fs-sm);
-  color: var(--mp-accent-hover);
-}
-.welcome-text { flex: 1; line-height: 1.6; }
-.welcome-close {
-  border: 0; background: transparent; color: inherit;
-  font-size: 18px; line-height: 1; opacity: .6;
-}
-.welcome-close:hover { opacity: 1; }
 
 /* 状态卡 */
 .stat-row {
@@ -336,16 +307,8 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
 }
 .stat-hint { font-size: var(--mp-fs-xs); color: var(--mp-muted-2); }
 
-/* 两栏 */
-.cols {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: var(--mp-sp-4);
-  margin-bottom: var(--mp-sp-4);
-  align-items: start;
-}
-.side-col { display: flex; flex-direction: column; gap: var(--mp-sp-4); }
 .block { padding: var(--mp-sp-4); }
+.block + .block { margin-top: var(--mp-sp-4); }
 .block-head {
   display: flex;
   align-items: baseline;
@@ -378,16 +341,15 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
   background: var(--mp-accent);
   transition: width .25s ease;
 }
-.ready {
+/* 就绪摘要: 清单折叠为一行 */
+.ready-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  margin-bottom: var(--mp-sp-3);
-  border-radius: var(--mp-radius-sm);
-  background: var(--mp-ok-soft);
+  gap: var(--mp-sp-3);
 }
-.ready-text { font-size: var(--mp-fs-sm); color: var(--mp-ok-ink); line-height: 1.5; }
+.ready-summary { font-size: var(--mp-fs-sm); color: var(--mp-ink-2); }
+.ready-spacer { flex: 1; min-width: 0; }
 
 /* 清单 */
 .checklist { list-style: none; display: flex; flex-direction: column; }
@@ -420,38 +382,33 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
 .check-hint { font-size: var(--mp-fs-sm); color: var(--mp-muted); line-height: 1.5; }
 .check-done { font-size: var(--mp-fs-xs); color: var(--mp-ok-ink); }
 
-/* 配置健康 */
-.health-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--mp-sp-2);
-  padding: 6px 0;
+/* 健康状态: 内联在清单底部或就绪摘要中 */
+.health-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--mp-fs-sm);
+  color: var(--mp-muted);
 }
-.health-label { width: 84px; flex-shrink: 0; color: var(--mp-muted); }
+.health-inline + .health-inline {
+  padding-left: 14px;
+  border-left: 1px solid var(--mp-border);
+}
 .health-muted { color: var(--mp-ink-2); line-height: 1.5; }
+.check-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mp-sp-4);
+  padding-top: 10px;
+  margin-top: 2px;
+  border-top: 1px solid var(--mp-border);
+}
 .health-issues {
   border: 0; background: transparent; padding: 0 0 4px;
   font-size: var(--mp-fs-sm); color: var(--mp-err-ink);
 }
 .health-issues:hover { text-decoration: underline; }
-
-/* 快捷动作 */
-.quick-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--mp-sp-2);
-}
-.quick-btn {
-  padding: 9px 10px;
-  border: 1px solid var(--mp-border);
-  border-radius: var(--mp-radius-sm);
-  background: var(--mp-surface-2);
-  color: var(--mp-ink-2);
-  font-size: var(--mp-fs-sm);
-  text-align: left;
-}
-.quick-btn:hover { border-color: var(--mp-accent); color: var(--mp-accent-hover); background: var(--mp-accent-soft); }
 
 /* 设备表 */
 .table-wrap { overflow-x: auto; }
@@ -472,6 +429,12 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
   border-bottom: 1px solid var(--mp-surface-3);
   color: var(--mp-ink-2);
 }
+/* 数值列右对齐, 便于纵向比对 */
+.dev-table th:nth-child(4), .dev-table td:nth-child(4),
+.dev-table th:nth-child(5), .dev-table td:nth-child(5) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 .dev-table tbody tr { cursor: pointer; }
 .dev-table tbody tr:hover td { background: var(--mp-accent-soft); }
 .strong { font-weight: 600; color: var(--mp-ink); }
@@ -479,10 +442,10 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
 
 @media (max-width: 1100px) {
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .cols { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
   .stat-row { grid-template-columns: 1fr; }
-  .quick-grid { grid-template-columns: 1fr; }
+  .ready-row { flex-direction: column; align-items: flex-start; gap: var(--mp-sp-2); }
+  .ready-spacer { display: none; }
 }
 </style>

@@ -11,6 +11,7 @@ import {
   listConfigs, getConfig, saveConfig, deleteConfig,
   listBackups, restoreBackup, validateConfig
 } from '../api'
+import { t, locale } from '../i18n'
 
 const props = defineProps({
   scope: { type: String, required: true },
@@ -44,6 +45,8 @@ const itemKw = ref('')              // 协议列表搜索关键字
 // ── 方案 2: 结构化校验问题 (自检 / 保存被拒) ──
 const issues = ref([])              // [{severity,ruleId,subject,field,message}]
 const issueHead = ref('')           // 面板标题 (含计数)
+const issueTitle = ref('')          // 标题原文 key (随语言切换重算)
+const issueCount = ref({ e: 0, w: 0 })
 const showIssues = ref(false)       // 可折叠问题横幅: 默认只显示计数, 展开看清单
 const formRef = ref(null)           // 当前表单组件实例 (focusIssue 跳转用)
 const newNameEl = ref(null)         // 「新建协议」输入框 (外部跳转可自动聚焦)
@@ -58,8 +61,8 @@ const filteredItems = computed(() => {
 
 const formComponent = computed(() => (isProtocols ? ProtocolForm : TagsForm))
 const pageDesc = computed(() => (isProtocols
-  ? '每个协议定义传输、成帧、变量与操作; 保存后自动热重载'
-  : '设备绑定协议与连接地址, 标签定义采集点位与写能力'))
+  ? t('每个协议定义传输、成帧、变量与操作; 保存后自动热重载')
+  : t('设备绑定协议与连接地址, 标签定义采集点位与写能力')))
 
 function flash(kind, msg) {
   messageKind.value = kind
@@ -90,7 +93,7 @@ async function refreshList() {
 async function open(name) {
   // 未保存修改确认: 切换到不同配置项时若存在未保存修改, 提醒 (避免静默丢失)
   if (dirty.value && name !== selected.value &&
-      !confirm('当前配置有未保存的修改，切换后将丢失。确定切换？')) {
+      !confirm(t('当前配置有未保存的修改，切换后将丢失。确定切换？'))) {
     return
   }
   try {
@@ -173,7 +176,7 @@ function onRawChange(text) {
 // 表单/JSON 模式切换 (JSON 语法错误时禁止切回表单)
 function showForm() {
   if (parseError.value) {
-    ElMessage.warning('JSON 存在语法错误，无法切换到表单: ' + parseError.value)
+    ElMessage.warning(t('JSON 存在语法错误，无法切换到表单: {msg}', { msg: parseError.value }))
     return
   }
   // 只有 JSON 内容真的改过才重建表单; 单纯切页签保留表单内的选中节点/页签
@@ -189,14 +192,14 @@ async function onSave() {
   try {
     JSON.parse(rawText.value)              // 客户端先校验一道
   } catch (e) {
-    flash('err', 'JSON 格式错误，未提交: ' + e.message)
+    flash('err', t('JSON 格式错误，未提交: {msg}', { msg: e.message }))
     return
   }
   try {
     await saveConfig(props.scope, selected.value, rawText.value)
     setBaseline(rawText.value)
     dirty.value = false
-    flash('ok', '已保存并触发热重载')
+    flash('ok', t('已保存并触发热重载'))
     backups.value = await listBackups(props.scope, selected.value)
     emit('changed')                        // 外层刷新全局统计/热重载结果
   } catch (e) {
@@ -224,42 +227,49 @@ async function onSelfCheck() {
   try {
     JSON.parse(rawText.value)
   } catch (e) {
-    flash('err', 'JSON 格式错误，无法自检: ' + e.message)
+    flash('err', t('JSON 格式错误，无法自检: {msg}', { msg: e.message }))
     return
   }
   try {
     const rep = await validateConfig(props.scope, selected.value, rawText.value)
     setIssues(rep, '自检结果')
-    if (!rep.issues || !rep.issues.length) flash('ok', '自检通过: 无阻断项')
+    if (!rep.issues || !rep.issues.length) flash('ok', t('自检通过: 无阻断项'))
   } catch (e) {
-    flash('err', '自检失败: ' + e.message)
+    flash('err', t('自检失败: {msg}', { msg: e.message }))
   }
 }
 
 function setIssues(rep, title) {
   issues.value = rep.issues || []
-  const count = `${rep.errorCount || 0} 项错误 / ${rep.warningCount || 0} 项警告`
-  issueHead.value = `${title}: ${count}` + (issues.value.length ? ' — 点击条目跳转' : '')
+  issueTitle.value = title
+  issueCount.value = { e: rep.errorCount || 0, w: rep.warningCount || 0 }
+  issueHead.value = buildIssueHead()
   showIssues.value = issues.value.length > 0   // 有结果时自动展开, 无问题则保持收起
 }
+function buildIssueHead() {
+  if (!issueTitle.value) return ''
+  const count = t('{e} 项错误 / {w} 项警告', issueCount.value)
+  return t(issueTitle.value) + ': ' + count + (issues.value.length ? t(' — 点击条目跳转') : '')
+}
+watch(locale, () => { issueHead.value = buildIssueHead() })
 
 /// 点击条目 → 表单定位 (协议: 区块/操作; 标签: 设备/标签)
 async function onIssueClick(it) {
   if (activeTab.value !== 'form') {       // JSON 模式下 → 先切回表单
-    if (parseError.value) { flash('err', '请先修正 JSON 语法错误再定位'); return }
+    if (parseError.value) { flash('err', t('请先修正 JSON 语法错误再定位')); return }
     showForm()
     await nextTick()
   }
   const f = formRef.value
   const hint = (f && typeof f.focusIssue === 'function') ? f.focusIssue(it) : ''
-  flash('ok', hint || ('无法自动定位; 请按关键词搜索: ' + (it.subject || it.field || it.ruleId)))
+  flash('ok', hint || t('无法自动定位; 请按关键词搜索: {kw}', { kw: it.subject || it.field || it.ruleId }))
 }
 
 async function onDelete(name) {
   // 左侧列表项直接传入名称; toolbar 按钮不传参 (click 事件对象) → 回退到当前选中项
   const target = (typeof name === 'string' && name) ? name : selected.value
   if (!target) return
-  if (!confirm(`确定删除协议配置「${target}」？其备份将一并删除。`)) return
+  if (!confirm(t('确定删除协议配置「{name}」？其备份将一并删除。', { name: target }))) return
   try {
     await deleteConfig(props.scope, target)
     if (target === selected.value) {
@@ -270,7 +280,7 @@ async function onDelete(name) {
       backups.value = []
     }
     await refreshList()
-    flash('ok', `已删除 ${target}`)
+    flash('ok', t('已删除 {name}', { name: target }))
     emit('changed')
   } catch (e) {
     flash('err', e.message)
@@ -528,7 +538,7 @@ function modbusTcpTemplate(name) {
 async function onCreate() {
   const name = newName.value.trim()
   if (!/^[A-Za-z0-9_-]+$/.test(name)) {
-    flash('err', '名称仅允许字母、数字、下划线和中划线')
+    flash('err', t('名称仅允许字母、数字、下划线和中划线'))
     return
   }
   // 注意: 后端 Save 会对 Protocol 做深度字段校验, 空白内容会因缺必填字段被拒
@@ -544,7 +554,7 @@ async function onCreate() {
     newName.value = ''
     await refreshList()
     await open(name)
-    flash('ok', `已创建 ${name}.json`)
+    flash('ok', t('已创建 {name}.json', { name }))
     emit('changed')
   } catch (e) {
     flash('err', e.message)
@@ -552,11 +562,11 @@ async function onCreate() {
 }
 
 async function onRestore(tag) {
-  if (!confirm(`确定回滚「${selected.value}」到 ${tag}？当前未保存的修改将丢失。`)) return
+  if (!confirm(t('确定回滚「{name}」到 {tag}？当前未保存的修改将丢失。', { name: selected.value, tag }))) return
   try {
     await restoreBackup(props.scope, selected.value, tag)
     await open(selected.value)
-    flash('ok', `已回滚到 ${tag}`)
+    flash('ok', t('已回滚到 {tag}', { tag }))
     emit('changed')
   } catch (e) {
     flash('err', e.message)
@@ -578,7 +588,7 @@ async function applyIntent() {
   const f = formRef.value
   if (!f) return
   if (it.device && typeof f.focusDevice === 'function') {
-    if (f.focusDevice(it.device)) flash('ok', `已定位到设备「${it.device}」`)
+    if (f.focusDevice(it.device)) flash('ok', t('已定位到设备「{name}」', { name: it.device }))
   } else if (it.add === 'device' && typeof f.addDevice === 'function') {
     f.addDevice()
   } else if (it.add === 'tag' && typeof f.addTag === 'function') {
@@ -623,15 +633,15 @@ watch(() => props.scope, () => {
 
 <template>
   <div class="workbench">
-    <PageHeader :title="titles[scope] || scope" :desc="pageDesc">
+    <PageHeader :title="t(titles[scope] || scope)" :desc="pageDesc">
       <template #meta>
-        <span v-if="isProtocols">共 {{ items.length }} 个协议</span>
-        <span v-else>设备与标签统一维护在同一个文件</span>
+        <span v-if="isProtocols">{{ t('共 {n} 个协议', { n: items.length }) }}</span>
+        <span v-else>{{ t('设备与标签统一维护在同一个文件') }}</span>
       </template>
     </PageHeader>
 
     <div v-if="message" class="msg" :class="messageKind">
-      <button class="msg-close" title="关闭" @click="dismissMessage">×</button>
+      <button class="msg-close" :title="t('关闭')" @click="dismissMessage">×</button>
       <template v-if="messageLines.length > 1">
         <div class="msg-head">{{ messageLines[0] }}</div>
         <ul class="msg-list">
@@ -645,11 +655,11 @@ watch(() => props.scope, () => {
       <!-- v4: 协议列表左置 (搜索 + 列表 + 新建); 编辑区在右 -->
       <aside v-if="isProtocols" class="cfg-list">
         <div class="cfg-list-head">
-          <span>协议</span>
+          <span>{{ t('协议') }}</span>
           <span class="cfg-count">{{ items.length }}</span>
         </div>
         <div class="cfg-search">
-          <input v-model="itemKw" placeholder="搜索协议" />
+          <input v-model="itemKw" :placeholder="t('搜索协议')" />
         </div>
         <ul class="cfg-items">
           <li
@@ -658,20 +668,20 @@ watch(() => props.scope, () => {
             @click="onSelectTab(it)"
           >
             <span class="cfg-item-name" :title="it">{{ it }}</span>
-            <span v-if="dirty && it === selected" class="dirty-dot" title="未保存"></span>
-            <button class="cfg-del" title="删除该协议" @click.stop="onDelete(it)">×</button>
+            <span v-if="dirty && it === selected" class="dirty-dot" :title="t('未保存')"></span>
+            <button class="cfg-del" :title="t('删除该协议')" @click.stop="onDelete(it)">×</button>
           </li>
         </ul>
-        <div v-if="!filteredItems.length" class="cfg-empty">无匹配协议</div>
+        <div v-if="!filteredItems.length" class="cfg-empty">{{ t('无匹配协议') }}</div>
         <div class="create-area stacked">
-          <select v-model="newTemplate" title="新建模板">
-            <option value="modbus">Modbus TCP 模板</option>
-            <option value="s7">S7-1200 模板 (含握手)</option>
-            <option value="seer">SEER AGV 模板</option>
-            <option value="blank">空白骨架</option>
+          <select v-model="newTemplate" :title="t('新建模板')">
+            <option value="modbus">{{ t('Modbus TCP 模板') }}</option>
+            <option value="s7">{{ t('S7-1200 模板 (含握手)') }}</option>
+            <option value="seer">{{ t('SEER AGV 模板') }}</option>
+            <option value="blank">{{ t('空白骨架') }}</option>
           </select>
-          <input ref="newNameEl" v-model="newName" placeholder="新协议名" @keyup.enter="onCreate" />
-          <button class="btn small primary" :disabled="!newName.trim()" @click="onCreate">新建</button>
+          <input ref="newNameEl" v-model="newName" :placeholder="t('新协议名')" @keyup.enter="onCreate" />
+          <button class="btn small primary" :disabled="!newName.trim()" @click="onCreate">{{ t('新建') }}</button>
         </div>
       </aside>
 
@@ -681,28 +691,28 @@ watch(() => props.scope, () => {
       <!-- 内容区 (tags 单页直出, protocols 需先选中 tab) -->
       <template v-if="selected && (doc || parseError)">
         <div class="toolbar">
-          <span class="file-name mono">{{ selected }}{{ isProtocols ? '.json' : '' }}</span>
-          <span v-if="dirty" class="dirty-mark">未保存</span>
+          <span class="file-name mono">{{ selected }}.json</span>
+          <span v-if="dirty" class="dirty-mark">{{ t('未保存') }}</span>
           <span class="spacer"></span>
           <!-- 历史备份: 低频动作收进下拉, 不再常驻一行 -->
           <el-dropdown v-if="backups.length" trigger="click" @command="onRestore">
-            <button class="btn small">历史备份 ({{ backups.length }})</button>
+            <button class="btn small">{{ t('历史备份 ({n})', { n: backups.length }) }}</button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item v-for="tag in backups" :key="tag" :command="tag">
-                  回滚到 {{ tag }}
+                  {{ t('回滚到 {tag}', { tag }) }}
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
           <div class="segmented">
-            <button :class="{ active: activeTab === 'form' }" @click="showForm">表单</button>
+            <button :class="{ active: activeTab === 'form' }" @click="showForm">{{ t('表单') }}</button>
             <button :class="{ active: activeTab === 'json' }" @click="showJson">JSON</button>
           </div>
-          <button v-if="isProtocols" class="btn danger small" @click="() => onDelete()">删除</button>
+          <button v-if="isProtocols" class="btn danger small" @click="() => onDelete()">{{ t('删除') }}</button>
           <!-- 方案 2: 只读自检 (不落盘) — 保存前先看问题 -->
-          <button class="btn small" :disabled="!selected" @click="onSelfCheck">自检</button>
-          <button class="btn primary small" :disabled="!dirty" @click="onSave">保存</button>
+          <button class="btn small" :disabled="!selected" @click="onSelfCheck">{{ t('自检') }}</button>
+          <button class="btn primary small" :disabled="!dirty" @click="onSave">{{ t('保存') }}</button>
         </div>
 
         <!-- 方案 2: 结构化校验问题清单 — 可折叠横幅, 默认只显示计数 -->
@@ -713,13 +723,13 @@ watch(() => props.scope, () => {
           </button>
           <ul v-show="showIssues" class="issue-list">
             <li v-for="(it, i) in issues" :key="i" @click="onIssueClick(it)">
-              <span class="issue-sev" :class="it.severity">{{ it.severity === 'error' ? '错误' : '警告' }}</span>
+              <span class="issue-sev" :class="it.severity">{{ it.severity === 'error' ? t('错误') : t('警告') }}</span>
               <code class="issue-rule">{{ it.ruleId }}</code>
               <b v-if="it.subject" class="issue-subj">{{ it.subject }}</b>
               <span class="issue-msg">{{ it.message }}</span>
             </li>
           </ul>
-          <button class="msg-close" title="关闭" @click="issues = []">×</button>
+          <button class="msg-close" :title="t('关闭')" @click="issues = []">×</button>
         </div>
 
         <div class="pane-body">
@@ -738,7 +748,7 @@ watch(() => props.scope, () => {
         </div>
       </template>
       <div v-else class="placeholder">
-        {{ isProtocols ? '从左侧选择一个协议, 或左下角新建' : '加载中…' }}
+        {{ isProtocols ? t('从左侧选择一个协议, 或左下角新建') : t('加载中…') }}
       </div>
       </div><!-- /cfg-main -->
     </div>
@@ -813,7 +823,7 @@ watch(() => props.scope, () => {
   padding: 0 6px;
   line-height: 18px;
   text-align: center;
-  border-radius: var(--mp-radius-pill);
+  border-radius: var(--mp-radius-sm);
   background: var(--mp-surface-3);
   color: var(--mp-muted);
   font-size: var(--mp-fs-xs);

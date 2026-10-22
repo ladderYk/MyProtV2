@@ -3,6 +3,7 @@
 // 布局: 左侧深色品牌区 (产品定位 + 能力要点) / 右侧浅色登录卡
 import { ref } from 'vue'
 import { listConfigs, setToken } from '../api'
+import { t } from '../i18n'
 
 const emit = defineEmits(['authenticated'])
 
@@ -26,8 +27,8 @@ async function submit() {
   } catch (e) {
     setToken('')
     err.value = (e.status === 401 || e.status === 403)
-      ? 'Token 无效或已过期'
-      : '服务器不可达: ' + e.message
+      ? t('Token 无效或已过期')
+      : t('服务器不可达: {msg}', { msg: e.message })
   } finally {
     busy.value = false
   }
@@ -41,36 +42,36 @@ async function submit() {
         <span class="brand-mark">MP</span>
         <span class="brand-name">MyProt</span>
       </div>
-      <h1 class="brand-title">工业协议接入与设备管理控制台</h1>
-      <p class="brand-sub">配置协议、接入设备、查看实时数据 — 全部在这个界面完成。</p>
+      <h1 class="brand-title">{{ t('工业协议接入与设备管理控制台') }}</h1>
+      <p class="brand-sub">{{ t('配置协议、接入设备、查看实时数据 — 全部在这个界面完成。') }}</p>
       <ul class="brand-list">
         <li v-for="h in highlights" :key="h.t">
-          <span class="bl-title">{{ h.t }}</span>
-          <span class="bl-desc">{{ h.d }}</span>
+          <span class="bl-title">{{ t(h.t) }}</span>
+          <span class="bl-desc">{{ t(h.d) }}</span>
         </li>
       </ul>
-      <p class="brand-foot">管理 API 由环境变量 MYPROT_API_TOKEN 保护</p>
+      <p class="brand-foot">{{ t('管理 API 由环境变量 MYPROT_API_TOKEN 保护') }}</p>
     </section>
 
     <section class="gate-form">
       <form class="gate-card" @submit.prevent="submit">
-        <h2 class="gc-title">登录管理控制台</h2>
-        <p class="gc-hint">请输入管理 API Token</p>
+        <h2 class="gc-title">{{ t('登录管理控制台') }}</h2>
+        <p class="gc-hint">{{ t('请输入管理 API Token') }}</p>
         <label class="gc-label" for="gate-token">API Token</label>
         <input
           id="gate-token"
           v-model="token"
           type="password"
-          placeholder="粘贴 Token"
+          :placeholder="t('粘贴 Token')"
           autocomplete="current-password"
           autofocus
         />
         <div v-if="err" class="gc-error">{{ err }}</div>
         <button class="btn primary gc-submit" type="submit" :disabled="busy">
-          {{ busy ? '验证中…' : '登录' }}
+          {{ busy ? t('验证中…') : t('登录') }}
         </button>
         <p class="gc-tip">
-          Token 只保存在本机浏览器; 会话失效时会自动回到本页。
+          {{ t('Token 只保存在本机浏览器; 会话失效时会自动回到本页。') }}
         </p>
       </form>
     </section>

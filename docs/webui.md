@@ -20,7 +20,7 @@ powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1
 powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1 -SkipUiBuild   # 复用已有 dist
 ```
 
-脚本会重建 `dist/`、在空闲环回端口启动 `MyProt.App`、用无头 Edge 的 DevTools Protocol 跑 69 项断言（顶栏与响应式、总览、帮助抽屉、协议与标签编辑、未保存守卫、实时监控与写入抽屉、仿真器），并检查 console 无错误、无 429、无失败请求。`scripts/ci.ps1` 默认在 E2E 之后执行该脚本，`-SkipWebUI` 可跳过；需要 Node.js（除非 `-SkipUiBuild`）与 Microsoft Edge。
+脚本会重建 `dist/`、在空闲环回端口启动 `MyProt.App`、用无头 Edge 的 DevTools Protocol 跑 75 项断言（顶栏与响应式、认证关闭时的入口形态、总览、帮助抽屉、协议与标签编辑、未保存守卫、实时监控与写入抽屉、仿真器），并检查 console 无错误、无 429、无失败请求。`scripts/ci.ps1` 默认在 E2E 之后执行该脚本，`-SkipWebUI` 可跳过；需要 Node.js（除非 `-SkipUiBuild`）与 Microsoft Edge。
 
 ## 导航与页面结构
 
@@ -28,7 +28,7 @@ powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1 -SkipUiBuild   
 
 | 分组 | 页面 | 功能 |
 |------|------|------|
-| 总览 | 总览 (Overview) | 状态卡、开始使用清单、配置健康、设备概览 |
+| 总览 | 总览 (Overview) | 状态卡、开始使用（清单/就绪摘要）、配置健康、设备概览 |
 | 运行 | 实时监控 (Live) | SSE 实时值、迷你趋势图、写入抽屉 |
 | 运行 | 仿真器 (Sim) | 寄存器读写、仿真配置持久化 |
 | 配置 | 协议配置 (Protocols) | 协议 JSON 的表单/双模编辑 |
@@ -36,16 +36,15 @@ powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1 -SkipUiBuild   
 
 顶栏右侧固定为帮助抽屉入口与退出登录。
 
-顶栏承载品牌、分组导航、全局状态（设备在线数、标签 Good/Bad）、手动热重载与帮助入口；页面级统计不再重复到顶栏。导航在窄屏下保持单行并可横向滚动，品牌与状态条按宽度逐步收敛，内容区始终占满剩余高度。
+顶栏承载品牌、分组导航、全局状态（设备在线数、标签 Good/Bad）、手动热重载与帮助入口；页面级统计不再重复到顶栏。顶栏使用深色底（`--mp-topbar-*`），与浅色工作区形成层次；导航在窄屏下保持单行并可横向滚动，品牌与状态条按宽度逐步收敛，内容区始终占满剩余高度。
 
 ## 总览与首次使用
 
 总览页是首次配置的主入口，不使用强制遮罩或分步弹窗：
 
 - **状态卡行**：设备在线/总数、标签 Good/总数、协议数、仿真器数，点击可跳到对应页面。
-- **开始使用清单**（0/4）：至少 1 个协议 → 至少 1 个设备 → 至少 1 个标签 → 至少 1 个 Good 值；四步都带一键跳转，全部完成显示「配置已就绪」。已配置但无 Good 时提示检查连接或启动仿真。
-- **配置健康**：标签配置的校验错误/警告数，以及本次会话最近一次热重载结果。
-- **快捷动作**：新建协议、新增设备、新增标签、打开实时监控。
+- **开始使用**（0/4）：未就绪时展开四步清单（至少 1 个协议 → 至少 1 个设备 → 至少 1 个标签 → 至少 1 个 Good 值），每步都带一键跳转；全部完成后自动折叠为一行「配置已就绪 · 设备/标签/Good 摘要」，避免已完成项长期占据首屏。已配置但无 Good 时提示检查连接或启动仿真。
+- **配置健康**：标签配置的校验错误/警告数与最近一次热重载结果，内联在「开始使用」区，不再单独占一块。
 - **设备概览表**：设备 ID、协议、标签数、Good/Bad、最后更新时间，点击行定位到该设备。
 
 运行状态统一由 `useRuntimeStatus` 每 5 秒轮询（页面隐藏时暂停），顶栏、总览与实时监控共用同一份数据，避免重复请求触发限流。
@@ -54,15 +53,17 @@ powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1 -SkipUiBuild   
 
 ## 设计系统
 
-- `webui/src/styles/tokens.css`：唯一的色值/度量来源（`--mp-*`），顶栏与深色品牌区、语义色、圆角、阴影、间距、字号与等宽字体。
-- `webui/src/styles/element.css`：Element Plus 主题覆盖（主色、控件 32px、表格行 36px、卡片/抽屉/折叠面板）。
+- `webui/src/styles/tokens.css`：自研组件的色值/度量来源（`--mp-*`），与 Element Plus 默认视觉对齐（默认蓝、4px 圆角、中性灰阶）；深色顶栏单独使用 `--mp-topbar-*` 一组 token。
+- Element Plus 使用官方默认样式，不再维护主题覆盖层（原 `element.css` 已移除）；自研组件已与默认蓝对齐，如需换主色需同时覆盖 `--el-color-primary`。
 - `webui/src/style.css`：全局基础与 `.btn` 按钮体系（`primary` / `danger` / `ghost` / `small` / `tiny`）。
 
 新组件不应再硬编码色值；数值与标识符（协议名、操作名、变量名、表达式、寄存器值）统一使用 `--mp-font-mono`。
 
 ## 交互约定
 
-- 长表单页使用 `PageHeader`（标题 / 说明 / 状态 / 右侧动作）与吸顶工具栏；协议与标签页的段内页签为吸顶分段控件。
+- 长表单页使用 `PageHeader`（标题 / 说明 / 状态 / 右侧动作）与吸顶工具栏；协议页与标签编辑的段内页签为吸顶分段控件。
+- 设备与标签页的设备视图不再使用页签：基本信息与连接参数同屏展示，标签列表由左侧设备树承担，避免右侧重复一份标签表。
+- 仿真寄存器表的十六进制值内联在当前值右侧，不再单独占一列。
 - 实时监控的写入改为右侧 420px 抽屉，保留原字段与校验，不遮挡监控表格；表头吸顶、数值右对齐、质量徽标统一。
 - 协议配置的校验问题为可折叠横幅：默认显示「错误 N / 警告 M」，展开后点击条目可跨段定位。
 - 历史备份收进下拉菜单；编辑区继续使用 `v-show` 复用表单/JSON 双模实例，切换不丢选中态。
@@ -73,6 +74,8 @@ powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1 -SkipUiBuild   
 
 ## 实时监控展示约定
 
+- 整张表只有一个表头；设备名作为分组行插入表体，右侧显示该组最近更新时间，点击分组行可折叠该设备。
+- 趋势列仅在已有 2 个以上采样点时出现，避免无数据时整列为 `-`。
 - 名称列优先显示标签配置的 `label`（中文/显示名），下一行以等宽小字显示全局唯一的 `name`；未配置 `label` 时只显示 `name`。
 - 数值列在值后追加标签配置的 `unit`（如 `%`、`°C`）；离线或无值（`value=null`）时不显示单位。
 - 搜索框同时匹配 `name`、`deviceId` 与 `label`，可直接输入中文名过滤。

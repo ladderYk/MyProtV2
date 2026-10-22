@@ -12,6 +12,7 @@ import {
   simStatus, readSimRegisters, writeSimRegisters,
   listConfigs, getConfig, saveConfig
 } from '../api'
+import { t } from '../i18n'
 
 const emit = defineEmits(['navigate'])   // 空状态 → 去协议配置设置仿真端口
 
@@ -24,7 +25,8 @@ const edits = ref({})              // {addr: 新值字符串} 仅存已修改行
 const message = ref('')
 const messageKind = ref('ok')
 const busy = ref(false)
-let pollTimer = null
+const pollTimer = ref(null)
+// 轮询开关需要驱动按钮文案/样式, 用 ref 而非普通变量 (否则点击后界面不更新)
 
 const activeSim = computed(() =>
   sims.value.find(s => s.protocol === activeProto.value) || null
@@ -48,7 +50,7 @@ async function refreshSims(keepSelection) {
       activeProto.value = sims.value.length ? sims.value[0].protocol : ''
     }
   } catch (e) {
-    flash('err', e.status === 404 ? '无运行中的仿真器 (协议配置 simulation.listenPort > 0 时自动启动)' : e.message)
+    flash('err', e.status === 404 ? t('无运行中的仿真器 (协议配置 simulation.listenPort > 0 时自动启动)') : e.message)
   }
 }
 
@@ -83,7 +85,7 @@ async function loadRegisters(keepEdits) {
 /// 手动读取: 有未提交编辑时先确认, 避免一次点击把改动清空
 function manualLoad() {
   if (editCount.value &&
-      !confirm(`有 ${editCount.value} 行未提交的修改，重新读取将丢弃。继续？`)) return
+      !confirm(t('有 {n} 行未提交的修改，重新读取将丢弃。继续？', { n: editCount.value }))) return
   loadRegisters(false)
 }
 
@@ -92,7 +94,7 @@ async function commitRow(row) {
   if (raw === undefined || raw === '') return
   const v = Number(raw)
   if (!Number.isInteger(v) || v < 0 || v > 65535) {
-    flash('err', `寄存器 ${row.addr}: 值须为 [0,65535] 整数`)
+    flash('err', t('寄存器 {addr}: 值须为 [0,65535] 整数', { addr: row.addr }))
     return
   }
   busy.value = true
@@ -100,7 +102,7 @@ async function commitRow(row) {
     await writeSimRegisters(row.addr, [v], activeProto.value)
     row.value = v                    // 本地即时生效; 设备侧下次轮询即读到新值
     delete edits.value[row.addr]
-    flash('ok', `[${row.addr}] ← ${v} 已写入`)
+    flash('ok', t('[{addr}] ← {value} 已写入', { addr: row.addr, value: v }))
   } catch (e) {
     flash('err', e.message)
   } finally {
@@ -116,12 +118,12 @@ function onEditKey(addr, event) {
 }
 
 function togglePoll() {
-  if (pollTimer) { stopPoll(); return }
-  pollTimer = setInterval(() => loadRegisters(true), 3000)
+  if (pollTimer.value) { stopPoll(); return }
+  pollTimer.value = setInterval(() => loadRegisters(true), 3000)
 }
 function stopPoll() {
-  clearInterval(pollTimer)
-  pollTimer = null
+  clearInterval(pollTimer.value)
+  pollTimer.value = null
 }
 
 // ── 仿真参数配置 (协议文件 simulation 节) ──
@@ -164,7 +166,7 @@ async function saveSimConfig(p) {
   // 行为映射 JSON 校验失败不落盘
   let ops
   try { ops = JSON.parse(opsTextByProto[p] || '{}') }
-  catch (_) { flash('err', `「${p}」行为映射不是合法 JSON, 未保存`); return }
+  catch (_) { flash('err', t('「{name}」行为映射不是合法 JSON, 未保存', { name: p })); return }
 
   const iv = {}
   for (const r of ivCfgRows[p]) {
@@ -181,9 +183,9 @@ async function saveSimConfig(p) {
   savingProto.value = p
   try {
     await saveConfig('protocols', p, JSON.stringify(doc, null, 2))
-    flash('ok', `「${p}」仿真参数已保存并自动热重载`)
+    flash('ok', t('「{name}」仿真参数已保存并自动热重载', { name: p }))
   } catch (e) {
-    flash('err', `「${p}」保存失败: ${e.message}`)
+    flash('err', t('「{name}」保存失败: {msg}', { name: p, msg: e.message }))
   } finally {
     savingProto.value = ''
   }
@@ -199,10 +201,10 @@ onUnmounted(stopPoll)
 
 <template>
   <div class="sim">
-    <PageHeader title="仿真控制" desc="手动读写仿真器寄存器, 供无现场设备时联调; 参数写入协议文件, 热重载后生效。">
+    <PageHeader :title="t('仿真控制')" :desc="t('手动读写仿真器寄存器, 供无现场设备时联调; 参数写入协议文件, 热重载后生效。')">
       <template #meta>
-        <StatusBadge :kind="sims.length ? 'ok' : 'off'" :text="sims.length ? sims.length + ' 个仿真器在运行' : '无运行中仿真器'" />
-        <span v-if="activeSim">当前: {{ activeSim.protocol }} · 端口 {{ activeSim.listenPort }}</span>
+        <StatusBadge :kind="sims.length ? 'ok' : 'off'" :text="sims.length ? t('{n} 个仿真器在运行', { n: sims.length }) : t('无运行中仿真器')" />
+        <span v-if="activeSim">{{ t('当前: {name} · 端口 {port}', { name: activeSim.protocol, port: activeSim.listenPort }) }}</span>
       </template>
     </PageHeader>
 
@@ -216,49 +218,49 @@ onUnmounted(stopPoll)
         @click="if (s.protocol !== activeProto) { activeProto = s.protocol; manualLoad() }"
       >
         <div class="card-title"><i class="run-dot"></i>{{ s.protocol }}</div>
-        <div class="card-meta">端口 <span class="mono">{{ s.listenPort }}</span> · {{ s.registerCount }} 寄存器</div>
+        <div class="card-meta">{{ t('端口 {port} · {n} 寄存器', { port: s.listenPort, n: s.registerCount }) }}</div>
       </div>
     </div>
     <EmptyState
       v-else
-      title="没有运行中的仿真器"
-      desc="在「协议配置」里给某个协议的 simulation.listenPort 配置一个大于 0 的端口, 保存后仿真器会自动启动。"
-      action-text="去协议配置"
+      :title="t('没有运行中的仿真器')"
+      :desc="t('在「协议配置」里给某个协议的 simulation.listenPort 配置一个大于 0 的端口, 保存后仿真器会自动启动。')"
+      :action-text="t('去协议配置')"
       @action="emit('navigate', 'protocols', null)"
     />
 
     <!-- 仿真参数配置 (持久化到协议文件, 热重载后生效) -->
     <details class="cfg">
-      <summary><span class="sec-title">仿真参数配置</span> <span class="cfg-sub">— 写入协议配置文件, 热重载后生效</span></summary>
-      <el-alert v-if="!cfgProtos.length" title="协议配置列表不可用" type="info" :closable="false" style="margin: 10px 0" />
+      <summary><span class="sec-title">{{ t('仿真参数配置') }}</span> <span class="cfg-sub">{{ t('— 写入协议配置文件, 热重载后生效') }}</span></summary>
+      <el-alert v-if="!cfgProtos.length" :title="t('协议配置列表不可用')" type="info" :closable="false" style="margin: 10px 0" />
       <div v-for="p in cfgProtos" :key="p" class="cfg-card">
         <div class="cfg-head">
           <span class="mono cfg-name">{{ p }}</span>
           <button class="btn primary small" :disabled="savingProto === p" @click="saveSimConfig(p)">
-            {{ savingProto === p ? '保存中…' : '保存' }}
+            {{ savingProto === p ? t('保存中…') : t('保存') }}
           </button>
         </div>
         <template v-if="cfgDocs[p]">
           <div class="cfg-grid">
-            <label>监听端口 (0=不启用)
+            <label>{{ t('监听端口 (0=不启用)') }}
               <input v-model.number="cfgDocs[p].simulation.listenPort" type="number" min="0" max="65535" />
             </label>
-            <label>寄存器数量
+            <label>{{ t('寄存器数量') }}
               <input v-model.number="cfgDocs[p].simulation.registerCount" type="number" min="1" />
             </label>
           </div>
           <div class="cfg-iv">
-            <div class="cfg-label">初始寄存器值</div>
+            <div class="cfg-label">{{ t('初始寄存器值') }}</div>
             <div v-for="(row, i) in ivCfgRows[p]" :key="i" class="kv-row">
-              <input v-model.number="row.addr" type="number" min="0" placeholder="地址" />
+              <input v-model.number="row.addr" type="number" min="0" :placeholder="t('地址')" />
               <span class="kv-sep">=</span>
-              <input v-model.number="row.value" type="number" placeholder="值" />
-              <button class="btn danger tiny" @click="removeIvRow(p, i)">删除</button>
+              <input v-model.number="row.value" type="number" :placeholder="t('值')" />
+              <button class="btn danger tiny" @click="removeIvRow(p, i)">{{ t('删除') }}</button>
             </div>
-            <button class="btn small" @click="addIvRow(p)">添加寄存器</button>
+            <button class="btn small" @click="addIvRow(p)">{{ t('添加寄存器') }}</button>
           </div>
           <details class="ops-fold">
-            <summary>行为映射 (operations JSON)</summary>
+            <summary>{{ t('行为映射 (operations JSON)') }}</summary>
             <textarea
               v-model="opsTextByProto[p]" rows="8" spellcheck="false"
               class="ops-text mono"
@@ -271,26 +273,27 @@ onUnmounted(stopPoll)
     <template v-if="activeSim">
       <!-- 读取控制条 -->
       <div class="controls">
-        <label>起始地址 <input v-model.number="startAddr" type="number" min="0" max="65535" /></label>
-        <label>数量 <input v-model.number="readCount" type="number" min="1" max="4096" /></label>
-        <button class="btn primary small" :disabled="busy" @click="manualLoad">读取</button>
+        <label>{{ t('起始地址') }} <input v-model.number="startAddr" type="number" min="0" max="65535" /></label>
+        <label>{{ t('数量') }} <input v-model.number="readCount" type="number" min="1" max="4096" /></label>
+        <button class="btn primary small" :disabled="busy" @click="manualLoad">{{ t('读取') }}</button>
         <button class="btn small" :class="{ polling: pollTimer }" @click="togglePoll">
-          {{ pollTimer ? '停止刷新' : '3s 自动刷新' }}
+          {{ pollTimer ? t('停止刷新') : t('3s 自动刷新') }}
         </button>
-        <span class="hint">改动后按 Enter 或点「写入」提交；写值立即对设备侧生效</span>
+        <span class="hint">{{ t('改动后按 Enter 或点「写入」提交；写值立即对设备侧生效') }}</span>
       </div>
 
       <!-- 寄存器表 -->
       <div class="table-wrap">
         <table class="regs">
           <thead>
-            <tr><th>地址</th><th>十六进制</th><th>当前值</th><th>新值</th><th></th></tr>
+            <tr><th>{{ t('地址') }}</th><th>{{ t('当前值') }}</th><th>{{ t('新值') }}</th><th></th></tr>
           </thead>
           <tbody>
             <tr v-for="row in rows" :key="row.addr" :class="{ edited: edits[row.addr] !== undefined && edits[row.addr] !== '' }">
               <td class="mono">{{ row.addr }}</td>
-              <td class="mono dim">0x{{ row.value.toString(16).padStart(4, '0').toUpperCase() }}</td>
-              <td class="mono">{{ row.value }}</td>
+              <td class="mono">
+                {{ row.value }}<span class="hex">0x{{ row.value.toString(16).padStart(4, '0').toUpperCase() }}</span>
+              </td>
               <td>
                 <input
                   class="val-input mono"
@@ -302,10 +305,10 @@ onUnmounted(stopPoll)
               </td>
               <td>
                 <button
-                  class="btn primary tiny"
+                  class="btn tiny"
                   :disabled="busy || edits[row.addr] === undefined || edits[row.addr] === ''"
                   @click="commitRow(row)"
-                >写入</button>
+                >{{ t('写入') }}</button>
               </td>
             </tr>
           </tbody>
@@ -426,8 +429,9 @@ onUnmounted(stopPoll)
 }
 .mono { font-family: var(--mp-font-mono); }
 .dim { color: var(--mp-muted-2); }
-/* 十六进制列弱化, 当前值突出 */
-.regs td:nth-child(3) { font-size: var(--mp-fs-md); font-weight: 600; color: var(--mp-ink); }
+/* 当前值突出; 十六进制作为弱化副文本内联, 不再单独占一列 */
+.regs td:nth-child(2) { font-size: var(--mp-fs-md); font-weight: 600; color: var(--mp-ink); }
+.hex { margin-left: 8px; font-size: var(--mp-fs-xs); font-weight: 400; color: var(--mp-muted-2); }
 tr.edited td { background: var(--mp-warn-soft); }
 .regs tbody tr:nth-child(even) td { background: var(--mp-surface-2); }
 .regs tbody tr:hover td { background: var(--mp-accent-soft); }

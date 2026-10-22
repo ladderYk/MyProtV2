@@ -36,12 +36,21 @@ a { color: var(--mp-accent); }
   color: #fff;
 }
 .btn.primary:hover:not(:disabled) { background: var(--mp-accent-hover); border-color: var(--mp-accent-hover); }
-.btn.danger { background: var(--mp-surface); color: var(--mp-err-ink); border-color: #fecaca; }
-.btn.danger:hover:not(:disabled) { background: var(--mp-err-soft); border-color: #fca5a5; }
+.btn.danger { background: var(--mp-surface); color: var(--mp-err-ink); border-color: var(--mp-err-soft); }
+.btn.danger:hover:not(:disabled) { background: var(--mp-err-soft); border-color: var(--mp-err); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--mp-shell-text); }
 .btn.ghost:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: #fff; }
 .btn.small { padding: 4px 10px; font-size: var(--mp-fs-sm); }
 .btn.tiny { padding: 2px 8px; font-size: var(--mp-fs-xs); }
+/* 键盘焦点可见性: 统一为仪表蓝描边 (鼠标点击不显示) */
+.btn:focus-visible,
+.nav-item:focus-visible,
+.tb-btn:focus-visible,
+.stat-card:focus-visible,
+.link-btn:focus-visible {
+  outline: 2px solid var(--mp-accent);
+  outline-offset: 1px;
+}
 
 /* ── 细滚动条 ── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -95,7 +104,7 @@ a { color: var(--mp-accent); }
 
 /* ── issue 跳转目标高亮 (focusIssue 定位反馈) ── */
 @keyframes mp-issue-flash {
-  0% { background-color: rgba(37, 99, 235, .22); }
+  0% { background-color: rgba(64, 158, 255, .22); }
   100% { background-color: transparent; }
 }
 .mp-issue-flash { animation: mp-issue-flash 1.6s ease-out 1; }

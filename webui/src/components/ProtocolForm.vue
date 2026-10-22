@@ -6,6 +6,7 @@
 // 旧 schema 的 variables/defaultVariables/autoCompute/metadata.placeholderHints 打开时自动迁移到 inputs/outputs
 import { reactive, ref, computed, onMounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { t } from '../i18n'
 import { getSchema } from '../api'
 import {
   ElForm, ElFormItem, ElInput, ElInputNumber, ElSelect, ElOption,
@@ -27,8 +28,8 @@ const emit = defineEmits(['update:modelValue'])
 // 挂载后由后端字段注册表的 enum 覆盖 (见文件末尾 onMounted), 此处为离线回退值
 const BYTE_ORDERS = ref(['BigEndian', 'LittleEndian', 'WordBigByteLittle', 'WordLittleByteBig'])
 const OP_KINDS = [
-  { value: 'read',  label: 'read (读)' },
-  { value: 'write', label: 'write (写)' }
+  { value: 'read',  label: '读 (read)' },
+  { value: 'write', label: '写 (write)' }
 ]
 
 // 常见操作模板 (Modbus TCP, 新增操作时可选) — v1.29: 与 configs/protocols/modbus-tcp.json 同构。
@@ -138,7 +139,8 @@ function aliasTarget(name) {
 function chipTip(chip) {
   const base = chip.label ? chip.label + (chip.unit ? ' · ' + chip.unit : '') + ' — ' : ''
   const alias = aliasTarget(chip.name)
-  return base + (alias ? `别名, 即 ${alias} — ` : '') + `点击插入 {${chip.name}:X4}`
+  const placeholder = '{' + chip.name + ':X4}'
+  return base + (alias ? t('别名, 即 {alias} — ', { alias }) : '') + t('点击插入 {ph}', { ph: placeholder })
 }
 
 // 点击 chip → 把 {Name:X4} 插入当前操作模板 (可视化模式走 FrameBuilder, 原始文本模式追加一行)
@@ -361,7 +363,7 @@ function renameOperation(oldName, newName) {
   newName = (newName || '').trim()
   if (!newName || newName === oldName) return false
   if (local.operations[newName]) {
-    ElMessage.warning('操作名「' + newName + '」已存在')
+    ElMessage.warning(t('操作名「{name}」已存在', { name: newName }))
     return false
   }
   // 触发响应式: 先删后加
@@ -404,18 +406,18 @@ function focusIssue(issue) {
     if (subject && opNames.value.indexOf(subject) >= 0) {
       selOp.value = subject
       scrollFlash('#op-detail-head')
-      return `已跳到「操作」段 → ${subject}`
+      return t('已跳到「操作」段 → {subject}', { subject })
     }
-    return subject ? `已切到「操作」段 (未找到操作「${subject}」)` : '已切到「操作」段'
+    return subject ? t('已切到「操作」段 (未找到操作「{subject}」)', { subject }) : t('已切到「操作」段')
   }
   if (field.indexOf('outputs') === 0 || field.indexOf('variables') === 0) {
     activeSection.value = 'vars'
     scrollFlash('#vars-head')
-    return subject ? `已切到「变量」段 (${subject})` : '已切到「变量」段'
+    return subject ? t('已切到「变量」段 ({subject})', { subject }) : t('已切到「变量」段')
   }
   activeSection.value = 'basic'
   scrollFlash('#basic-head')
-  return '已切到「基础信息」段'
+  return t('已切到「基础信息」段')
 }
 
 defineExpose({ focusIssue })
@@ -450,7 +452,7 @@ watch(activeHandshakeTab, tab => { if (tab === 'raw') syncHandshakeDraft() })
 function onHandshakeText(text) {
   try {
     const v = JSON.parse(text)
-    if (!Array.isArray(v)) throw new Error('须为数组')
+    if (!Array.isArray(v)) throw new Error(t('须为数组'))
     local.handshake = v
     handshakeDraft.value = JSON.stringify(v, null, 2)
     emitDoc()
@@ -536,13 +538,13 @@ function getOpVars(op) {
   // 特殊：WriteValue 载荷变量
   if (op.kind === 'write') {
     if (!vars.find(v => v.name === 'WriteValue')) {
-      vars.push({ name: 'WriteValue', label: '写入载荷', type: 'payload', unit: 'bytes', defaultFormat: 'raw', source: 'op' })
+      vars.push({ name: 'WriteValue', label: t('写入载荷'), type: 'payload', unit: 'bytes', defaultFormat: 'raw', source: 'op' })
     }
   }
   // 别名标注: 变量名是 variableAliases 的键时, label 补充其契约名 (FrameBuilder/ExprBuilder 标签同享)
   for (const v of vars) {
-    const t = aliasTarget(v.name)
-    if (t) v.label = v.label ? v.label + ' (→ ' + t + ')' : '别名 → ' + t
+    const target = aliasTarget(v.name)
+    if (target) v.label = v.label ? v.label + ' (→ ' + target + ')' : t('别名 → {target}', { target })
   }
   return vars
 }
@@ -564,47 +566,47 @@ onMounted(async () => {
     <!-- v4: 区块 tab 化 — 基础/传输/握手/变量/操作 五段单选 (原左栏 5 卡改为 tab, 编辑区吃满宽度) -->
     <el-tabs v-model="activeSection" class="sec-tabs">
       <!-- ① 基础信息 (协议名 + 传输与成帧 + 握手; 概念速查默认折叠为一行) -->
-      <el-tab-pane label="基础信息" name="basic">
+      <el-tab-pane :label="t('基础信息')" name="basic">
   <div id="basic-head"></div>
     <el-card shadow="never" class="blk cheat-card">
       <el-collapse>
         <el-collapse-item name="cheat">
           <template #title>
-            <span class="sec-title">概念速查 · 配协议前先看 (4 条)</span>
+            <span class="sec-title">{{ t('概念速查 · 配协议前先看 (4 条)') }}</span>
           </template>
           <div class="cheat-body">
             <div class="cheat-g">
-              <b>① 四层变量与覆盖顺序</b>
+              <b>{{ t('① 四层变量与覆盖顺序') }}</b>
               <ul>
-                <li><code>协议 inputs</code> — 全协议默认值 (引擎按 <code>StartByteAddress</code> / <code>ByteCount</code> 查表)</li>
-                <li><code>操作 inputs</code> — 仅该操作生效, 同名<b>整条替换</b>协议级</li>
-                <li><code>操作 outputs</code> — <b>派生量</b>: 由 inputs 算出协议族字段 (如 Modbus 寄存器号 = 起始字节 ÷ 2)</li>
-                <li><code>标签 variables</code> — 运行时最终覆盖 (在「设备与标签」页配)</li>
+                <li><code>{{ t('协议 inputs') }}</code> — {{ t('全协议默认值 (引擎按') }} <code>StartByteAddress</code> / <code>ByteCount</code> {{ t('查表)') }}</li>
+                <li><code>{{ t('操作 inputs') }}</code> — {{ t('仅该操作生效, 同名') }}<b>{{ t('整条替换') }}</b>{{ t('协议级') }}</li>
+                <li><code>{{ t('操作 outputs') }}</code> — <b>{{ t('派生量') }}</b>: {{ t('由 inputs 算出协议族字段 (如 Modbus 寄存器号 = 起始字节 ÷ 2)') }}</li>
+                <li><code>{{ t('标签 variables') }}</code> — {{ t('运行时最终覆盖 (在「设备与标签」页配)') }}</li>
               </ul>
             </div>
             <div class="cheat-g">
-              <b>② 请求模板 (requestTemplate) 的两种占位符</b>
+              <b>{{ t('② 请求模板 (requestTemplate) 的两种占位符') }}</b>
               <ul>
-                <li><code>{Name:X4}</code> — 定宽十六进制, 查变量池渲染 (如 <code>{UnitID:X2}</code>)</li>
-                <li><code>{Name:raw}</code> — 变长字节注入, 写请求的载荷; 运行时注入, 键 = 标签的 <code>writeVariable</code></li>
-                <li><code>00 06</code> — 直接写字面量固定字节; 长度域等可变字段用 <code>{PDULength:X4}</code> 派生</li>
+                <li><code>{Name:X4}</code> — {{ t('定宽十六进制, 查变量池渲染 (如') }} <code>{UnitID:X2}</code>)</li>
+                <li><code>{Name:raw}</code> — {{ t('变长字节注入, 写请求的载荷; 运行时注入, 键 = 标签的') }} <code>writeVariable</code></li>
+                <li><code>00 06</code> — {{ t('直接写字面量固定字节; 长度域等可变字段用') }} <code>{PDULength:X4}</code> {{ t('派生') }}</li>
               </ul>
             </div>
             <div class="cheat-g">
-              <b>③ 变量来源 (source)</b>
+              <b>{{ t('③ 变量来源 (source)') }}</b>
               <ul>
-                <li><code>static</code> — 固定值; 不写 <code>value</code> 则仅作 UI 提示, 不进变量池</li>
-                <li><code>auto</code> — 运行时生成, 需 <code>strategy</code>: <code>autoIncrement</code> / <code>frameSlice</code> / <code>expr</code> / <code>crc</code></li>
-                <li><code>outputs</code> 段固定 <code>derivedLength</code> — 按载荷字节数算: <code>{名称:len}</code>、<code>{Frame:fixed}</code></li>
+                <li><code>static</code> — {{ t('固定值; 不写') }} <code>value</code> {{ t('则仅作 UI 提示, 不进变量池') }}</li>
+                <li><code>auto</code> — {{ t('运行时生成, 需') }} <code>strategy</code>: <code>autoIncrement</code> / <code>frameSlice</code> / <code>expr</code> / <code>crc</code></li>
+                <li><code>outputs</code> {{ t('段固定') }} <code>derivedLength</code> — {{ t('按载荷字节数算:') }} <code>{名称:len}</code>、<code>{Frame:fixed}</code></li>
               </ul>
             </div>
             <div class="cheat-g">
-              <b>④ 写能力怎么声明 (均在标签层, 协议层不声明)</b>
+              <b>{{ t('④ 写能力怎么声明 (均在标签层, 协议层不声明)') }}</b>
               <ul>
-                <li>操作标 <code>kind = write</code> — 该操作可作写模板 (本页「操作定义」里设置)</li>
-                <li>标签 <code>writeOperation</code> — 可标量写 (<code>POST value</code>)</li>
-                <li>标签 <code>writeBytesOperation</code> — 可变长写 (<code>POST bytes</code>)</li>
-                <li>标签 <code>direction = write</code> — 只写标签, 不参与轮询</li>
+                <li>{{ t('操作标') }} <code>kind = write</code> — {{ t('该操作可作写模板 (本页「操作定义」里设置)') }}</li>
+                <li>{{ t('标签') }} <code>writeOperation</code> — {{ t('可标量写') }} (<code>POST value</code>)</li>
+                <li>{{ t('标签') }} <code>writeBytesOperation</code> — {{ t('可变长写') }} (<code>POST bytes</code>)</li>
+                <li>{{ t('标签') }} <code>direction = write</code> — {{ t('只写标签, 不参与轮询') }}</li>
               </ul>
             </div>
           </div>
@@ -616,20 +618,20 @@ onMounted(async () => {
     <el-card shadow="never" class="blk">
       <template #header>
         <div class="blk-head">
-          <span class="blk-title">协议标识</span>
-          <span class="blk-desc">协议名即文件名, 设备按此名引用; 创建后不可修改</span>
+          <span class="blk-title">{{ t('协议标识') }}</span>
+          <span class="blk-desc">{{ t('协议名即文件名, 设备按此名引用; 创建后不可修改') }}</span>
         </div>
       </template>
       <el-form size="default" class="form-grid">
         <el-form-item>
-          <template #label>协议名<FieldHelp section="protocol" field="protocolName" /></template>
+          <template #label>{{ t('协议名') }}<FieldHelp section="protocol" field="protocolName" /></template>
           <el-input
             :model-value="local.protocolName"
             class="mono-input"
             disabled
             style="max-width: 280px"
           />
-          <div class="field-hint">设备按此名引用协议 (不可修改, 修改会断开引用); 新建时确定</div>
+          <div class="field-hint">{{ t('设备按此名引用协议 (不可修改, 修改会断开引用); 新建时确定') }}</div>
         </el-form-item>
         <el-form-item>
           <template #label>schemaVersion<FieldHelp section="protocol" field="schemaVersion" /></template>
@@ -644,11 +646,11 @@ onMounted(async () => {
       </el-form>
     </el-card>
 
-    <el-divider content-position="left" class="sec-divider">传输与成帧</el-divider>
+    <el-divider content-position="left" class="sec-divider">{{ t('传输与成帧') }}</el-divider>
     <el-card shadow="never" class="blk">
       <el-form size="default" class="form-grid">
         <el-form-item>
-          <template #label>传输类型<FieldHelp section="protocol" field="transport" /></template>
+          <template #label>{{ t('传输类型') }}<FieldHelp section="protocol" field="transport" /></template>
           <el-select
             :model-value="local.transport.type"
             style="width: 180px"
@@ -658,63 +660,63 @@ onMounted(async () => {
             <el-option label="Tls" value="Tls" />
             <el-option label="Serial" value="Serial" />
           </el-select>
-          <div class="field-hint">TCP 最常用；Tls/Serial 的详细参数请在 JSON 模式配置</div>
+          <div class="field-hint">{{ t('TCP 最常用；Tls/Serial 的详细参数请在 JSON 模式配置') }}</div>
         </el-form-item>
-        <el-form-item label="默认端口">
+        <el-form-item :label="t('默认端口')">
         <el-input-number
           :model-value="local.transport.defaultPort"
           :min="1" :max="65535" controls-position="right" style="width: 130px"
-          placeholder="协议缺省"
+          :placeholder="t('协议缺省')"
           @update:model-value="v => { if (v == null) { delete local.transport.defaultPort } else { local.transport.defaultPort = v } ; emitDoc() }"
         />
-        <span class="unit">1-65535, 不填由该协议自身决定</span>
+        <span class="unit">{{ t('1-65535, 不填由该协议自身决定') }}</span>
         </el-form-item>
 
-        <el-form-item label="成帧方式">
+        <el-form-item :label="t('成帧方式')">
           <el-select
             :model-value="local.framing.type"
             style="width: 180px"
             @change="v => { local.framing.type = v; emitDoc() }"
           >
-            <el-option label="LengthField (长度域)" value="LengthField" />
-            <el-option label="Fixed (定长)" value="Fixed" />
-            <el-option label="Silence (静默间隔)" value="Silence" />
-            <el-option label="Message (消息边界)" value="Message" />
+            <el-option :label="t('LengthField (长度域)')" value="LengthField" />
+            <el-option :label="t('Fixed (定长)')" value="Fixed" />
+            <el-option :label="t('Silence (静默间隔)')" value="Silence" />
+            <el-option :label="t('Message (消息边界)')" value="Message" />
           </el-select>
-          <div class="field-hint">字节流协议（Modbus/S7 等）一般选 LengthField</div>
+          <div class="field-hint">{{ t('字节流协议 (Modbus/S7 等) 一般选 LengthField') }}</div>
         </el-form-item>
 
         <template v-if="local.framing.type === 'LengthField'">
-          <el-form-item label="快速预设">
-            <el-button size="small" @click="applyMbap">套用 Modbus MBAP 帧参数</el-button>
-            <div class="field-hint">一键填入 Modbus TCP 标准帧结构（偏移 4 / 宽度 2 / 帧头 6）</div>
+          <el-form-item :label="t('快速预设')">
+            <el-button size="small" @click="applyMbap">{{ t('套用 Modbus MBAP 帧参数') }}</el-button>
+            <div class="field-hint">{{ t('一键填入 Modbus TCP 标准帧结构 (偏移 4 / 宽度 2 / 帧头 6)') }}</div>
           </el-form-item>
-          <el-form-item label="长度域偏移">
+          <el-form-item :label="t('长度域偏移')">
             <el-input-number
               :model-value="local.framing.lengthFieldOffset" :min="0"
               controls-position="right" style="width: 120px"
               @update:model-value="v => { local.framing.lengthFieldOffset = v; emitDoc() }"
             />
-            <span class="unit">字节</span>
+            <span class="unit">{{ t('字节') }}</span>
           </el-form-item>
-          <el-form-item label="长度域宽度">
+          <el-form-item :label="t('长度域宽度')">
             <el-select
               :model-value="local.framing.lengthFieldLength"
               style="width: 120px"
               @change="v => { local.framing.lengthFieldLength = v; emitDoc() }"
             >
-              <el-option :value="1" label="1 字节" />
-              <el-option :value="2" label="2 字节" />
-              <el-option :value="4" label="4 字节" />
+              <el-option :value="1" :label="t('1 字节')" />
+              <el-option :value="2" :label="t('2 字节')" />
+              <el-option :value="4" :label="t('4 字节')" />
             </el-select>
           </el-form-item>
-          <el-form-item label="长度含帧头">
+          <el-form-item :label="t('长度含帧头')">
             <el-switch
               :model-value="!!local.framing.lengthIncludesHeader"
               @change="v => { local.framing.lengthIncludesHeader = v; emitDoc() }"
             />
           </el-form-item>
-          <el-form-item label="长度域字节序">
+          <el-form-item :label="t('长度域字节序')">
             <el-select
               :model-value="local.framing.byteOrder"
               style="width: 160px"
@@ -723,44 +725,44 @@ onMounted(async () => {
               <el-option label="BigEndian" value="BigEndian" />
               <el-option label="LittleEndian" value="LittleEndian" />
             </el-select>
-            <div class="field-hint">仅长度字段的大小端，与数据字节序无关</div>
+            <div class="field-hint">{{ t('仅长度字段的大小端, 与数据字节序无关') }}</div>
           </el-form-item>
-          <el-form-item label="帧头长度">
+          <el-form-item :label="t('帧头长度')">
             <el-input-number
               :model-value="local.framing.headerLength" :min="0"
               controls-position="right" style="width: 120px"
               @update:model-value="v => { local.framing.headerLength = v; emitDoc() }"
             />
-            <span class="unit">字节</span>
+            <span class="unit">{{ t('字节') }}</span>
           </el-form-item>
-          <el-form-item label="长度修正量">
+          <el-form-item :label="t('长度修正量')">
             <el-input-number
               :model-value="local.framing.lengthAdjustment"
               controls-position="right" style="width: 120px"
               @update:model-value="v => { local.framing.lengthAdjustment = v; emitDoc() }"
             />
-            <span class="unit">字节</span>
+            <span class="unit">{{ t('字节') }}</span>
           </el-form-item>
-          <el-form-item label="最大帧长">
+          <el-form-item :label="t('最大帧长')">
             <el-input-number
               :model-value="local.framing.maxFrameSize" :min="1"
               controls-position="right" style="width: 120px"
               @update:model-value="v => { local.framing.maxFrameSize = v; emitDoc() }"
             />
-            <span class="unit">字节</span>
+            <span class="unit">{{ t('字节') }}</span>
           </el-form-item>
         </template>
 
-        <el-form-item v-else-if="local.framing.type === 'Fixed'" label="定长帧长">
+        <el-form-item v-else-if="local.framing.type === 'Fixed'" :label="t('定长帧长')">
           <el-input-number
             :model-value="local.framing.fixedLength" :min="1"
             controls-position="right" style="width: 120px"
             @update:model-value="v => { local.framing.fixedLength = v; emitDoc() }"
           />
-          <span class="unit">字节</span>
+          <span class="unit">{{ t('字节') }}</span>
         </el-form-item>
 
-        <el-form-item label="数据字节序">
+        <el-form-item :label="t('数据字节序')">
           <el-select
             :model-value="local.dataByteOrder ?? 'BigEndian'"
             style="width: 200px"
@@ -768,68 +770,68 @@ onMounted(async () => {
           >
             <el-option v-for="b in BYTE_ORDERS" :key="b" :label="b" :value="b" />
           </el-select>
-          <span class="unit">32位数据默认字序, 标签可覆盖</span>
+          <span class="unit">{{ t('32位数据默认字序, 标签可覆盖') }}</span>
         </el-form-item>
       </el-form>
     </el-card>
 
-    <el-divider content-position="left" class="sec-divider" id="hs-head">握手 (handshake) · 连接建立后按序执行</el-divider>
+    <el-divider content-position="left" class="sec-divider" id="hs-head">{{ t('握手 (handshake)') }} · {{ t('连接建立后按序执行') }}</el-divider>
     <el-card shadow="never" class="blk">
       <!-- v5 (C4): 握手双模编辑 — 表单 (步骤卡片 + FrameBuilder) / 原始 JSON -->
       <el-tabs v-model="activeHandshakeTab" class="template-tabs">
-        <el-tab-pane label="表单编辑" name="visual">
+        <el-tab-pane :label="t('表单编辑')" name="visual">
           <HandshakeEditor
             :model-value="local.handshake || []"
             @update:model-value="v => { local.handshake = v; emitDoc() }"
           />
           <div class="field-hint" style="margin-top: 8px">
-            每步按序执行；模板仅支持 hex 字面量与 {'{'}会话变量{'}'} / {'{'}Username{'}'} / {'{'}Password{'}'}（定长帧渲染，不支持派生长度 / autoIncrement / raw）。
+            {{ t('每步按序执行; 模板仅支持 hex 字面量与') }} {'{'}会话变量{'}'} / {'{'}Username{'}'} / {'{'}Password{'}'}{{ t('(定长帧渲染, 不支持派生长度 / autoIncrement / raw)。') }}
           </div>
         </el-tab-pane>
-        <el-tab-pane label="JSON 模式" name="raw">
+        <el-tab-pane :label="t('JSON 模式')" name="raw">
           <el-input
             type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" :model-value="handshakeDraft"
             spellcheck="false"
             @update:model-value="v => handshakeDraft = v"
             @change="onHandshakeText"
           />
-          <div class="field-hint" style="margin-top: 6px">JSON 数组, 每步含 name/requestTemplate/framingOverride; 连接建立后按序执行</div>
+          <div class="field-hint" style="margin-top: 6px">{{ t('JSON 数组, 每步含 name/requestTemplate/framingOverride; 连接建立后按序执行') }}</div>
         </el-tab-pane>
       </el-tabs>
     </el-card>
       </el-tab-pane>
 
       <!-- ④ 全局变量 (v4.2: 卡片呈现 — 字段数随来源/策略变化, 等宽列反而难对齐) -->
-      <el-tab-pane label="全局变量" name="vars">
+      <el-tab-pane :label="t('全局变量')" name="vars">
   <div id="vars-head"></div>
     <el-card shadow="never" class="blk vars-card">
       <template #header>
         <div class="blk-head">
-          <span class="blk-title">全局变量</span>
-          <span class="blk-desc">协议级 inputs 为默认值, outputs 为派生量; 操作与标签可覆盖</span>
+          <span class="blk-title">{{ t('全局变量') }}</span>
+          <span class="blk-desc">{{ t('协议级 inputs 为默认值, outputs 为派生量; 操作与标签可覆盖') }}</span>
         </div>
       </template>
       <div v-if="aliasEntries.length" class="alias-note">
-        <span class="alias-title">别名映射</span>
-        <span v-for="[a, t] in aliasEntries" :key="a" class="alias-item">
-          <code>{{ a }}</code> → <code>{{ t }}</code>
+        <span class="alias-title">{{ t('别名映射') }}</span>
+        <span v-for="[a, alias] in aliasEntries" :key="a" class="alias-item">
+          <code>{{ a }}</code> → <code>{{ alias }}</code>
         </span>
-        <span class="alias-hint">模板与变量名可用别名书写, 加载期改写为契约名 (只读, JSON 模式编辑)</span>
+        <span class="alias-hint">{{ t('模板与变量名可用别名书写, 加载期改写为契约名 (只读, JSON 模式编辑)') }}</span>
       </div>
-      <VariableTable :model-value="local.inputs" mode="inputs" title="inputs · 全局共享" @change="emitDoc" />
-      <VariableTable :model-value="local.outputs" mode="outputs" title="outputs · 全局派生" @change="emitDoc" />
+      <VariableTable :model-value="local.inputs" mode="inputs" :title="t('inputs · 全局共享')" @change="emitDoc" />
+      <VariableTable :model-value="local.outputs" mode="outputs" :title="t('outputs · 全局派生')" @change="emitDoc" />
       <div class="field-hint" style="margin-top: 8px">
-        <code>static</code>=默认值/提示, <code>auto</code>=运行时生成; 派生长度声明为 <code>derivedLength</code>, <code>expr</code> 用 <code>{name:len}</code> 取变量字节长度。
+        <code>static</code>{{ t('=默认值/提示') }}, <code>auto</code>{{ t('=运行时生成') }}; {{ t('派生长度声明为') }} <code>derivedLength</code>, <code>expr</code> {{ t('用') }} <code>{name:len}</code> {{ t('取变量字节长度。') }}
       </div>
     </el-card>
       </el-tab-pane>
 
       <!-- ⑤ 操作定义 (操作 tabs + 详情) — v4.8: 去掉外层卡片壳, 与其他 tab 的单卡布局统一 -->
-      <el-tab-pane label="操作定义" name="ops" class="pane-ops">
+      <el-tab-pane :label="t('操作定义')" name="ops" class="pane-ops">
       <el-alert
         v-if="!opNames.length"
         type="info" :closable="false"
-        title="暂无操作定义, 点击操作 tabs 右侧「新增操作」创建"
+        :title="t('暂无操作定义, 点击操作 tabs 右侧「新增操作」创建')"
       />
 
       <!-- v4.4 改: 操作列表用 tabs (原左侧 210px 索引移除, 详情表单吃满整行) -->
@@ -842,16 +844,16 @@ onMounted(async () => {
               <span
                 class="md-kind"
                 :class="(local.operations[n] && local.operations[n].kind) === 'write' ? 'w' : 'r'"
-              >{{ (local.operations[n] && local.operations[n].kind) === 'write' ? '写' : '读' }}</span>
+              >{{ (local.operations[n] && local.operations[n].kind) === 'write' ? t('写') : t('读') }}</span>
             </template>
           </el-tab-pane>
         </el-tabs>
         <div class="op-create">
-          <select v-model="opTemplate" class="op-tpl-select" title="操作模板">
-            <option value="">空白操作</option>
+          <select v-model="opTemplate" class="op-tpl-select" :title="t('操作模板')">
+            <option value="">{{ t('空白操作') }}</option>
             <option v-for="(_, name) in OP_TEMPLATES" :key="name" :value="name">{{ name }}</option>
           </select>
-          <el-button type="primary" size="small" plain @click="addOperation">新增操作</el-button>
+          <el-button type="primary" size="small" plain @click="addOperation">{{ t('新增操作') }}</el-button>
         </div>
         </div>
         <section class="md-detail" id="op-detail-head">
@@ -864,28 +866,28 @@ onMounted(async () => {
                   @change="commitOpName"
                 />
                 <el-button type="danger" size="small" plain @click="removeOperation(selOp)">
-                  删除
+                  {{ t('删除') }}
                 </el-button>
               </div>
             </template>
 
             <el-form size="default" class="form-grid">
               <el-form-item>
-                <template #label>操作类型<FieldHelp text="read = 该操作模板供读标签引用; write = 可作写请求模板 (由标签的 writeOperation / writeBytesOperation 引用)" /></template>
+                <template #label>{{ t('操作类型') }}<FieldHelp :text="t('read = 该操作模板供读标签引用; write = 可作写请求模板 (由标签的 writeOperation / writeBytesOperation 引用)')" /></template>
                 <el-select
                   :model-value="curOp.kind || 'read'" style="width: 160px"
                   @change="v => { curOp.kind = v; emitDoc() }"
                 >
-                  <el-option v-for="k in OP_KINDS" :key="k.value" :label="k.label" :value="k.value" />
+                  <el-option v-for="k in OP_KINDS" :key="k.value" :label="t(k.label)" :value="k.value" />
                 </el-select>
-                <div class="field-hint">read = 只读标签; write = 可作写请求模板</div>
+                <div class="field-hint">{{ t('read = 只读标签; write = 可作写请求模板') }}</div>
               </el-form-item>
-              <el-form-item label="请求模板" class="span2">
+              <el-form-item :label="t('请求模板')" class="span2">
                 <!-- v4.7: 变量提示 — 全局(协议级)/本操作(派生) 分组, 点击插入下方模板 -->
                 <div class="chips-bar">
-                  <span class="chips-title">变量提示</span>
+                  <span class="chips-title">{{ t('变量提示') }}</span>
                   <template v-if="varChips.global.length || varChips.local.length">
-                    <span class="chips-group">全局</span>
+                    <span class="chips-group">{{ t('全局') }}</span>
                     <el-tag
                       v-for="chip in varChips.global" :key="'g' + chip.group + chip.name"
                       class="var-chip" :class="chip.group" size="small" effect="plain"
@@ -894,7 +896,7 @@ onMounted(async () => {
                     >{{ chip.name }}{{ chip.value !== undefined ? '=' + chip.value : '' }}</el-tag>
                     <template v-if="varChips.local.length">
                       <span class="chips-divider"></span>
-                      <span class="chips-group">本操作</span>
+                      <span class="chips-group">{{ t('本操作') }}</span>
                       <el-tag
                         v-for="chip in varChips.local" :key="'l' + chip.name"
                         class="var-chip local" size="small" effect="plain"
@@ -903,10 +905,10 @@ onMounted(async () => {
                       >{{ chip.name }}</el-tag>
                     </template>
                   </template>
-                  <span v-else class="text-muted">此协议暂无变量声明 (「全局变量」页添加后在此提示)</span>
+                  <span v-else class="text-muted">{{ t('此协议暂无变量声明 (「全局变量」页添加后在此提示)') }}</span>
                 </div>
                 <el-tabs v-model="activeTemplateTab" class="template-tabs">
-                  <el-tab-pane label="可视化构建" name="visual">
+                  <el-tab-pane :label="t('可视化构建')" name="visual">
                     <FrameBuilder
                       ref="fbRef"
                       :model-value="curOp.requestTemplate"
@@ -915,15 +917,15 @@ onMounted(async () => {
                       @update:model-value="v => { curOp.requestTemplate = v; emitDoc() }"
                     />
                   </el-tab-pane>
-                  <el-tab-pane label="原始文本" name="raw">
+                  <el-tab-pane :label="t('原始文本')" name="raw">
                     <div class="tpl-editor">
-                      <div class="tpl-hint">每行填十六进制字节（如 <code>00 06</code>）或占位符（如 <code>{StartAddress:X4}</code>、<code>{TransactionID:X4}</code>）</div>
+                      <div class="tpl-hint">{{ t('每行填十六进制字节 (如') }} <code>00 06</code>{{ t(') 或占位符 (如') }} <code>{StartAddress:X4}</code>、<code>{TransactionID:X4}</code>)</div>
                       <div v-for="(seg, j) in curOp._rows" :key="j" class="tpl-row">
                         <span class="tpl-idx">{{ j }}</span>
                         <el-input
                           v-model="seg.v" class="tpl-input"
                           spellcheck="false"
-                          placeholder="hex 段或 {变量:函数:XN} 表达式"
+                          :placeholder="t('hex 段或 {变量:函数:XN} 表达式')"
                           @change="flushTpl(curOp)"
                         />
                         <el-button size="small" text :disabled="j === 0" @click="moveTplRow(curOp, j, -1)">↑</el-button>
@@ -931,20 +933,20 @@ onMounted(async () => {
                           size="small" text :disabled="j === curOp._rows.length - 1"
                           @click="moveTplRow(curOp, j, 1)"
                         >↓</el-button>
-                        <el-button size="small" type="danger" text @click="removeTplRow(curOp, j)">删除</el-button>
+                        <el-button size="small" type="danger" text @click="removeTplRow(curOp, j)">{{ t('删除') }}</el-button>
                       </div>
-                      <el-button size="small" plain @click="addTplRow(curOp)">添加段</el-button>
+                      <el-button size="small" plain @click="addTplRow(curOp)">{{ t('添加段') }}</el-button>
                     </div>
                   </el-tab-pane>
                 </el-tabs>
               </el-form-item>
 
               <div class="op-vars">
-                <VariableTable :model-value="curOp.inputs" mode="inputs" title="操作变量 (inputs · 本操作)" @change="emitDoc" />
+                <VariableTable :model-value="curOp.inputs" mode="inputs" :title="t('操作变量 (inputs · 本操作)')" @change="emitDoc" />
               </div>
               <div class="op-vars">
                 <el-tabs v-model="activeOutputTab" class="template-tabs">
-                  <el-tab-pane label="可视化表达式" name="visual">
+                  <el-tab-pane :label="t('可视化表达式')" name="visual">
                     <div v-for="[outName, outDef] in Object.entries(curOp.outputs || {})" :key="outName" class="output-expr-row">
                       <div class="output-expr-header">
                         <code>{{ outName }}</code>
@@ -957,32 +959,32 @@ onMounted(async () => {
                         :context-vars="opContextVars"
                       />
                     </div>
-                    <div v-if="!Object.keys(curOp.outputs || {}).length" class="text-muted">暂无派生输出，可在下方表单添加</div>
+                    <div v-if="!Object.keys(curOp.outputs || {}).length" class="text-muted">{{ t('暂无派生输出, 可在下方表单添加') }}</div>
                   </el-tab-pane>
-                  <el-tab-pane label="表单编辑" name="form">
-                    <VariableTable :model-value="curOp.outputs" mode="outputs" title="派生输出 (outputs · 本操作)" @change="emitDoc" />
+                  <el-tab-pane :label="t('表单编辑')" name="form">
+                    <VariableTable :model-value="curOp.outputs" mode="outputs" :title="t('派生输出 (outputs · 本操作)')" @change="emitDoc" />
                   </el-tab-pane>
                 </el-tabs>
               </div>
 
-              <el-form-item label="有效条件">
+              <el-form-item :label="t('有效条件')">
                 <el-input
                   :model-value="curOp.responseParser?.validCondition"
-                  placeholder="如 resp[7] == 0x03, 留空跳过校验"
+                  :placeholder="t('如 resp[7] == 0x03, 留空跳过校验')"
                   @update:model-value="v => { curOp.responseParser.validCondition = v; emitDoc() }"
                 />
               </el-form-item>
-              <el-form-item label="数据起始下标">
+              <el-form-item :label="t('数据起始下标')">
                 <el-input-number
                   :model-value="curOp.responseParser?.dataStartIndex" :min="0"
                   @update:model-value="v => { curOp.responseParser.dataStartIndex = v; emitDoc() }"
                 />
-                <span class="unit">字节</span>
+                <span class="unit">{{ t('字节') }}</span>
               </el-form-item>
-              <el-form-item label="数据长度表达式">
+              <el-form-item :label="t('数据长度表达式')">
                 <el-input
                   :model-value="curOp.responseParser?.dataLengthExpr"
-                  placeholder="如 resp[8], 留空取整帧剩余"
+                  :placeholder="t('如 resp[8], 留空取整帧剩余')"
                   @update:model-value="v => { curOp.responseParser.dataLengthExpr = v; emitDoc() }"
                 />
               </el-form-item>

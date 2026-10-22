@@ -503,22 +503,21 @@ true
     Check-Js "brand rendered" 'document.querySelector(".brand-name") && document.querySelector(".brand-name").innerText.trim() === "MyProt"'
     Check-Js "status chip shows device/tag counters" '/\d+\s*\/\s*\d+/.test(document.querySelector(".tb-status") ? document.querySelector(".tb-status").innerText : "")'
     Check-Js "content fills the viewport" 'document.querySelector(".content").getBoundingClientRect().height > 300'
+    # requireAuth=false (default config): no login gate and no logout action
+    Check-Js "no login gate when auth is disabled" '!document.querySelector(".gate")'
+    Check-Js "logout hidden when auth is disabled" '![].slice.call(document.querySelectorAll(".tb-actions .tb-btn")).some(function (b) { return b.textContent.replace(/\s/g, "") === "\u9000\u51fa"; })'
 
     # =======================================================================
     Write-Head "OVERVIEW"
     Check-Js "4 stat cards" 'document.querySelectorAll(".stat-card").length === 4'
-    Check-Js "checklist has 4 steps" 'document.querySelectorAll(".check-item").length === 4'
-    Check-Js "progress bar rendered" '!!document.querySelector(".progress-bar")'
-    Check-Js "quick actions = 4" 'document.querySelectorAll(".quick-btn").length === 4'
+    # 开始使用区有两种形态: 未就绪时展开 4 步清单, 就绪后折叠为一行摘要
+    Check-Js "checklist or ready summary is shown" '(document.querySelectorAll(".check-item").length === 4) || !!document.querySelector(".ready-row")'
+    Check-Js "progress bar or ready summary is shown" '!!document.querySelector(".progress-bar") || !!document.querySelector(".ready-row")'
+    Check-Js "quick actions removed" '!document.querySelector(".quick-grid")'
+    Check-Js "welcome banner removed" '!document.querySelector(".welcome")'
+    Check-Js "health status is inline" 'document.querySelectorAll(".health-inline").length >= 1'
     Check-Wait "device overview table has rows" 'document.querySelectorAll(".dev-table tbody tr").length >= 1' 15
     $overviewDevices = Invoke-Js 'document.querySelectorAll(".dev-table tbody tr").length'
-    $hasWelcome = Invoke-Js '!!document.querySelector(".welcome")'
-    if ($hasWelcome) {
-        Invoke-Js 'document.querySelector(".welcome-close").click(); true' | Out-Null
-        Check-Wait "welcome hint can be dismissed" '!document.querySelector(".welcome")' 5
-    } else {
-        Check "welcome hint already dismissed" $true
-    }
 
     # =======================================================================
     Write-Head "HELP DRAWER"
@@ -591,7 +590,9 @@ true
     Invoke-Js 'document.querySelector(".dt-dev-head").click(); true' | Out-Null
     Start-Sleep -Milliseconds 300
     Check-Js "selecting a device shows its context" '!!document.querySelector(".ctx-bar .ctx-cur")'
-    Check-Js "device view has 3 tabs" 'document.querySelectorAll(".sec-tabs .el-tabs__item").length === 3'
+    Check-Js "device view shows info and connection together" '!!document.querySelector(".dev-pane") && document.querySelectorAll(".dev-pane .blk").length === 2'
+    Check-Js "device view has no tabs" '!document.querySelector(".dev-pane .el-tabs")'
+    Check-Js "device connection fields visible" 'document.querySelectorAll(".dev-pane .el-form-item").length >= 6'
     Invoke-Js 'document.querySelector(".dt-tags li").click(); true' | Out-Null
     Start-Sleep -Milliseconds 300
     Check-Js "selecting a tag shows its breadcrumb" '!!document.querySelector(".ctx-bar .ctx-dev") && !!document.querySelector(".ctx-bar .ctx-cur")'
@@ -599,16 +600,16 @@ true
     # =======================================================================
     Write-Head "LIVE"
     Invoke-Js 'window.__smoke.nav(1); true' | Out-Null
-    Check-Wait "live panel opens" '!!document.querySelector(".live") && document.querySelectorAll(".group-table tbody tr").length >= 5' 25
-    $liveTotal = Invoke-Js 'document.querySelectorAll(".group-table tbody tr").length'
+    Check-Wait "live panel opens" '!!document.querySelector(".live") && document.querySelectorAll(".live-table tbody tr:not(.group-row)").length >= 5' 25
+    $liveTotal = Invoke-Js 'document.querySelectorAll(".live-table tbody tr:not(.group-row)").length'
     Invoke-Js 'window.__smoke.setInput(".filter-bar .search", "coil")' | Out-Null
     Start-Sleep -Milliseconds 400
-    Check-Js "live search filters rows" ('(function () { var n = document.querySelectorAll(".group-table tbody tr").length; return n >= 1 && n < ' + $liveTotal + '; })()')
+    Check-Js "live search filters rows" ('(function () { var n = document.querySelectorAll(".live-table tbody tr:not(.group-row)").length; return n >= 1 && n < ' + $liveTotal + '; })()')
     Invoke-Js 'window.__smoke.setInput(".filter-bar .search", "")' | Out-Null
     Start-Sleep -Milliseconds 400
-    Check-Js "clearing live search restores rows" ('document.querySelectorAll(".group-table tbody tr").length >= ' + $liveTotal)
+    Check-Js "clearing live search restores rows" ('document.querySelectorAll(".live-table tbody tr:not(.group-row)").length >= ' + $liveTotal)
 
-    Invoke-Js 'document.querySelector(".group-table .btn.tiny").click(); true' | Out-Null
+    Invoke-Js 'document.querySelector(".live-table .btn.tiny").click(); true' | Out-Null
     Check-Wait "write drawer opens" '!!document.querySelector(".el-drawer") && window.__smoke.visible(".el-drawer")' 8
     Check-Js "write drawer is 420px wide" '(function () { var r = window.__smoke.rect(".el-drawer"); return r && Math.abs(r.w - 420) <= 2; })()'
     Check-Js "write drawer has value + bytes inputs" 'document.querySelectorAll(".write-body input.f-input").length >= 2'
@@ -626,6 +627,7 @@ true
     Check-Wait "simulator panel opens" '!!document.querySelector(".sim")' 15
     Check-Js "simulator shows cards or empty state" 'document.querySelectorAll(".sim .cards .card").length >= 1 || !!document.querySelector(".sim .empty")'
     Check-Js "simulator config block is present" '!!document.querySelector(".sim details.cfg")'
+    Check-Js "register table has no hex column" '(function () { var ths = document.querySelectorAll(".regs thead th"); return ths.length === 0 || (ths.length === 4 && !!document.querySelector(".regs .hex")); })()'
 
     # =======================================================================
     Write-Head "RESPONSIVE"

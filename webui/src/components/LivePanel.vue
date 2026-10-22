@@ -8,6 +8,7 @@ import PageHeader from './PageHeader.vue'
 import StatusBadge from './StatusBadge.vue'
 import EmptyState from './EmptyState.vue'
 import { latestValues, dataStreamUrl, writeTag, listConfigs, getConfig } from '../api'
+import { t } from '../i18n'
 
 const rows = ref([])          // [{name, device, value, quality, timestamp, changed}]
 const emit = defineEmits(['navigate'])   // 空状态里的跳转按钮 (去添加标签 / 去启动仿真)
@@ -51,17 +52,27 @@ const grouped = computed(() => {
   const map = {}
   for (const r of filtered.value) {
     if (!map[r.device]) {
-      map[r.device] = { device: r.device, rows: [], goodCount: 0 }
+      map[r.device] = { device: r.device, rows: [], goodCount: 0, lastTs: 0 }
       out.push(map[r.device])
     }
     map[r.device].rows.push(r)
     if (r.quality === 'Good') map[r.device].goodCount++
+    if (r.timestamp && r.timestamp > map[r.device].lastTs) map[r.device].lastTs = r.timestamp
   }
   return out
 })
 function toggleGroup(device) {
   collapsed[device] = !collapsed[device]
 }
+
+// 趋势列仅在已有 2 个以上采样点时出现, 避免整列都是 "-"
+const hasTrend = computed(() => {
+  const h = history.value
+  for (const k in h) {
+    if (h[k] && h[k].length >= 2) return true
+  }
+  return false
+})
 
 function fmtTime(ts) {
   if (!ts) return '-'
@@ -144,7 +155,7 @@ async function refresh(silent) {
     lastUpdate.value = Date.now()
     message.value = ''
   } catch (e) {
-    if (!silent) message.value = e.status === 404 ? '数据面不可用 (引擎未运行或版本过旧)' : e.message
+    if (!silent) message.value = e.status === 404 ? t('数据面不可用 (引擎未运行或版本过旧)') : e.message
   } finally {
     busy.value = false
   }
@@ -170,19 +181,19 @@ function startStream() {
       if (es && es.readyState === EventSource.CLOSED) {
         stopStream()
         if (!message.value) {
-          message.value = '推送连接已被服务端关闭 (登录可能已失效), 请刷新页面重新登录'
+          message.value = t('推送连接已被服务端关闭 (登录可能已失效), 请刷新页面重新登录')
         }
         return
       }
       if (streaming.value && !message.value) {
-        message.value = '推送连接中断, 正在自动重连…'
+        message.value = t('推送连接中断, 正在自动重连…')
       }
     }
     streaming.value = true
   } catch (_) {
     es = null
     streaming.value = false
-    message.value = '当前环境不支持 EventSource, 请使用手动刷新'
+    message.value = t('当前环境不支持 EventSource, 请使用手动刷新')
   }
 }
 
@@ -281,13 +292,13 @@ async function submitWrite() {
   const bytesText = (writeBytes.value || '').trim()
   if (!hasValue && !bytesText) {
     writeMsgKind.value = 'err'
-    writeMsg.value = '请填写「数值」或「字节 (hex)」之一'
+    writeMsg.value = t('请填写「数值」或「字节 (hex)」之一')
     return
   }
   if (hasValue && bytesText) {
     // 后端 value/bytes 互斥 — 前端先行拦截, 给出明确提示
     writeMsgKind.value = 'err'
-    writeMsg.value = '「数值」与「字节 (hex)」只能填写其一'
+    writeMsg.value = t('「数值」与「字节 (hex)」只能填写其一')
     return
   }
   writeBusy.value = true
@@ -300,7 +311,7 @@ async function submitWrite() {
     if (writeReadBack.value) body.readBack = true
     await writeTag(body)
     writeMsgKind.value = 'ok'
-    writeMsg.value = '写入成功'
+    writeMsg.value = t('写入成功')
     refresh(true)
     setTimeout(closeWrite, 900)
   } catch (e) {
@@ -326,11 +337,11 @@ onUnmounted(() => {
 
 <template>
   <div class="live">
-    <PageHeader title="实时监控" desc="采集值快照与标签写入; 名称优先显示配置的中文名, 数值后为单位。">
+    <PageHeader :title="t('实时监控')" :desc="t('采集值快照与标签写入; 名称优先显示配置的中文名, 数值后为单位。')">
       <template #meta>
-        <StatusBadge :kind="streaming ? 'ok' : 'off'" :text="streaming ? '推送中' : '已暂停'" />
-        <span>{{ rows.length }} 标签 · {{ goodCount }} Good</span>
-        <span v-if="lastUpdate">· 更新于 {{ fmtTime(lastUpdate) }}</span>
+        <StatusBadge :kind="streaming ? 'ok' : 'off'" :text="streaming ? t('推送中') : t('已暂停')" />
+        <span>{{ t('{n} 标签 · {good} Good', { n: rows.length, good: goodCount }) }}</span>
+        <span v-if="lastUpdate">· {{ t('更新于 {time}', { time: fmtTime(lastUpdate) }) }}</span>
       </template>
     </PageHeader>
 
@@ -341,78 +352,86 @@ onUnmounted(() => {
         v-model="keyword"
         class="search"
         type="text"
-        placeholder="搜索标签名 / 中文名 / 设备…"
+        :placeholder="t('搜索标签名 / 中文名 / 设备…')"
       />
       <select v-model="deviceFilter" class="device-select">
-        <option value="">全部设备</option>
+        <option value="">{{ t('全部设备') }}</option>
         <option v-for="d in devices" :key="d" :value="d">{{ d }}</option>
       </select>
       <span class="bar-spacer"></span>
       <button class="btn small" :class="{ polling: streaming }" @click="streaming ? stopStream() : startStream()">
-        {{ streaming ? '停止推送' : '实时推送' }}
+        {{ streaming ? t('停止推送') : t('实时推送') }}
       </button>
-      <button class="btn primary small" :disabled="busy" @click="refresh(false)">立即刷新</button>
+      <button class="btn primary small" :disabled="busy" @click="refresh(false)">{{ t('立即刷新') }}</button>
     </div>
 
     <div class="table-wrap">
-      <template v-for="g in grouped" :key="g.device">
-        <div class="group-head" @click="toggleGroup(g.device)">
-          <span class="group-arrow">{{ collapsed[g.device] ? '▸' : '▾' }}</span>
-          <span class="group-name">{{ g.device }}</span>
-          <span class="group-meta">{{ g.rows.length }} 标签 · {{ g.goodCount }} Good</span>
-        </div>
-        <table v-show="!collapsed[g.device]" class="group-table">
-          <thead>
-            <tr>
-              <th>标签</th><th>值</th><th>质量</th><th>趋势 (30 点)</th><th>时间</th><th class="th-op">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="r in g.rows" :key="r.device + '.' + r.name" :class="{ changed: r.changed }">
-              <td class="name">
-                <div v-if="labelOf(r)" class="tag-label">{{ labelOf(r) }}</div>
-                <div :class="['tag-name', { sub: !!labelOf(r) }]">{{ r.name }}</div>
-              </td>
-              <td class="mono value">
-                {{ fmtValue(r.value) }}<span
-                  v-if="unitOf(r) && r.value !== null && r.value !== undefined"
-                  class="unit"
-                >{{ unitOf(r) }}</span>
-              </td>
-              <td>
-                <StatusBadge :kind="qualityKind(r.quality)" :text="r.quality" />
-              </td>
-              <td class="spark-cell">
-                <svg
-                  v-if="r.quality === 'Good' && Number.isFinite(Number(r.value))"
-                  class="spark"
-                  viewBox="0 0 80 22"
-                  preserveAspectRatio="none"
-                >
-                  <polyline
-                    :d="sparkPath(r.device + '.' + r.name)"
-                    fill="none"
-                    stroke="#2563eb"
-                    stroke-width="1.2"
-                  />
-                </svg>
-                <span v-else class="dim">-</span>
-              </td>
-              <td class="mono dim">{{ fmtTime(r.timestamp) }}</td>
-              <td>
-                <button v-if="canWrite(r)" class="btn tiny" @click="openWrite(r)">写入</button>
-                <span v-else class="dim" title="该标签未声明写能力">只读</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </template>
+      <table v-if="grouped.length" class="live-table">
+        <thead>
+          <tr>
+            <th>{{ t('标签') }}</th><th>{{ t('值') }}</th><th>{{ t('质量') }}</th>
+            <th v-if="hasTrend">{{ t('趋势 (30 点)') }}</th>
+            <th class="th-op">{{ t('操作') }}</th>
+          </tr>
+        </thead>
+        <tbody v-for="g in grouped" :key="g.device">
+          <tr class="group-row" @click="toggleGroup(g.device)">
+            <td :colspan="hasTrend ? 5 : 4" class="group-cell">
+              <div class="group-line">
+                <span class="group-arrow">{{ collapsed[g.device] ? '▸' : '▾' }}</span>
+                <span class="group-name">{{ g.device }}</span>
+                <span class="group-meta">{{ t('{n} 标签 · {good} Good', { n: g.rows.length, good: g.goodCount }) }}</span>
+                <span v-if="g.lastTs" class="group-time">{{ t('更新于 {time}', { time: fmtTime(g.lastTs) }) }}</span>
+              </div>
+            </td>
+          </tr>
+          <tr
+            v-for="r in g.rows" :key="r.device + '.' + r.name"
+            v-show="!collapsed[g.device]"
+            :class="{ changed: r.changed }"
+          >
+            <td class="name">
+              <div v-if="labelOf(r)" class="tag-label">{{ labelOf(r) }}</div>
+              <div :class="['tag-name', { sub: !!labelOf(r) }]">{{ r.name }}</div>
+            </td>
+            <td class="mono value">
+              {{ fmtValue(r.value) }}<span
+                v-if="unitOf(r) && r.value !== null && r.value !== undefined"
+                class="unit"
+              >{{ unitOf(r) }}</span>
+            </td>
+            <td>
+              <StatusBadge :kind="qualityKind(r.quality)" :text="r.quality" />
+            </td>
+            <td v-if="hasTrend" class="spark-cell">
+              <svg
+                v-if="r.quality === 'Good' && Number.isFinite(Number(r.value))"
+                class="spark"
+                viewBox="0 0 80 22"
+                preserveAspectRatio="none"
+              >
+                <polyline
+                  :d="sparkPath(r.device + '.' + r.name)"
+                  fill="none"
+                  stroke="var(--mp-accent)"
+                  stroke-width="1.2"
+                />
+              </svg>
+              <span v-else class="dim">-</span>
+            </td>
+            <td>
+              <button v-if="canWrite(r)" class="btn tiny" @click="openWrite(r)">{{ t('写入') }}</button>
+              <span v-else class="dim ro" :title="t('该标签未声明写能力')">{{ t('只读') }}</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
       <EmptyState
         v-if="!grouped.length && !busy"
-        title="暂无采集数据"
-        desc="先在「协议配置」创建协议, 再到「设备与标签」添加设备与标签; 引擎轮询到第一批采集值后, 这里会自动出现数据。没有现场设备时可用「仿真控制」启动寄存器仿真。"
-        action-text="去添加标签"
-        secondary-text="去启动仿真"
+        :title="t('暂无采集数据')"
+        :desc="t('先在「协议配置」创建协议, 再到「设备与标签」添加设备与标签; 引擎轮询到第一批采集值后, 这里会自动出现数据。没有现场设备时可用「仿真控制」启动寄存器仿真。')"
+        :action-text="t('去添加标签')"
+        :secondary-text="t('去启动仿真')"
         @action="emit('navigate', 'tags', { add: 'tag' })"
         @secondary="emit('navigate', 'sim', null)"
       />
@@ -421,26 +440,25 @@ onUnmounted(() => {
     <!-- v1.2 增: 写入抽屉 (v1.6: 写标签定向 + Float 输入) — 不遮挡监控表格 -->
     <el-drawer
       v-if="writeTarget"
-      :model-value="true" size="420px" :title="'写入 — ' + writeTarget.name"
+      :model-value="true" size="420px" :title="t('写入 — {name}', { name: writeTarget.name })"
       @update:model-value="v => { if (!v) closeWrite() }"
     >
       <div class="write-body">
         <p v-if="activeWriteTag" class="write-hint">
           <template v-if="activeWriteTag.direction === 'write'">
-            将定向到写标签 <b>{{ activeWriteTag.name }}</b>
+            {{ t('将定向到写标签') }} <b>{{ activeWriteTag.name }}</b>
           </template>
           <template v-else>
-            标签可写: 写操作 <b>{{ activeWriteTag.writeOperation }}</b>
+            {{ t('标签可写: 写操作') }} <b>{{ activeWriteTag.writeOperation }}</b>
           </template>
-          ({{ activeWriteTag.finalType }});数值按该类型自动编码,
-          byteOrder/TransportSize 由标签 variables/writeVariables 决定
+          ({{ activeWriteTag.finalType }}); {{ t('数值按该类型自动编码, byteOrder/TransportSize 由标签 variables/writeVariables 决定') }}
         </p>
         <p v-else class="write-hint">
-          标量「数值」走单寄存器写 (0-65535, 如 Modbus FC06);<br />
-          「字节 (hex)」走变长写 (如 S7 WriteVar / Modbus FC16), 字节序与协议一致
+          {{ t('标量「数值」走单寄存器写 (0-65535, 如 Modbus FC06);') }}<br />
+          {{ t('「字节 (hex)」走变长写 (如 S7 WriteVar / Modbus FC16), 字节序与协议一致') }}
         </p>
         <template v-if="(writeTagIndex[writeTarget.name] || []).length > 1">
-          <label class="f-label">写标签</label>
+          <label class="f-label">{{ t('写标签') }}</label>
           <select v-model="writeTagSel" class="f-input">
             <option v-for="t in writeTagIndex[writeTarget.name]" :key="t.name" :value="t.name">
               {{ t.name }} ({{ t.finalType }})
@@ -449,8 +467,8 @@ onUnmounted(() => {
         </template>
         <label class="f-label">
           {{ activeWriteTag && writeTagFloat(activeWriteTag.finalType)
-            ? '数值 (浮点, 自动转 IEEE754 大端)'
-            : (activeWriteTag ? `数值 (${activeWriteTag.finalType})` : '数值 (0-65535)') }}
+            ? t('数值 (浮点, 自动转 IEEE754 大端)')
+            : (activeWriteTag ? t('数值 ({type})', { type: activeWriteTag.finalType }) : t('数值 (0-65535)')) }}
         </label>
         <input
           v-model.number="writeValue"
@@ -460,22 +478,22 @@ onUnmounted(() => {
           :min="activeWriteTag ? undefined : 0"
           :max="activeWriteTag ? undefined : 65535"
           :disabled="!!writeBytes.trim()"
-          placeholder="留空则使用下方字节"
+          :placeholder="t('留空则使用下方字节')"
         />
-        <label class="f-label">字节 (hex)</label>
+        <label class="f-label">{{ t('字节 (hex)') }}</label>
         <input v-model="writeBytes" class="f-input mono" type="text"
                :disabled="writeValue !== null && writeValue !== undefined && writeValue !== ''"
-               placeholder="如 00 0A 或 41 20 00 00" />
+               :placeholder="t('如 00 0A 或 41 20 00 00')" />
         <label class="f-check">
-          <input v-model="writeReadBack" type="checkbox" /> 写后读回校验 (readBack)
+          <input v-model="writeReadBack" type="checkbox" /> {{ t('写后读回校验 (readBack)') }}
         </label>
       </div>
       <template #footer>
         <div class="write-foot">
           <span v-if="writeMsg" class="write-msg" :class="writeMsgKind">{{ writeMsg }}</span>
-          <button class="btn small" @click="closeWrite()">取消</button>
+          <button class="btn small" @click="closeWrite()">{{ t('取消') }}</button>
           <button class="btn primary small" :disabled="writeBusy" @click="submitWrite()">
-            {{ writeBusy ? '写入中…' : '确认写入' }}
+            {{ writeBusy ? t('写入中…') : t('确认写入') }}
           </button>
         </div>
       </template>
@@ -578,20 +596,22 @@ th {
 /* 数值列右对齐, 便于纵向比对 */
 th:nth-child(2) { text-align: right; }
 
-.group-head {
-  position: sticky;
-  top: var(--mp-row-h);
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 16px;
+/* 设备分组行: 单表头 + 组行内嵌设备名/更新时戳 */
+.group-cell {
+  padding: 0;
   background: var(--mp-surface-3);
+  border-top: 1px solid var(--mp-border);
   border-bottom: 1px solid var(--mp-border);
   cursor: pointer;
   user-select: none;
 }
-.group-head:hover { background: var(--mp-border); }
+.group-row:hover .group-cell { background: var(--mp-border); }
+.group-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+}
 .group-arrow { width: 14px; color: var(--mp-muted); font-size: var(--mp-fs-sm); }
 .group-name {
   font-family: var(--mp-font-mono);
@@ -600,8 +620,10 @@ th:nth-child(2) { text-align: right; }
   font-size: var(--mp-fs-base);
 }
 .group-meta { font-size: var(--mp-fs-sm); color: var(--mp-muted); }
+.group-time { margin-left: auto; font-size: var(--mp-fs-xs); color: var(--mp-muted-2); }
 .mono { font-family: var(--mp-font-mono); }
 .dim { color: var(--mp-muted-2); }
+.live-table .ro { white-space: nowrap; }
 .name { font-weight: 600; }
 .tag-label { font-size: var(--mp-fs-base); color: var(--mp-ink); }
 .tag-name { font-family: var(--mp-font-mono); font-size: var(--mp-fs-sm); color: var(--mp-ink-2); }
@@ -668,5 +690,7 @@ tbody tr.changed:hover td { background: var(--mp-warn-soft); }
   .search { max-width: none; }
   .th-op { width: 64px; }
   th, td { padding: 0 10px; }
+  .group-line { padding: 7px 10px; }
+  .group-time { display: none; }
 }
 </style>

@@ -1,6 +1,7 @@
 <script setup>
 // JSON 编辑器 — textarea + 实时语法校验指示
 import { computed } from 'vue'
+import { t } from '../i18n'
 
 const props = defineProps({
   modelValue: { type: String, default: '' }
@@ -13,12 +14,12 @@ function onInput(e) {
 
 const validity = computed(() => {
   const text = props.modelValue
-  if (!text.trim()) return { ok: false, msg: '空文档' }
+  if (!text.trim()) return { ok: false, msg: t('空文档') }
   try {
     JSON.parse(text)
-    return { ok: true, msg: 'JSON 有效' }
+    return { ok: true, msg: t('JSON 有效') }
   } catch (e) {
-    return { ok: false, msg: 'JSON 错误: ' + e.message }
+    return { ok: false, msg: t('JSON 错误: {msg}', { msg: e.message }) }
   }
 })
 </script>

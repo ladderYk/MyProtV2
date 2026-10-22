@@ -2,6 +2,7 @@
 // 使用文档抽屉 — 取代原「快速上手」弹窗
 // 内容: 快速上手 4 步 + 当前页面要点 + 术语速查 + 配置校验说明
 import { computed } from 'vue'
+import { t } from '../i18n'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -63,51 +64,51 @@ function close() { emit('update:modelValue', false) }
 
 <template>
   <el-drawer
-    :model-value="modelValue" size="440px" title="使用文档"
+    :model-value="modelValue" size="440px" :title="t('使用文档')"
     class="help-drawer" @update:model-value="v => emit('update:modelValue', v)"
   >
     <section class="block">
-      <h3 class="block-title">快速上手</h3>
+      <h3 class="block-title">{{ t('快速上手') }}</h3>
       <ol class="steps">
         <li v-for="s in steps" :key="s.n" class="step">
           <span class="step-no">{{ s.n }}</span>
           <div>
-            <div class="step-title">{{ s.title }}</div>
-            <div class="step-desc">{{ s.desc }}</div>
+            <div class="step-title">{{ t(s.title) }}</div>
+            <div class="step-desc">{{ t(s.desc) }}</div>
           </div>
         </li>
       </ol>
     </section>
 
     <section class="block">
-      <h3 class="block-title">当前页面要点</h3>
+      <h3 class="block-title">{{ t('当前页面要点') }}</h3>
       <ul class="tips">
-        <li v-for="(t, i) in pageTips" :key="i">{{ t }}</li>
+        <li v-for="(tip, i) in pageTips" :key="i">{{ t(tip) }}</li>
       </ul>
     </section>
 
     <section class="block">
-      <h3 class="block-title">术语速查</h3>
+      <h3 class="block-title">{{ t('术语速查') }}</h3>
       <dl class="glossary">
         <template v-for="g in glossary" :key="g.term">
           <dt><code>{{ g.term }}</code></dt>
-          <dd>{{ g.desc }}</dd>
+          <dd>{{ t(g.desc) }}</dd>
         </template>
       </dl>
     </section>
 
     <section class="block">
-      <h3 class="block-title">配置校验</h3>
+      <h3 class="block-title">{{ t('配置校验') }}</h3>
       <p class="para">
-        「自检」调用只读校验接口, 返回结构化问题清单: <b>错误</b> 会阻断保存,
-        <b>警告</b> 不阻断但可能影响运行。保存被拒时也会自动展示同一份清单,
-        点击条目可跳转到对应区块。
+        {{ t('「自检」调用只读校验接口, 返回结构化问题清单:') }}
+        <b>{{ t('错误') }}</b> {{ t('会阻断保存,') }}
+        <b>{{ t('警告') }}</b> {{ t('不阻断但可能影响运行。保存被拒时也会自动展示同一份清单, 点击条目可跳转到对应区块。') }}
       </p>
       <p class="para">
-        保存成功后自动热重载; 也可在顶栏点「热重载」手动触发。
+        {{ t('保存成功后自动热重载; 也可在顶栏点「热重载」手动触发。') }}
       </p>
       <div class="foot">
-        <button class="btn small" @click="close">关闭</button>
+        <button class="btn small" @click="close">{{ t('关闭') }}</button>
       </div>
     </section>
   </el-drawer>

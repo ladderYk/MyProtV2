@@ -1,54 +1,65 @@
 /* 设计 token — 全站唯一色值/度量来源
-   深色侧栏 + 浅色工作区; 组件内不再硬编码 hex, 统一引用本文件变量。
+   与 Element Plus 默认视觉对齐: 默认蓝、4px 圆角、中性灰阶;
+   自研容器/按钮/表格复用同一配色, 避免与组件库脱节。
    命名: --mp-* 为语义层, 数值层集中在文件后半段。 */
 :root {
-  /* ── 外壳 (深色侧栏 / 顶栏) ── */
+  /* ── 外壳 (深色代码编辑器等) ── */
   --mp-shell: #0f172a;
   --mp-shell-2: #16213a;
   --mp-shell-line: #24324c;
   --mp-shell-text: #cbd5e1;
   --mp-shell-muted: #94a3b8;
 
-  /* ── 品牌色 ── */
-  --mp-accent: #2563eb;
-  --mp-accent-hover: #1d4ed8;
-  --mp-accent-soft: #eff6ff;
-  --mp-accent-line: #bfdbfe;
+  /* ── 深色顶栏 (与浅色工作区形成层次) ── */
+  --mp-topbar-bg: #1f2d3d;
+  --mp-topbar-line: rgba(255, 255, 255, .12);
+  --mp-topbar-ink: #ffffff;
+  --mp-topbar-text: #dbe5ee;
+  --mp-topbar-muted: #9fb0c2;
+  --mp-topbar-active-bg: rgba(64, 158, 255, .18);
+  --mp-topbar-active-ink: #79bbff;
+  --mp-topbar-shadow: 0 2px 10px rgba(15, 23, 42, .18);
+
+  /* ── 强调色 (Element Plus 默认蓝) ── */
+  --mp-accent: #409eff;
+  --mp-accent-hover: #337ecc;
+  --mp-accent-soft: #ecf5ff;
+  --mp-accent-line: #d9ecff;
 
   /* ── 工作区 ── */
-  --mp-bg: #f5f7fb;
+  --mp-bg: #f5f7fa;
   --mp-surface: #ffffff;
-  --mp-surface-2: #f8fafc;
-  --mp-surface-3: #f1f5f9;
-  --mp-border: #e2e8f0;
-  --mp-border-strong: #cbd5e1;
-  --mp-ink: #0f172a;
-  --mp-ink-2: #334155;
-  --mp-muted: #64748b;
-  --mp-muted-2: #94a3b8;
+  --mp-surface-2: #fafafa;
+  --mp-surface-3: #f5f7fa;
+  --mp-border: #e4e7ed;
+  --mp-border-strong: #dcdfe6;
+  --mp-ink: #303133;
+  --mp-ink-2: #606266;
+  --mp-muted: #909399;
+  --mp-muted-2: #a8abb2;
 
-  /* ── 语义色 ── */
-  --mp-ok: #16a34a;
-  --mp-ok-soft: #dcfce7;
-  --mp-ok-ink: #15803d;
-  --mp-warn: #d97706;
-  --mp-warn-soft: #fef3c7;
-  --mp-warn-ink: #b45309;
-  --mp-err: #dc2626;
-  --mp-err-soft: #fee2e2;
-  --mp-err-ink: #b91c1c;
-  --mp-info-soft: #f0f9ff;
-  --mp-info-ink: #075985;
+  /* ── 语义色 (Element Plus 默认) ── */
+  --mp-ok: #67c23a;
+  --mp-ok-soft: #f0f9eb;
+  --mp-ok-ink: #529b2e;
+  --mp-warn: #e6a23c;
+  --mp-warn-soft: #fdf6ec;
+  --mp-warn-ink: #b88230;
+  --mp-err: #f56c6c;
+  --mp-err-soft: #fef0f0;
+  --mp-err-ink: #c45656;
+  --mp-info-soft: #f4f4f5;
+  --mp-info-ink: #606266;
 
   /* ── 圆角 ── */
-  --mp-radius-sm: 6px;
-  --mp-radius: 10px;
+  --mp-radius-sm: 4px;
+  --mp-radius: 4px;
   --mp-radius-pill: 999px;
 
-  /* ── 阴影 ── */
-  --mp-shadow-1: 0 1px 2px rgba(15, 23, 42, .06);
-  --mp-shadow-2: 0 4px 14px rgba(15, 23, 42, .08);
-  --mp-shadow-3: 0 20px 60px rgba(15, 23, 42, .28);
+  /* ── 阴影 (Element Plus 轻投影) ── */
+  --mp-shadow-1: 0 2px 12px 0 rgba(0, 0, 0, .06);
+  --mp-shadow-2: 0 4px 16px rgba(0, 0, 0, .10);
+  --mp-shadow-3: 0 18px 48px rgba(0, 0, 0, .20);
 
   /* ── 骨架度量 ── */
   --mp-sidebar-w: 240px;

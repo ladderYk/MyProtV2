@@ -11,6 +11,7 @@ import {
 import VarTracePanel from './VarTracePanel.vue'
 import FieldHelp from './FieldHelp.vue'
 import { listConfigs, getConfig, getSchema } from '../api'
+import { t } from '../i18n'
 
 const props = defineProps({
   modelValue: { type: Object, required: true }
@@ -34,7 +35,6 @@ const activeBlocks = ref(JSON.parse(sessionStorage.getItem('tagsform.collapse') 
 const selMode = ref('dev')          // 右侧详情当前针对: 'dev' 设备 | 'tag' 标签
 const selDev = ref(0)
 const selTag = ref(0)
-const devTab = ref('info')          // 设备视图页签: info | conn | tags
 const tagTab = ref('def')           // 标签视图页签: def | vars
 const treeKw = ref('')              // 树搜索关键字 (同时匹配设备 ID 与标签名)
 const openDevs = reactive({})       // 设备节点展开态; 缺省 = 展开
@@ -64,8 +64,8 @@ function selectTag(i) {
   selMode.value = 'tag'
   selTag.value = i
   // 同步设备下标 — 否则「新增标签」会落到上一个选中的设备下
-  const t = (local.tags || [])[i]
-  const d = t ? devIndexById(t.deviceId) : -1
+  const tag = (local.tags || [])[i]
+  const d = tag ? devIndexById(tag.deviceId) : -1
   if (d >= 0) selDev.value = d
 }
 
@@ -79,12 +79,12 @@ function focusIssue(issue) {
   const tagSide = field.indexOf('tags.') === 0 || rule.indexOf('ref.tag') === 0
   if (tagSide) {
     const i = (local.tags || []).findIndex(t => t && t.name === subject)
-    if (i >= 0) { selectTag(i); return `已定位到标签「${subject}」` }
-    return subject ? `未找到标签「${subject}」(可能已删除或改名)` : '无法定位: 该条目无标签名'
+    if (i >= 0) { selectTag(i); return t('已定位到标签「{name}」', { name: subject }) }
+    return subject ? t('未找到标签「{name}」(可能已删除或改名)', { name: subject }) : t('无法定位: 该条目无标签名')
   }
   const d = (local.devices || []).findIndex(x => x && x.id === subject)
-  if (d >= 0) { selectDevice(d); return `已定位到设备「${subject}」` }
-  return subject ? `未找到设备「${subject}」(可能已删除或改名)` : '无法定位: 该条目无设备 ID'
+  if (d >= 0) { selectDevice(d); return t('已定位到设备「{name}」', { name: subject }) }
+  return subject ? t('未找到设备「{name}」(可能已删除或改名)', { name: subject }) : t('无法定位: 该条目无设备 ID')
 }
 
 defineExpose({ focusIssue, focusDevice, addDevice, addTag })
@@ -275,7 +275,6 @@ function addDevice() {
   })
   selDev.value = local.devices.length - 1   // 新增后自动选中
   selMode.value = 'dev'
-  devTab.value = 'info'
   openDevs[selDev.value] = true             // 展开新设备节点
   treeKw.value = ''                          // 清空搜索, 避免新设备被过滤隐藏
   emitDoc()
@@ -291,7 +290,7 @@ function removeDevice(i) {
   const dev = local.devices[i]
   if (!dev) return
   const owned = (local.tags || []).filter(t => t.deviceId === dev.id).length
-  if (owned && !confirm(`删除设备「${dev.id}」将同时删除其下 ${owned} 个标签，确定？`)) return
+  if (owned && !confirm(t('删除设备「{name}」将同时删除其下 {n} 个标签, 确定？', { name: dev.id, n: owned }))) return
   local.devices.splice(i, 1)
   if (owned) {
     // 级联删除, 避免留下引用不存在设备的孤儿标签
@@ -306,12 +305,12 @@ function removeDevice(i) {
 function renameDevice(i, newId) {
   newId = (newId || '').trim()
   if (!newId) {
-    ElMessage.warning('设备 ID 不能为空')
+    ElMessage.warning(t('设备 ID 不能为空'))
     return false
   }
   // v1.1 增: 设备 ID 重名校验
   if (local.devices.some((d, j) => j !== i && d.id === newId)) {
-    ElMessage.warning('设备 ID「' + newId + '」已存在')
+    ElMessage.warning(t('设备 ID「{name}」已存在', { name: newId }))
     return false
   }
   const oldId = local.devices[i].id
@@ -442,7 +441,7 @@ function opHintsList(tag) {
     let text
     if (lbl && unit) text = `${lbl} (${unit})`
     else if (lbl) text = lbl
-    else if (unit) text = `(单位: ${unit})`
+    else if (unit) text = t('(单位: {unit})', { unit })
     else text = ''
     let enumStr = ''
     if (Array.isArray(h.enum)) {
@@ -451,7 +450,7 @@ function opHintsList(tag) {
     }
     out.push({
       name,
-      text: text || '(无显示名)',
+      text: text || t('(无显示名)'),
       source: hintSource(tag, name),
       enum: enumStr
     })
@@ -538,11 +537,11 @@ function simpleCount(tag) {
 }
 
 function simpleAddrLabel(tag) {
-  return { word: '起始字地址', byte: '起始字节地址', bit: '位地址 (线圈号)' }[simpleAddrMode(tag)] || '起始地址'
+  return t({ word: '起始字地址', byte: '起始字节地址', bit: '位地址 (线圈号)' }[simpleAddrMode(tag)] || '起始地址')
 }
 
 function simpleCountLabel(tag) {
-  return (tag.finalType === 'ByteArray' || tag.finalType === 'String') ? '字节数' : '值个数'
+  return t((tag.finalType === 'ByteArray' || tag.finalType === 'String') ? '字节数' : '值个数')
 }
 
 /// 位寻址 (Modbus 线圈) 或 S7 位标签: 不需要“值个数”输入
@@ -611,7 +610,7 @@ function addTag() {
   // v1.1 增: 默认名采用 <deviceId>.TagNN, NN 递增到不冲突
   // v3 改: 归属「当前选中对象」— 标签视图下取该标签所属设备, 否则取选中设备
   if (!local.devices.length) {
-    ElMessage.warning('请先新增设备, 再添加标签')
+    ElMessage.warning(t('请先新增设备, 再添加标签'))
     return
   }
   const devId = (selMode.value === 'tag' && curTag.value && curTag.value.deviceId)
@@ -651,11 +650,11 @@ function removeTag(i) {
 function renameTag(i, newName) {
   newName = (newName || '').trim()
   if (!newName) {
-    ElMessage.warning('标签名不能为空')
+    ElMessage.warning(t('标签名不能为空'))
     return false
   }
   if (local.tags.some((t, j) => j !== i && t.name === newName)) {
-    ElMessage.warning('标签名「' + newName + '」已存在')
+    ElMessage.warning(t('标签名「{name}」已存在', { name: newName }))
     return false
   }
   local.tags[i].name = newName
@@ -719,8 +718,8 @@ function onEditSource({ varName, layerKey }) {
     // 滚动到"请求变量"区域，并高亮对应行
     nextTick(() => {
       const rows = document.querySelectorAll('.kv-editor .kv-row')
-      rows.forEach((row, idx) => {
-        const input = row.querySelector('input[placeholder="变量名 (如 StartByteAddress)"]')
+      rows.forEach((row) => {
+        const input = row.querySelector('.kv-key-input input')
         if (input && input.value === varName) {
           row.scrollIntoView({ behavior: 'smooth', block: 'center' })
           row.style.boxShadow = '0 0 0 2px #16a34a'
@@ -731,11 +730,11 @@ function onEditSource({ varName, layerKey }) {
   } else if (layerKey === 'tagWriteVars') {
     // 滚动到"写变量"区域
     nextTick(() => {
-      const writeSection = document.querySelector('.kv-editor:has(input[placeholder="写请求变量名 (如 TransportSize)"])')
+      const writeSection = document.querySelector('.kv-write-editor')
       if (writeSection) {
         const rows = writeSection.querySelectorAll('.kv-row')
-        rows.forEach((row, idx) => {
-          const input = row.querySelector('input[placeholder="写请求变量名 (如 TransportSize)"]')
+        rows.forEach((row) => {
+          const input = row.querySelector('.kv-key-input input')
           if (input && input.value === varName) {
             row.scrollIntoView({ behavior: 'smooth', block: 'center' })
             row.style.boxShadow = '0 0 0 2px #16a34a'
@@ -747,7 +746,7 @@ function onEditSource({ varName, layerKey }) {
   }
   // protoInputs/opInputs: 提示用户去协议配置编辑
   else if (layerKey === 'protoInputs' || layerKey === 'opInputs') {
-    ElMessage.info(`${layerKey === 'protoInputs' ? '协议级' : '操作级'}变量需在「协议配置」页面修改`)
+    ElMessage.info(t('{layer}变量需在「协议配置」页面修改', { layer: layerKey === 'protoInputs' ? t('协议级') : t('操作级') }))
   }
 }
 </script>
@@ -757,11 +756,11 @@ function onEditSource({ varName, layerKey }) {
     <!-- v3: 设备树左置 — 设备→标签 两级树 (默认全展开, 搜索同时匹配设备 ID 与标签名) -->
     <aside class="dev-tree">
       <div class="dt-head">
-        <span>设备</span>
-        <span class="dt-head-count">{{ (local.devices || []).length }} 台 · {{ (local.tags || []).length }} 标签</span>
+        <span>{{ t('设备') }}</span>
+        <span class="dt-head-count">{{ t('{devs} 台 · {tags} 标签', { devs: (local.devices || []).length, tags: (local.tags || []).length }) }}</span>
       </div>
       <div class="dt-search">
-        <el-input v-model="treeKw" size="small" clearable placeholder="搜索设备 / 标签" />
+        <el-input v-model="treeKw" size="small" clearable :placeholder="t('搜索设备 / 标签')" />
       </div>
       <ul class="dt-items">
         <li v-for="x in treeDevices" :key="x.i" class="dt-dev">
@@ -772,25 +771,25 @@ function onEditSource({ varName, layerKey }) {
             <span class="dt-caret" @click.stop="toggleDev(x.i)">{{ isOpen(x.i) ? '▾' : '▸' }}</span>
             <span class="dt-dev-name" :title="x.d.id">{{ x.d.id }}</span>
             <span class="dt-dev-proto">{{ x.d.protocol || '—' }}</span>
-            <span class="dt-dev-count" :title="`${tagCountOf(x.d.id)} 个标签`">{{ tagCountOf(x.d.id) }}</span>
+            <span class="dt-dev-count" :title="t('{n} 个标签', { n: tagCountOf(x.d.id) })">{{ tagCountOf(x.d.id) }}</span>
           </div>
           <ul v-if="isOpen(x.i)" class="dt-tags">
             <li
-              v-for="t in tagsOfDev(x.d.id)" :key="t.i"
-              :class="{ active: selMode === 'tag' && selTag === t.i }"
-              @click="selectTag(t.i)"
+              v-for="node in tagsOfDev(x.d.id)" :key="node.i"
+              :class="{ active: selMode === 'tag' && selTag === node.i }"
+              @click="selectTag(node.i)"
             >
-              <span class="dt-tag-name" :title="t.t.name">{{ t.t.name || '(未命名)' }}</span>
-              <span class="type-badge" :class="finalTypeClass(t.t.finalType)">{{ t.t.finalType || '?' }}</span>
+              <span class="dt-tag-name" :title="node.t.name">{{ node.t.name || t('(未命名)') }}</span>
+              <span class="type-badge" :class="finalTypeClass(node.t.finalType)">{{ node.t.finalType || '?' }}</span>
             </li>
-            <li v-if="!tagsOfDev(x.d.id).length" class="dt-sub-empty">暂无标签</li>
+            <li v-if="!tagsOfDev(x.d.id).length" class="dt-sub-empty">{{ t('暂无标签') }}</li>
           </ul>
         </li>
-        <li v-if="!treeDevices.length" class="dt-empty">无匹配设备</li>
+        <li v-if="!treeDevices.length" class="dt-empty">{{ t('无匹配设备') }}</li>
       </ul>
       <div class="dt-actions">
-        <button class="dt-add" @click="addDevice">+ 新增设备</button>
-        <button class="dt-add" :disabled="!local.devices.length" @click="addTag">+ 新增标签</button>
+        <button class="dt-add" @click="addDevice">{{ t('+ 新增设备') }}</button>
+        <button class="dt-add" :disabled="!local.devices.length" @click="addTag">{{ t('+ 新增标签') }}</button>
       </div>
     </aside>
 
@@ -798,160 +797,135 @@ function onEditSource({ varName, layerKey }) {
     <section class="tform-main">
       <div class="ctx-bar">
         <template v-if="selMode === 'tag' && curTag">
-          <span class="ctx-dev" title="点击返回该设备" @click="selectDevice(devIndexById(curTag.deviceId))">
-            {{ curTag.deviceId || '(未指定设备)' }}
+          <span class="ctx-dev" :title="t('点击返回该设备')" @click="selectDevice(devIndexById(curTag.deviceId))">
+            {{ curTag.deviceId || t('(未指定设备)') }}
           </span>
           <span class="ctx-sep">▸</span>
-          <span class="ctx-cur">{{ curTag.name || '(未命名)' }}</span>
+          <span class="ctx-cur">{{ curTag.name || t('(未命名)') }}</span>
           <span class="type-badge" :class="finalTypeClass(curTag.finalType)">{{ curTag.finalType || '?' }}</span>
         </template>
         <template v-else-if="curDev">
           <span class="ctx-cur">{{ curDev.id }}</span>
           <span class="ctx-proto">{{ curDev.protocol || '—' }}</span>
         </template>
-        <span v-else class="ctx-empty">左侧选择设备或标签</span>
+        <span v-else class="ctx-empty">{{ t('左侧选择设备或标签') }}</span>
         <span class="ctx-spacer"></span>
         <el-button
           v-if="selMode === 'tag' && curTag"
           type="danger" size="small" plain @click="removeTag(selTag)"
-        >删除标签</el-button>
+        >{{ t('删除标签') }}</el-button>
         <el-button
           v-else-if="curDev"
           type="danger" size="small" plain @click="removeDevice(selDev)"
-        >删除设备</el-button>
-        <el-button link size="small" class="ctx-set" @click="sysSettings = true">系统设置</el-button>
+        >{{ t('删除设备') }}</el-button>
+        <el-button link size="small" class="ctx-set" @click="sysSettings = true">{{ t('系统设置') }}</el-button>
       </div>
 
       <el-alert
         v-if="!local.devices?.length"
         type="info" :closable="false"
-        title="暂无设备, 点击左下角「新增设备」创建"
+        :title="t('暂无设备, 点击左下角「新增设备」创建')"
       />
 
-      <!-- 设备视图 -->
-      <el-tabs v-else-if="selMode === 'dev' && curDev" v-model="devTab" class="sec-tabs">
-        <el-tab-pane label="设备信息" name="info">
-          <el-card shadow="never" class="blk">
-            <el-form size="default" class="form-grid">
-              <el-form-item>
-                <template #label>设备 ID<FieldHelp section="device" field="id" /></template>
-                <el-input
-                  :model-value="devIdDraft" style="width: 200px"
-                  @update:model-value="v => devIdDraft = v"
-                  @change="commitDeviceId"
-                />
-              </el-form-item>
-              <el-form-item>
-                <template #label>协议<FieldHelp section="device" field="protocol" /></template>
-                <el-select
-                  :model-value="curDev.protocol" style="width: 200px"
-                  @change="v => onDeviceProtocol(curDev, v)"
-                >
-                  <el-option v-for="p in protocolNames" :key="p" :label="p" :value="p" />
-                </el-select>
-                <div v-if="!protocolNames.length" class="field-hint">
-                  暂无协议 — 请先在左侧「协议配置」创建协议
-                </div>
-              </el-form-item>
-            </el-form>
-          </el-card>
-        </el-tab-pane>
+      <!-- 设备视图: 基本信息 + 连接参数一次展示, 不再用页签切换; 标签列表已由左侧树承载 -->
+      <div v-else-if="selMode === 'dev' && curDev" class="dev-pane">
+        <el-card shadow="never" class="blk">
+          <div class="blk-title">{{ t('基本信息') }}</div>
+          <el-form size="default" class="form-grid">
+            <el-form-item>
+              <template #label>{{ t('设备 ID') }}<FieldHelp section="device" field="id" /></template>
+              <el-input
+                :model-value="devIdDraft" style="width: 200px"
+                @update:model-value="v => devIdDraft = v"
+                @change="commitDeviceId"
+              />
+            </el-form-item>
+            <el-form-item>
+              <template #label>{{ t('协议') }}<FieldHelp section="device" field="protocol" /></template>
+              <el-select
+                :model-value="curDev.protocol" style="width: 200px"
+                @change="v => onDeviceProtocol(curDev, v)"
+              >
+                <el-option v-for="p in protocolNames" :key="p" :label="p" :value="p" />
+              </el-select>
+              <div v-if="!protocolNames.length" class="field-hint">
+                {{ t('暂无协议 — 请先在左侧「协议配置」创建协议') }}
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-card>
 
-        <el-tab-pane label="连接参数" name="conn">
-          <el-card shadow="never" class="blk">
-            <el-form size="default" class="form-grid">
-              <el-form-item label="主机">
-                <el-input
-                  :model-value="curDev.connection.host" style="width: 200px"
-                  @update:model-value="v => { curDev.connection.host = v; emitDoc() }"
-                />
-              </el-form-item>
-              <el-form-item label="端口">
-                <el-input-number
-                  :model-value="curDev.connection.port" :min="1" :max="65535"
-                  @update:model-value="v => { curDev.connection.port = v; emitDoc() }"
-                />
-                <span class="unit">端口 (1-65535)</span>
-              </el-form-item>
-              <el-form-item label="连接超时">
-                <el-input-number
-                  :model-value="curDev.connection.timeoutMs" :min="1"
-                  @update:model-value="v => { curDev.connection.timeoutMs = v; emitDoc() }"
-                />
-                <span class="unit">ms</span>
-                <div class="field-hint">仅 TCP 建链等待上限</div>
-              </el-form-item>
-              <el-form-item>
-                <template #label>请求超时<FieldHelp section="device" field="requestTimeoutMs" /></template>
-                <el-input-number
-                  :model-value="curDev.requestTimeoutMs ?? 3000" :min="1"
-                  @update:model-value="v => { curDev.requestTimeoutMs = v; emitDoc() }"
-                />
-                <span class="unit">ms</span>
-                <div class="field-hint">单次请求-应答等待上限; 该设备所有操作共用 (2026-08-24 收敛为唯一配置点)</div>
-              </el-form-item>
-            </el-form>
-          </el-card>
-        </el-tab-pane>
-
-        <el-tab-pane :label="`标签 (${tagCountOf(curDev.id)})`" name="tags">
-          <el-card shadow="never" class="blk">
-            <table v-if="tagsOfDev(curDev.id).length" class="dt-table">
-              <thead>
-                <tr><th>标签全名</th><th>操作</th><th>类型</th><th>采集周期</th><th></th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="t in tagsOfDev(curDev.id)" :key="t.i" @click="selectTag(t.i)">
-                  <td class="c-name">{{ t.t.name || '(未命名)' }}</td>
-                  <td>{{ t.t.operation || '—' }}</td>
-                  <td><span class="type-badge" :class="finalTypeClass(t.t.finalType)">{{ t.t.finalType || '?' }}</span></td>
-                  <td>{{ t.t.scanRateMs }} ms</td>
-                  <td class="c-go">编辑 ›</td>
-                </tr>
-              </tbody>
-            </table>
-            <el-alert
-              v-else type="info" :closable="false"
-              title="该设备暂无标签, 点击左下角「新增标签」创建"
-            />
-          </el-card>
-        </el-tab-pane>
-      </el-tabs>
+        <el-card shadow="never" class="blk">
+          <div class="blk-title">{{ t('连接参数') }}</div>
+          <el-form size="default" class="form-grid">
+            <el-form-item :label="t('主机')">
+              <el-input
+                :model-value="curDev.connection.host" style="width: 200px"
+                @update:model-value="v => { curDev.connection.host = v; emitDoc() }"
+              />
+            </el-form-item>
+            <el-form-item :label="t('端口')">
+              <el-input-number
+                :model-value="curDev.connection.port" :min="1" :max="65535"
+                @update:model-value="v => { curDev.connection.port = v; emitDoc() }"
+              />
+              <span class="unit">{{ t('端口 (1-65535)') }}</span>
+            </el-form-item>
+            <el-form-item :label="t('连接超时')">
+              <el-input-number
+                :model-value="curDev.connection.timeoutMs" :min="1"
+                @update:model-value="v => { curDev.connection.timeoutMs = v; emitDoc() }"
+              />
+              <span class="unit">ms</span>
+              <div class="field-hint">{{ t('仅 TCP 建链等待上限') }}</div>
+            </el-form-item>
+            <el-form-item>
+              <template #label>{{ t('请求超时') }}<FieldHelp section="device" field="requestTimeoutMs" /></template>
+              <el-input-number
+                :model-value="curDev.requestTimeoutMs ?? 3000" :min="1"
+                @update:model-value="v => { curDev.requestTimeoutMs = v; emitDoc() }"
+              />
+              <span class="unit">ms</span>
+              <div class="field-hint">{{ t('单次请求-应答等待上限; 该设备所有操作共用 (2026-08-24 收敛为唯一配置点)') }}</div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </div>
 
       <!-- 标签视图 -->
       <el-tabs v-else-if="selMode === 'tag' && curTag" v-model="tagTab" class="sec-tabs">
-        <el-tab-pane label="标签定义" name="def">
+        <el-tab-pane :label="t('标签定义')" name="def">
           <el-card shadow="never" class="blk">
             <el-form size="default" class="form-grid">
               <el-form-item>
-                <template #label>标签全名<FieldHelp section="tag" field="name" /></template>
+                <template #label>{{ t('标签全名') }}<FieldHelp section="tag" field="name" /></template>
                 <el-input
                   :model-value="tagNameDraft" style="width: 240px"
-                  placeholder="如 PLC-001.Temperature"
+                  :placeholder="t('如 PLC-001.Temperature')"
                   @update:model-value="v => tagNameDraft = v"
                   @change="commitTagName"
                 />
               </el-form-item>
               <el-form-item>
-                <template #label>显示名称<FieldHelp section="tag" field="label" /></template>
+                <template #label>{{ t('显示名称') }}<FieldHelp section="tag" field="label" /></template>
                 <el-input
                   :model-value="curTag.label ?? ''" style="width: 240px"
-                  placeholder="如 1号炉温度 (空 = 显示标签名)"
+                  :placeholder="t('如 1号炉温度 (空 = 显示标签名)')"
                   @update:model-value="v => setTagText(curTag, 'label', v)"
                   @change="v => trimTagText(curTag, 'label', v)"
                 />
               </el-form-item>
               <el-form-item>
-                <template #label>单位<FieldHelp section="tag" field="unit" /></template>
+                <template #label>{{ t('单位') }}<FieldHelp section="tag" field="unit" /></template>
                 <el-input
                   :model-value="curTag.unit ?? ''" style="width: 140px"
-                  placeholder="如 °C、mm/s"
+                  :placeholder="t('如 °C、mm/s')"
                   @update:model-value="v => setTagText(curTag, 'unit', v)"
                   @change="v => trimTagText(curTag, 'unit', v)"
                 />
               </el-form-item>
               <el-form-item>
-                <template #label>所属设备<FieldHelp section="tag" field="deviceId" /></template>
+                <template #label>{{ t('所属设备') }}<FieldHelp section="tag" field="deviceId" /></template>
                 <el-select
                   :model-value="curTag.deviceId" style="width: 200px"
                   @change="v => { curTag.deviceId = v; emitDoc() }"
@@ -960,35 +934,35 @@ function onEditSource({ varName, layerKey }) {
                 </el-select>
               </el-form-item>
               <el-form-item>
-                <template #label>操作<FieldHelp section="tag" field="operation" /></template>
+                <template #label>{{ t('操作名') }}<FieldHelp section="tag" field="operation" /></template>
                 <el-select
                   :model-value="curTag.operation" filterable allow-create default-first-option
-                  placeholder="选择或输入操作名" style="width: 200px"
+                  :placeholder="t('选择或输入操作名')" style="width: 200px"
                   @change="v => { curTag.operation = v; emitDoc() }"
                 >
                   <el-option v-for="o in opCandidates(curTag)" :key="o" :label="o" :value="o" />
                 </el-select>
                 <div v-if="!opCandidates(curTag).length" class="field-hint">
-                  该设备所属协议无可选操作 — 请确认设备已关联协议，且协议里已定义 operations
+                  {{ t('该设备所属协议无可选操作 — 请确认设备已关联协议, 且协议里已定义 operations') }}
                 </div>
               </el-form-item>
               <!-- v1.7 增: 标签级写能力 — 写操作下拉 (空 = 只读) -->
               <el-form-item>
-                <template #label>写操作<FieldHelp section="tag" field="writeOperation" /></template>
+                <template #label>{{ t('写操作') }}<FieldHelp section="tag" field="writeOperation" /></template>
                 <el-select
                   :model-value="curTag.writeOperation ?? ''"
                   clearable filterable allow-create default-first-option
-                  placeholder="空 = 只读标签" style="width: 200px"
+                  :placeholder="t('空 = 只读标签')" style="width: 200px"
                   @change="v => setWriteOperation(curTag, v)"
                 >
                   <el-option v-for="o in writeOpCandidates(curTag)" :key="o" :label="o" :value="o" />
                 </el-select>
                 <div class="field-hint">
-                  非空 = 又读又写标签，写请求用该操作模板，写后按本标签读操作回校
+                  {{ t('非空 = 又读又写标签, 写请求用该操作模板, 写后按本标签读操作回校') }}
                 </div>
               </el-form-item>
               <el-form-item>
-                <template #label>采集周期<FieldHelp section="tag" field="scanRateMs" /></template>
+                <template #label>{{ t('采集周期') }}<FieldHelp section="tag" field="scanRateMs" /></template>
                 <el-input-number
                   :model-value="curTag.scanRateMs" :min="100"
                   @update:model-value="v => { curTag.scanRateMs = v; emitDoc() }"
@@ -996,22 +970,22 @@ function onEditSource({ varName, layerKey }) {
                 <span class="unit">ms (≥100)</span>
               </el-form-item>
               <el-form-item>
-                <template #label>数据类型<FieldHelp section="tag" field="finalType" /></template>
+                <template #label>{{ t('数据类型') }}<FieldHelp section="tag" field="finalType" /></template>
                 <el-select
                   :model-value="curTag.finalType" filterable allow-create default-first-option
                   style="width: 160px"
                   @change="v => setFinalType(curTag, v)"
                 >
-                  <el-option v-for="t in FINAL_TYPES" :key="t" :label="t" :value="t" />
+                  <el-option v-for="ft in FINAL_TYPES" :key="ft" :label="ft" :value="ft" />
                 </el-select>
-                <div class="field-hint">决定寄存器字节如何解读（如 Float 需 2 个寄存器）</div>
+                <div class="field-hint">{{ t('决定寄存器字节如何解读 (如 Float 需 2 个寄存器)') }}</div>
               </el-form-item>
               <el-form-item>
-                <template #label>字节序<FieldHelp section="tag" field="byteOrder" /></template>
+                <template #label>{{ t('字节序') }}<FieldHelp section="tag" field="byteOrder" /></template>
                 <el-select
                   :model-value="curTag.byteOrder ?? ''"
                   clearable filterable
-                  placeholder="默认(协议 dataByteOrder)"
+                  :placeholder="t('默认(协议 dataByteOrder)')"
                   style="width: 200px"
                   @change="v => setByteOrder(curTag, v)"
                 >
@@ -1022,11 +996,11 @@ function onEditSource({ varName, layerKey }) {
           </el-card>
         </el-tab-pane>
 
-        <el-tab-pane label="地址与变量" name="vars">
+        <el-tab-pane :label="t('地址与变量')" name="vars">
           <el-card shadow="never" class="blk">
             <el-form size="default" class="form-grid">
               <!-- v1.31: 简易地址映射 — 把引擎的字节契约换算成现场单位 -->
-              <el-form-item v-if="simpleSupported(curTag)" label="地址映射" class="span2">
+              <el-form-item v-if="simpleSupported(curTag)" :label="t('地址映射')" class="span2">
                 <div class="simple-map">
                   <div class="sm-row">
                     <span class="sm-label">{{ simpleAddrLabel(curTag) }}</span>
@@ -1044,43 +1018,43 @@ function onEditSource({ varName, layerKey }) {
                         controls-position="right" style="width: 130px"
                         @change="v => setSimpleCount(curTag, v)"
                       />
-                      <span class="sm-hint">{{ curTag.finalType }} · {{ typeSizeOf(curTag.finalType) }} 字节/值</span>
+                      <span class="sm-hint">{{ t('{type} · {n} 字节/值', { type: curTag.finalType, n: typeSizeOf(curTag.finalType) }) }}</span>
                     </template>
                     <template v-else-if="simpleAddrMode(curTag) === 'byte'">
-                      <span class="sm-label">位偏移</span>
+                      <span class="sm-label">{{ t('位偏移') }}</span>
                       <el-input-number
                         :model-value="curTag.bitOffset < 0 ? 0 : curTag.bitOffset"
                         :min="0" :max="7" controls-position="right" style="width: 110px"
-                        aria-label="位偏移"
+                        :aria-label="t('位偏移')"
                         @change="v => setSimpleBit(curTag, v)"
                       />
-                      <span class="sm-hint">0-7, 对应 DBX….0 ~ .7</span>
+                      <span class="sm-hint">{{ t('0-7, 对应 DBX….0 ~ .7') }}</span>
                     </template>
                   </div>
                   <div class="sm-derived">
-                    自动换算
+                    {{ t('自动换算') }}
                     <code>StartByteAddress={{ (curTag.variables || {}).StartByteAddress ?? 0 }}</code>
                     <code>ByteCount={{ (curTag.variables || {}).ByteCount ?? 0 }}</code>
                     <code v-if="curTag.bitOffset >= 0">bitOffset={{ curTag.bitOffset }}</code>
-                    <span v-if="simpleAddrMode(curTag) === 'word'">字地址 ×2 = 字节地址</span>
-                    <span v-else-if="simpleAddrMode(curTag) === 'bit'">线圈号 → 字节地址 + 位偏移</span>
+                    <span v-if="simpleAddrMode(curTag) === 'word'">{{ t('字地址 ×2 = 字节地址') }}</span>
+                    <span v-else-if="simpleAddrMode(curTag) === 'bit'">{{ t('线圈号 → 字节地址 + 位偏移') }}</span>
                   </div>
                   <div v-if="curTag.writeOperation" class="field-hint">
-                    该标签同时可写；若写变量含长度派生项，请在下方「请求变量（高级）」中确认。
+                    {{ t('该标签同时可写; 若写变量含长度派生项, 请在下方「请求变量 (高级)」中确认。') }}
                   </div>
                   <div
                     v-if="!simpleBitOnly(curTag) && (simpleCount(curTag) < 1 || simpleCount(curTag) !== Math.floor(simpleCount(curTag)))"
                     class="field-hint warn"
                   >
-                    当前 ByteCount={{ (curTag.variables || {}).ByteCount ?? 0 }} 不是 {{ curTag.finalType }} 的整数倍，请修正值个数。
+                    {{ t('当前 ByteCount={bc} 不是 {type} 的整数倍, 请修正值个数。', { bc: (curTag.variables || {}).ByteCount ?? 0, type: curTag.finalType }) }}
                   </div>
                 </div>
               </el-form-item>
 
               <!-- v1.8 增: 当前操作的占位符提示速览 (折叠展开) — 让用户一眼看到变量名↔可读名 映射 -->
-              <el-form-item v-if="opHintsList(curTag).length" label="占位符提示" class="span2">
+              <el-form-item v-if="opHintsList(curTag).length" :label="t('占位符提示')" class="span2">
                 <el-collapse class="hint-preview">
-                  <el-collapse-item name="hints" :title="`共 ${opHintsList(curTag).length} 个变量配置了提示`">
+                  <el-collapse-item name="hints" :title="t('共 {n} 个变量配置了提示', { n: opHintsList(curTag).length })">
                     <div class="hint-list">
                       <div
                         v-for="h in opHintsList(curTag)" :key="h.name"
@@ -1093,7 +1067,7 @@ function onEditSource({ varName, layerKey }) {
                           size="small"
                           :type="h.source === 'op' ? 'warning' : 'info'"
                           effect="plain"
-                        >{{ h.source === 'op' ? '操作级' : '协议级' }}</el-tag>
+                        >{{ h.source === 'op' ? t('操作级') : t('协议级') }}</el-tag>
                         <el-tag
                           v-if="h.enum" size="small" type="success" effect="plain"
                         >enum: {{ enumShortText(h.enum) }}</el-tag>
@@ -1114,15 +1088,16 @@ function onEditSource({ varName, layerKey }) {
                 />
               </el-form-item>
 
-              <el-form-item label="请求变量（高级）" class="span2">
+              <el-form-item :label="t('请求变量 (高级)')" class="span2">
                 <div class="kv-editor">
                   <div v-if="simpleSupported(curTag)" class="field-hint" style="margin-bottom: 6px">
-                    通常无需手改：上方「地址映射」已自动维护 StartByteAddress / ByteCount；
-                    这里用于编辑其它变量（如 DBNumber / Area / UnitID）。
+                    {{ t('通常无需手改: 上方「地址映射」已自动维护 StartByteAddress / ByteCount;') }}
+                    {{ t('这里用于编辑其它变量 (如 DBNumber / Area / UnitID)。') }}
                   </div>
                   <div v-for="(row, j) in curTag._rows" :key="j" class="kv-row">
                     <el-input
-                      v-model="row.k" placeholder="变量名 (如 StartByteAddress)"
+                      v-model="row.k" :placeholder="t('变量名 (如 StartByteAddress)')"
+                      class="kv-key-input"
                       style="width: 200px" @change="flushVars(curTag)"
                     />
                     <!-- v1.5 增: 存在 hint.enum → 用 el-select (候选下拉);
@@ -1130,7 +1105,7 @@ function onEditSource({ varName, layerKey }) {
                     <el-select
                       v-if="row.k && row.k.trim() && hintEnumFor(curTag, row.k.trim())"
                       v-model="row.v"
-                      placeholder="值"
+                      :placeholder="t('值')"
                       style="width: 140px"
                       filterable allow-create
                       @change="flushVars(curTag)"
@@ -1144,7 +1119,7 @@ function onEditSource({ varName, layerKey }) {
                     </el-select>
                     <el-input-number
                       v-else
-                      v-model="row.v" :controls="false" placeholder="值"
+                      v-model="row.v" :controls="false" :placeholder="t('值')"
                       style="width: 120px" @update:model-value="flushVars(curTag)"
                     />
                     <!-- v1.5 增: 协议 inputs 渲染的可读标签/单位 -->
@@ -1155,30 +1130,31 @@ function onEditSource({ varName, layerKey }) {
                       effect="plain"
                       class="var-hint"
                       :title="hintSource(curTag, row.k.trim()) === 'op'
-                        ? '来自 操作级 inputs (覆盖了协议级 inputs)'
+                        ? t('来自 操作级 inputs (覆盖了协议级 inputs)')
                         : hintSource(curTag, row.k.trim()) === 'meta'
-                        ? '来自 协议级 inputs (全局共享)'
+                        ? t('来自 协议级 inputs (全局共享)')
                         : ''"
                     >
                       {{ hintFor(curTag, row.k.trim()) }}
                     </el-tag>
                     <el-button type="danger" size="small" text @click="removeVarRow(curTag, j)">
-                      删除
+                      {{ t('删除') }}
                     </el-button>
                   </div>
-                  <el-button size="small" plain @click="addVarRow(curTag)">添加变量</el-button>
+                  <el-button size="small" plain @click="addVarRow(curTag)">{{ t('添加变量') }}</el-button>
                 </div>
               </el-form-item>
               <!-- v1.7 增: 写请求专用变量 — 仅配置了写操作的标签出现 -->
-              <el-form-item v-if="curTag.writeOperation" label="写变量" class="span2">
-                <div class="kv-editor">
+              <el-form-item v-if="curTag.writeOperation" :label="t('写变量')" class="span2">
+                <div class="kv-editor kv-write-editor">
                   <div v-for="(row, j) in curTag._wrows" :key="j" class="kv-row">
                     <el-input
-                      v-model="row.k" placeholder="写请求变量名 (如 TransportSize)"
+                      v-model="row.k" :placeholder="t('写请求变量名 (如 TransportSize)')"
+                      class="kv-key-input"
                       style="width: 200px" @change="flushWriteVars(curTag)"
                     />
                     <el-input-number
-                      v-model="row.v" :controls="false" placeholder="值"
+                      v-model="row.v" :controls="false" :placeholder="t('值')"
                       style="width: 120px" @update:model-value="flushWriteVars(curTag)"
                     />
                     <!-- v1.8 增: 写变量行也展示 hint (同协议级 inputs 适用) -->
@@ -1189,20 +1165,20 @@ function onEditSource({ varName, layerKey }) {
                       effect="plain"
                       class="var-hint"
                       :title="hintSource(curTag, row.k.trim()) === 'op'
-                        ? '来自 操作级 inputs (覆盖了协议级 inputs)'
+                        ? t('来自 操作级 inputs (覆盖了协议级 inputs)')
                         : hintSource(curTag, row.k.trim()) === 'meta'
-                        ? '来自 协议级 inputs (全局共享)'
+                        ? t('来自 协议级 inputs (全局共享)')
                         : ''"
                     >
                       {{ hintFor(curTag, row.k.trim()) }}
                     </el-tag>
                     <el-button type="danger" size="small" text @click="removeWriteVarRow(curTag, j)">
-                      删除
+                      {{ t('删除') }}
                     </el-button>
                   </div>
-                  <el-button size="small" plain @click="addWriteVarRow(curTag)">添加写变量</el-button>
+                  <el-button size="small" plain @click="addWriteVarRow(curTag)">{{ t('添加写变量') }}</el-button>
                   <div class="field-hint">
-                    在请求变量之上合并（同名键覆盖），仅作用于写请求；不填则写请求沿用请求变量
+                    {{ t('在请求变量之上合并 (同名键覆盖), 仅作用于写请求; 不填则写请求沿用请求变量') }}
                   </div>
                 </div>
               </el-form-item>
@@ -1213,86 +1189,86 @@ function onEditSource({ varName, layerKey }) {
 
       <el-alert
         v-else type="info" :closable="false"
-        title="左侧选择设备或标签"
+        :title="t('左侧选择设备或标签')"
       />
 
       <!-- 系统设置: 原「全局参数」页签降级为抽屉 (低频设置, 不占主层级) -->
       <el-drawer
-        v-model="sysSettings" title="系统设置 (全局参数)" size="520px"
+        v-model="sysSettings" :title="t('系统设置 (全局参数)')" size="520px"
         class="sys-drawer" destroy-on-close
       >
         <el-collapse v-model="activeBlocks" class="blk-collapse">
           <el-collapse-item name="resilience">
-            <template #title><span class="sec-title blk-ct">弹性参数 (Resilience)</span></template>
+            <template #title><span class="sec-title blk-ct">{{ t('弹性参数 (Resilience)') }}</span></template>
             <el-form size="default" class="form-grid form-grid-wide">
-              <el-form-item label="最大重试次数">
+              <el-form-item :label="t('最大重试次数')">
                 <el-input-number
                   :model-value="local.resilience.maxAttempts" :min="0"
                   @update:model-value="v => { local.resilience.maxAttempts = v; emitDoc() }"
                 />
               </el-form-item>
-              <el-form-item label="退避基数">
+              <el-form-item :label="t('退避基数')">
                 <el-input-number
                   :model-value="local.resilience.backoffBaseMs" :min="0"
                   @update:model-value="v => { local.resilience.backoffBaseMs = v; emitDoc() }"
                 />
                 <span class="unit">ms</span>
               </el-form-item>
-              <el-form-item label="退避上限">
+              <el-form-item :label="t('退避上限')">
                 <el-input-number
                   :model-value="local.resilience.backoffMaxMs" :min="0"
                   @update:model-value="v => { local.resilience.backoffMaxMs = v; emitDoc() }"
                 />
                 <span class="unit">ms</span>
               </el-form-item>
-              <el-form-item label="熔断失败阈值">
+              <el-form-item :label="t('熔断失败阈值')">
                 <el-input-number
                   :model-value="local.resilience.failureThreshold" :min="1"
                   @update:model-value="v => { local.resilience.failureThreshold = v; emitDoc() }"
                 />
-                <span class="unit">次</span>
+                <span class="unit">{{ t('次') }}</span>
               </el-form-item>
-              <el-form-item label="熔断冷却">
+              <el-form-item :label="t('熔断冷却')">
                 <el-input-number
                   :model-value="local.resilience.cooldownMs" :min="0"
                   @update:model-value="v => { local.resilience.cooldownMs = v; emitDoc() }"
                 />
                 <span class="unit">ms</span>
               </el-form-item>
-              <el-form-item label="半开探测数">
+              <el-form-item :label="t('半开探测数')">
                 <el-input-number
                   :model-value="local.resilience.halfOpenProbes" :min="1"
                   @update:model-value="v => { local.resilience.halfOpenProbes = v; emitDoc() }"
                 />
-                <span class="unit">次</span>
+                <span class="unit">{{ t('次') }}</span>
               </el-form-item>
             </el-form>
           </el-collapse-item>
 
           <el-collapse-item name="webapi">
-            <template #title><span class="sec-title blk-ct">WebApi 参数</span></template>
+            <template #title><span class="sec-title blk-ct">{{ t('WebApi 参数') }}</span></template>
             <el-form size="default" class="form-grid form-grid-wide">
-              <el-form-item label="绑定地址">
+              <el-form-item :label="t('绑定地址')">
                 <el-input
                   :model-value="local.webApi.bindAddress"
                   style="max-width: 240px"
                   @update:model-value="v => { local.webApi.bindAddress = v; emitDoc() }"
                 />
               </el-form-item>
-              <el-form-item label="启用认证">
+              <el-form-item :label="t('启用认证')">
                 <el-switch
                   :model-value="!!local.webApi.requireAuth"
                   @change="v => { local.webApi.requireAuth = v; emitDoc() }"
                 />
               </el-form-item>
-              <el-form-item label="限速">
+              <el-form-item :label="t('限速')">
                 <el-input-number
                   :model-value="local.webApi.rateLimitRps" :min="1"
                   @update:model-value="v => { local.webApi.rateLimitRps = v; emitDoc() }"
                 />
                 <span class="unit">rps</span>
               </el-form-item>
-              <el-form-item label="限速突发">
+              <el-form-item :label="t('限速突发')">
                 <el-input-number
                   :model-value="local.webApi.rateLimitBurst" :min="1"
                   @update:model-value="v => { local.webApi.rateLimitBurst = v; emitDoc() }"
@@ -1410,7 +1386,7 @@ function onEditSource({ varName, layerKey }) {
   font-size: 11px;
   color: var(--mp-muted);
   background: var(--mp-surface-3);
-  border-radius: var(--mp-radius-pill);
+  border-radius: var(--mp-radius-sm);
   padding: 0 6px;
   font-variant-numeric: tabular-nums;
 }
@@ -1558,30 +1534,17 @@ function onEditSource({ varName, layerKey }) {
   height: 100%;
   overflow: auto;
 }
-/* 设备视图的标签表格 */
-.dt-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--mp-fs-sm);
+/* 设备视图: 基本信息 + 连接参数两张卡片, 同时可见 */
+.dev-pane .form-grid {
+  max-width: 760px;
+  column-gap: 40px;
 }
-.dt-table th {
-  text-align: left;
+.blk-title {
   font-weight: 600;
-  color: var(--mp-muted);
-  padding: 7px 8px;
-  background: var(--mp-surface-2);
-  border-bottom: 1px solid var(--mp-border);
+  font-size: var(--mp-fs-base);
+  color: var(--mp-ink);
+  margin-bottom: 10px;
 }
-.dt-table td {
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--mp-border);
-  color: var(--mp-ink-2);
-}
-.dt-table tbody tr { cursor: pointer; }
-.dt-table tbody tr:nth-child(even) { background: var(--mp-surface-2); }
-.dt-table tbody tr:hover { background: var(--mp-accent-soft); }
-.dt-table .c-name { font-family: var(--mp-font-mono); }
-.dt-table .c-go { color: var(--mp-accent); white-space: nowrap; text-align: right; }
 .blk {
   margin-bottom: var(--mp-sp-3);
 }

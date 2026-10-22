@@ -1,4 +1,6 @@
 // API 客户端 — 统一携带 Bearer token (localStorage), 错误统一为 ApiError
+import { t } from './i18n'
+
 const TOKEN_KEY = 'myprot_token'
 
 export function getToken() { return localStorage.getItem(TOKEN_KEY) || '' }
@@ -68,9 +70,9 @@ async function requestOnce(method, url, rawBody) {
     res = await fetch(url, { method, headers, body: rawBody, signal: ctl.signal })
   } catch (e) {
     if (e && e.name === 'AbortError') {
-      throw new ApiError(0, '请求超时 (' + (REQUEST_TIMEOUT_MS / 1000) + 's) — 服务无响应')
+      throw new ApiError(0, t('请求超时 ({s}s) — 服务无响应', { s: REQUEST_TIMEOUT_MS / 1000 }))
     }
-    throw new ApiError(0, '无法连接服务器')
+    throw new ApiError(0, t('无法连接服务器'))
   } finally {
     clearTimeout(timer)
   }
@@ -107,6 +109,12 @@ async function request(method, url, rawBody) {
   const p = send().finally(() => inflightGets.delete(url))
   inflightGets.set(url, p)
   return p
+}
+
+// ── 存活探针 (/health, 免认证) ──
+// 返回 { status, authRequired }: 前端据此判断是否需要登录页与「退出」
+export async function health() {
+  return JSON.parse(await request('GET', '/health'))
 }
 
 // ── 配置 CRUD ──
@@ -195,8 +203,8 @@ export async function writeTag(body) {
 export function dataStreamUrl(device) {
   const params = new URLSearchParams()
   if (device) params.set('device', device)
-  const t = getToken()
-  if (t) params.set('token', t)
+  const token = getToken()
+  if (token) params.set('token', token)
   const qs = params.toString()
   return `/api/data/stream${qs ? '?' + qs : ''}`
 }

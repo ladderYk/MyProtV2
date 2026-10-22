@@ -8,6 +8,7 @@
 
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { t } from '../i18n'
 import {
   ElTable, ElTableColumn, ElInput, ElSelect, ElOption,
   ElButton, ElTag, ElTooltip, ElDialog, ElForm, ElFormItem,
@@ -85,9 +86,9 @@ const fileInput = ref(null)
 function typeTagType(t) {
   return t === 'hex' ? 'info' : t === 'raw' ? 'danger' : 'warning'
 }
-function typeLabel(t) {
-  const f = FIELD_TYPES.find(x => x.value === t)
-  return f ? f.label : t
+function typeLabel(type) {
+  const f = FIELD_TYPES.find(x => x.value === type)
+  return f ? t(f.label) : type
 }
 
 // 变量名 → 命中的变量声明列表 (协议级与操作级重名时返回多条)
@@ -198,7 +199,7 @@ function setRawMode(v) {
     fields.value = lines.map(parseTemplateSegment).filter(Boolean)
     syncToProps()
   } catch (e) {
-    ElMessage.error('原始模式解析失败: ' + e.message)
+    ElMessage.error(t('原始模式解析失败: {msg}', { msg: e.message }))
     showRawMode.value = true
   }
 }
@@ -255,14 +256,14 @@ function applyPreset(name) {
   if (!PRESETS[name]) return
   const missing = presetMissingVars(name)
   if (missing.length) {
-    ElMessage.warning(`预设「${name}」需要当前协议未声明的变量: ${missing.join(', ')}`)
+    ElMessage.warning(t('预设「{name}」需要当前协议未声明的变量: {vars}', { name, vars: missing.join(', ') }))
     presetSelect.value = ''
     return
   }
-  if (fields.value.length && !confirm(`将替换现有 ${fields.value.length} 个字段，确定？`)) return
+  if (fields.value.length && !confirm(t('将替换现有 {n} 个字段, 确定？', { n: fields.value.length }))) return
   fields.value = PRESETS[name].map(parseTemplateSegment).filter(Boolean)
   syncToProps()
-  ElMessage.success(`已应用预设: ${name}`)
+  ElMessage.success(t('已应用预设: {name}', { name }))
 }
 
 // 导出/导入 JSON
@@ -285,15 +286,15 @@ function importFields(file) {
   reader.onload = e => {
     try {
       const data = JSON.parse(e.target.result)
-      if (!Array.isArray(data)) throw new Error('需为数组')
+      if (!Array.isArray(data)) throw new Error(t('需为数组'))
       fields.value = data.map(d => {
         if (d.type === 'hex') return { type: 'hex', hex: d.hex || '00' }
         return { type: d.type || 'var', name: d.name || '', format: d.format || 'X4' }
       })
       syncToProps()
-      ElMessage.success(`导入 ${fields.value.length} 个字段`)
+      ElMessage.success(t('导入 {n} 个字段', { n: fields.value.length }))
     } catch (err) {
-      ElMessage.error('导入失败: ' + err.message)
+      ElMessage.error(t('导入失败: {msg}', { msg: err.message }))
     }
   }
   reader.readAsText(file)
@@ -304,16 +305,16 @@ const validationErrors = computed(() => {
   const errors = []
   fields.value.forEach((f, i) => {
     if (f.type === 'var' || f.type === 'raw') {
-      if (!f.name) errors.push(`第 ${i+1} 字段: 变量名不能为空`)
+      if (!f.name) errors.push(t('第 {n} 字段: 变量名不能为空', { n: i + 1 }))
       // 同一变量多次出现是合法的 (每处渲染同一值) —
       // 如 ADS AMS 头 targetNetId/sourceNetId 复用同一 NetID 变量
       // 检查变量是否在 availableVars 中定义
       if (!props.availableVars.some(v => v.name === f.name)) {
-        errors.push(`第 ${i+1} 字段: 变量 "${f.name}" 未在协议 inputs/outputs 中声明`)
+        errors.push(t('第 {n} 字段: 变量 "{name}" 未在协议 inputs/outputs 中声明', { n: i + 1, name: f.name }))
       }
     }
     if (f.type === 'hex' && !/^([0-9A-Fa-f]{2}\s*)+$/.test(f.hex)) {
-      errors.push(`第 ${i+1} 字段: 无效十六进制 "${f.hex}"`)
+      errors.push(t('第 {n} 字段: 无效十六进制 "{hex}"', { n: i + 1, hex: f.hex }))
     }
   })
   return errors
@@ -337,23 +338,23 @@ const stats = computed(() => {
     <div class="fb-toolbar">
       <div class="toolbar-left">
         <el-button-group>
-          <el-button size="small" @click="addField(-1, 'hex')" title="添加固定十六进制段">
+          <el-button size="small" @click="addField(-1, 'hex')" :title="t('添加固定十六进制段')">
             <span class="btn-icon">⬜</span> Hex
           </el-button>
-          <el-button size="small" @click="addField(-1, 'var')" title="添加变量占位符">
-            <span class="btn-icon">{ }</span> 变量
+          <el-button size="small" @click="addField(-1, 'var')" :title="t('添加变量占位符')">
+            <span class="btn-icon">{ }</span> {{ t('变量') }}
           </el-button>
-          <el-button v-if="operationKind === 'write'" size="small" @click="addField(-1, 'raw')" title="添加原始载荷">
+          <el-button v-if="operationKind === 'write'" size="small" @click="addField(-1, 'raw')" :title="t('添加原始载荷')">
             <span class="btn-icon">📦</span> Raw
           </el-button>
         </el-button-group>
 
         <el-divider direction="vertical" class="mx-2" />
 
-        <el-select v-model="presetSelect" placeholder="快速预设" style="width: 210px" @change="v => v && applyPreset(v)">
+        <el-select v-model="presetSelect" :placeholder="t('快速预设')" style="width: 210px" @change="v => v && applyPreset(v)">
           <el-option
             v-for="p in Object.keys(PRESETS)" :key="p"
-            :label="presetMissingVars(p).length ? p + '（本协议不适用）' : p"
+            :label="presetMissingVars(p).length ? p + t(' (本协议不适用)') : p"
             :value="p"
             :disabled="presetMissingVars(p).length > 0"
           />
@@ -361,18 +362,18 @@ const stats = computed(() => {
 
         <el-divider direction="vertical" class="mx-2" />
 
-        <el-button size="small" @click="exportFields">导出 JSON</el-button>
-        <el-button size="small" @click="fileInput.click()">导入 JSON</el-button>
+        <el-button size="small" @click="exportFields">{{ t('导出 JSON') }}</el-button>
+        <el-button size="small" @click="fileInput.click()">{{ t('导入 JSON') }}</el-button>
         <input ref="fileInput" type="file" accept=".json" style="display:none" @change="e => importFields(e.target.files[0])" />
       </div>
 
       <div class="toolbar-right">
-        <el-switch v-model="showRawMode" inline-prompt active-text="原始模式" inactive-text="可视化" @change="setRawMode" />
+        <el-switch v-model="showRawMode" inline-prompt :active-text="t('原始模式')" :inactive-text="t('可视化')" @change="setRawMode" />
         <el-tag :type="validationErrors.length ? 'danger' : 'success'" size="small">
-          {{ validationErrors.length ? '⚠ ' + validationErrors.length + ' 个问题' : '✓ 校验通过' }}
+          {{ validationErrors.length ? t('⚠ {n} 个问题', { n: validationErrors.length }) : t('✓ 校验通过') }}
         </el-tag>
         <el-tag size="small" class="ml-2">
-          {{ stats.hexBytes }}B 固定 + {{ stats.varCount }} 变量 + {{ stats.rawCount }} Raw
+          {{ t('{hex}B 固定 + {vars} 变量 + {raw} Raw', { hex: stats.hexBytes, vars: stats.varCount, raw: stats.rawCount }) }}
         </el-tag>
       </div>
     </div>
@@ -382,7 +383,7 @@ const stats = computed(() => {
       <el-table :data="fields" border stripe size="small" class="fb-table">
         <el-table-column type="index" width="50" label="#" align="center" />
 
-        <el-table-column prop="type" label="类型" width="110" align="center">
+        <el-table-column prop="type" :label="t('类型')" width="110" align="center">
           <template #default="scope">
             <el-tag :type="typeTagType(scope.row.type)" size="small" effect="plain">
               {{ typeLabel(scope.row.type) }}
@@ -391,13 +392,13 @@ const stats = computed(() => {
         </el-table-column>
 
         <!-- 固定十六进制列 -->
-        <el-table-column label="十六进制内容" min-width="200">
+        <el-table-column :label="t('十六进制内容')" min-width="200">
           <template #default="scope">
             <el-input
               v-if="scope.row.type === 'hex'"
               v-model="scope.row.hex"
               size="small"
-              placeholder="如 03 00 00 1F"
+              :placeholder="t('如 03 00 00 1F')"
               @change="syncToProps"
               class="hex-input"
             />
@@ -406,7 +407,7 @@ const stats = computed(() => {
         </el-table-column>
 
         <!-- 变量名列 -->
-        <el-table-column label="变量名" min-width="160">
+        <el-table-column :label="t('变量名')" min-width="160">
           <template #default="scope">
             <el-select
               v-if="scope.row.type === 'var' || scope.row.type === 'raw'"
@@ -415,7 +416,7 @@ const stats = computed(() => {
               filterable
               allow-create
               default-first-option
-              placeholder="选择或输入变量名"
+              :placeholder="t('选择或输入变量名')"
               @change="syncToProps"
               style="width: 100%"
             >
@@ -431,13 +432,13 @@ const stats = computed(() => {
         </el-table-column>
 
         <!-- 格式列 -->
-        <el-table-column label="格式" width="160" align="center">
+        <el-table-column :label="t('格式')" width="160" align="center">
           <template #default="scope">
             <el-select
               v-if="scope.row.type === 'var'"
               v-model="scope.row.format"
               size="small"
-              :placeholder="scope.row.name ? '选择格式' : '先选变量'"
+              :placeholder="scope.row.name ? t('选择格式') : t('先选变量')"
               :disabled="!scope.row.name"
               @change="syncToProps"
               style="width: 100%"
@@ -445,7 +446,7 @@ const stats = computed(() => {
               <el-option
                 v-for="fmt in formatOptionsForVar(scope.row.name)"
                 :key="fmt.value"
-                :label="fmt.label"
+                :label="t(fmt.label)"
                 :value="fmt.value"
               />
             </el-select>
@@ -455,32 +456,32 @@ const stats = computed(() => {
         </el-table-column>
 
         <!-- 变量信息提示列 -->
-        <el-table-column label="变量信息" min-width="180">
+        <el-table-column :label="t('变量信息')" min-width="180">
           <template #default="scope">
             <div v-if="scope.row.type === 'var' || scope.row.type === 'raw'" class="var-info">
               <el-tooltip
                 v-for="av in matchingVarDef(scope.row.name)"
                 :key="av.name"
-                :content="av.desc || av.placeholder || '无描述'"
+                :content="av.desc || av.placeholder || t('无描述')"
                 placement="top"
               >
                 <el-tag size="small" :type="av.source === 'op' ? 'warning' : 'info'" effect="plain">
                   {{ av.label || av.name }} {{ av.unit ? '(' + av.unit + ')' : '' }}
                 </el-tag>
               </el-tooltip>
-              <span v-if="!matchingVarDef(scope.row.name).length" class="text-muted">未在协议中声明</span>
+              <span v-if="!matchingVarDef(scope.row.name).length" class="text-muted">{{ t('未在协议中声明') }}</span>
             </div>
           </template>
         </el-table-column>
 
         <!-- 操作列 -->
-        <el-table-column label="操作" width="140" align="center" fixed="right">
+        <el-table-column :label="t('操作')" width="140" align="center" fixed="right">
           <template #default="scope">
             <el-button-group size="small">
-              <el-button text @click="moveField(scope.$index, -1)" :disabled="scope.$index === 0" title="上移">↑</el-button>
-              <el-button text @click="moveField(scope.$index, 1)" :disabled="scope.$index === fields.length - 1" title="下移">↓</el-button>
-              <el-button text @click="duplicateField(scope.$index)" title="复制">⎘</el-button>
-              <el-button text type="danger" @click="removeField(scope.$index)" title="删除">🗑</el-button>
+              <el-button text @click="moveField(scope.$index, -1)" :disabled="scope.$index === 0" :title="t('上移')">↑</el-button>
+              <el-button text @click="moveField(scope.$index, 1)" :disabled="scope.$index === fields.length - 1" :title="t('下移')">↓</el-button>
+              <el-button text @click="duplicateField(scope.$index)" :title="t('复制')">⎘</el-button>
+              <el-button text type="danger" @click="removeField(scope.$index)" :title="t('删除')">🗑</el-button>
             </el-button-group>
           </template>
         </el-table-column>
@@ -495,17 +496,17 @@ const stats = computed(() => {
     <!-- 原始文本模式 -->
     <div v-else class="fb-raw-mode">
       <div class="raw-header">
-        <span class="raw-title">原始模板文本 (每行一个段)</span>
-        <el-button size="small" @click="setRawMode(false)">返回可视化编辑</el-button>
+        <span class="raw-title">{{ t('原始模板文本 (每行一个段)') }}</span>
+        <el-button size="small" @click="setRawMode(false)">{{ t('返回可视化编辑') }}</el-button>
       </div>
       <textarea
         v-model="rawText"
         class="raw-textarea"
-        placeholder="每行一个段，如：\n03 00 00 1F\n{TransactionID:X4}\n{WriteValue:raw}"
+        :placeholder="t('每行一个段, 如:') + '\n03 00 00 1F\n{TransactionID:X4}\n{WriteValue:raw}'"
         spellcheck="false"
       />
       <div class="raw-hint">
-        固定段直接写十六进制；变量写 {Name:Format}；原始载荷写 {Name:raw}；Format 可选 X2/X4/X8/raw
+        {{ t('固定段直接写十六进制; 变量写 {Name:Format}; 原始载荷写 {Name:raw}; Format 可选 X2/X4/X8/raw') }}
       </div>
     </div>
   </div>

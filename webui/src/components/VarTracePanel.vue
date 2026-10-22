@@ -6,6 +6,7 @@
 import { computed, ref } from 'vue'
 import { ElCollapse, ElCollapseItem, ElTag, ElButton, ElTooltip, ElIcon } from 'element-plus'
 import { ArrowRight, Edit, CircleCheck, CircleClose, QuestionFilled } from '@element-plus/icons-vue'
+import { t } from '../i18n'
 
 const props = defineProps({
   tag: { type: Object, required: true },           // 当前标签对象
@@ -218,7 +219,7 @@ const detailVars = (layerKey) => {
 // 详情面板标题
 const detailTitle = (layer) => {
   const count = detailVars(layer.key).length
-  return `${layer.label} (${count})`
+  return `${t(layer.label)} (${count})`
 }
 </script>
 
@@ -226,14 +227,14 @@ const detailTitle = (layer) => {
   <div class="var-trace-panel">
     <!-- 图例说明 -->
     <div class="vtp-legend">
-      <span class="legend-title">变量来源优先级（从低到高，后者覆盖前者）：</span>
+      <span class="legend-title">{{ t('变量来源优先级（从低到高，后者覆盖前者）：') }}</span>
       <el-tag v-for="l in SOURCE_LAYERS" :key="l.key" :type="l.color" size="small" effect="plain" class="legend-item">
         <span class="legend-icon">{{ l.icon }}</span>
-        <span>{{ l.label }}</span>
-        <el-tooltip :content="l.desc" placement="top"><ElIcon><QuestionFilled /></ElIcon></el-tooltip>
+        <span>{{ t(l.label) }}</span>
+        <el-tooltip :content="t(l.desc)" placement="top"><ElIcon><QuestionFilled /></ElIcon></el-tooltip>
       </el-tag>
       <el-tag v-if="writeOpName" type="danger" size="small" effect="plain" class="legend-note" disable-transitions>
-        ✍️ 写操作「{{ writeOpName }}」启用 → writeVariables 生效
+        {{ t('✍️ 写操作「{op}」启用 → writeVariables 生效', { op: writeOpName }) }}
       </el-tag>
     </div>
 
@@ -242,14 +243,14 @@ const detailTitle = (layer) => {
       <table class="vtp-table">
         <thead>
           <tr>
-            <th class="col-name">变量名</th>
-            <th class="col-hint">提示信息</th>
-            <th class="col-final">最终生效值</th>
-            <th class="col-source">生效来源</th>
-            <th v-for="l in SOURCE_LAYERS" :key="l.key" :class="['col-layer', l.key]" :title="l.desc">
-              <el-tag :type="l.color" size="small" effect="plain">{{ l.label }}</el-tag>
+            <th class="col-name">{{ t('变量名') }}</th>
+            <th class="col-hint">{{ t('提示信息') }}</th>
+            <th class="col-final">{{ t('最终生效值') }}</th>
+            <th class="col-source">{{ t('生效来源') }}</th>
+            <th v-for="l in SOURCE_LAYERS" :key="l.key" :class="['col-layer', l.key]" :title="t(l.desc)">
+              <el-tag :type="l.color" size="small" effect="plain">{{ t(l.label) }}</el-tag>
             </th>
-            <th class="col-action">操作</th>
+            <th class="col-action">{{ t('操作') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -265,7 +266,7 @@ const detailTitle = (layer) => {
                   enum: {{ enumShortText(hintEnum(varName)) }}
                 </el-tag>
               </div>
-              <span v-else class="text-muted">无提示</span>
+              <span v-else class="text-muted">{{ t('无提示') }}</span>
             </td>
             <td class="col-final">
               <code class="final-value">{{ formatValue(finalVariables[varName]?.value) }}</code>
@@ -276,14 +277,14 @@ const detailTitle = (layer) => {
                 size="small"
                 effect="plain"
               >
-                {{ sourceLabel(getEffectiveLayer(varName)) }}
+                {{ t(sourceLabel(getEffectiveLayer(varName))) }}
               </el-tag>
             </td>
             <td v-for="l in SOURCE_LAYERS" :key="l.key" :class="['col-layer', l.key]">
               <div class="layer-cell" :class="{ active: layerHasVar(l.key, varName), effective: getEffectiveLayer(varName) === l.key }">
                 <span v-if="layerHasVar(l.key, varName)" class="layer-value">{{ formatValue(layerValue(l.key, varName)) }}</span>
                 <span v-else class="layer-empty">—</span>
-                <el-tooltip v-if="getEffectiveLayer(varName) === l.key" content="当前生效层" placement="top">
+                <el-tooltip v-if="getEffectiveLayer(varName) === l.key" :content="t('当前生效层')" placement="top">
                   <ElIcon class="effective-badge"><CircleCheck /></ElIcon>
                 </el-tooltip>
               </div>
@@ -307,15 +308,15 @@ const detailTitle = (layer) => {
 
     <div v-else class="vtp-empty">
       <ElIcon><QuestionFilled /></ElIcon>
-      <p>暂无变量定义</p>
-      <span class="text-muted">在协议 inputs、操作 inputs、标签 variables 中添加变量后将显示追踪信息</span>
+      <p>{{ t('暂无变量定义') }}</p>
+      <span class="text-muted">{{ t('在协议 inputs、操作 inputs、标签 variables 中添加变量后将显示追踪信息') }}</span>
     </div>
 
     <!-- 来源层级详情折叠面板 -->
     <el-collapse class="vtp-detail" accordion v-if="allVarNames.length">
       <el-collapse-item v-for="l in SOURCE_LAYERS" :key="l.key" :name="l.key" :title="detailTitle(l)">
         <div class="detail-content">
-          <div v-if="detailVars(l.key).length === 0" class="text-muted">该层级无变量定义</div>
+          <div v-if="detailVars(l.key).length === 0" class="text-muted">{{ t('该层级无变量定义') }}</div>
           <div v-else class="detail-grid">
             <div v-for="varName in detailVars(l.key)" :key="varName" class="detail-item">
               <code>{{ varName }}</code>
