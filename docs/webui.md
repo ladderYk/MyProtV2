@@ -13,6 +13,15 @@ npm run build      # 产物 dist/, base='./' 支持子路径部署
 
 默认开发配置（`requireAuth=false`）直接进入；启用鉴权时首次打开需输入访问令牌（与后端 WebApi 一致）。
 
+## 回归测试
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1
+powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1 -SkipUiBuild   # 复用已有 dist
+```
+
+脚本会重建 `dist/`、在空闲环回端口启动 `MyProt.App`、用无头 Edge 的 DevTools Protocol 跑 69 项断言（顶栏与响应式、总览、帮助抽屉、协议与标签编辑、未保存守卫、实时监控与写入抽屉、仿真器），并检查 console 无错误、无 429、无失败请求。`scripts/ci.ps1` 默认在 E2E 之后执行该脚本，`-SkipWebUI` 可跳过；需要 Node.js（除非 `-SkipUiBuild`）与 Microsoft Edge。
+
 ## 导航与页面结构
 
 顶部导航按任务分组，默认落地 **总览**；之后会在 `localStorage` 记住上次访问的页面（`mp.ui.view`）。

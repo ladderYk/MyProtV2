@@ -3,7 +3,8 @@
 # What it does:
 #   1. Build Release x64 via scripts\build.bat (reuses the same MSBuild discovery)
 #   2. Run every executable test (4 unit test exes + MyProt.E2E)
-#   3. Print a summary table and exit with the number of failed steps
+#   3. Run the headless WebUI smoke test (scripts\webui-smoke.ps1)
+#   4. Print a summary table and exit with the number of failed steps
 #
 # Exit codes:  0 = all green, non-zero = failed step count (CI-friendly contract).
 #
@@ -11,6 +12,7 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\ci.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\ci.ps1 -Config Debug -Platform Win32
 #   powershell -ExecutionPolicy Bypass -File scripts\ci.ps1 -SkipBuild
+#   powershell -ExecutionPolicy Bypass -File scripts\ci.ps1 -SkipBuild -SkipWebUI
 #
 # NOTE: file is intentionally ASCII-only (no BOM) -- keeps console output
 #       identical across Windows PowerShell 5.1 and PowerShell 7.
@@ -20,7 +22,8 @@ param(
     [string]$Platform = "x64",
     [int]$UnitTimeoutSec = 60,
     [int]$E2ETimeoutSec = 300,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipWebUI
 )
 
 $ErrorActionPreference = "Continue"
@@ -128,7 +131,28 @@ foreach ($t in $unitTests) {
 
 Invoke-Exe -Name "MyProt.E2E" -Path (Join-Path $binDir "MyProt.E2E.exe") -TimeoutSec $E2ETimeoutSec
 
-# ── 3. summary ──
+# ── 3. WebUI smoke (headless Edge CDP; builds dist/ and boots MyProt.App) ──
+if (-not $SkipWebUI) {
+    Write-Head "WEBUI SMOKE"
+    $smoke = Join-Path $PSScriptRoot "webui-smoke.ps1"
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smoke
+    $smokeExit = $LASTEXITCODE
+    $sw.Stop()
+    $ok = ($smokeExit -eq 0)
+    Write-Host ("{0} WebUI.Smoke  ({1}s, exit={2})" -f ($(if ($ok) { "  O K " } else { " FAIL " })), [int]$sw.Elapsed.TotalSeconds, $smokeExit) `
+        -ForegroundColor $(if ($ok) { "Green" } else { "Red" })
+    [void]$results.Add([pscustomobject]@{
+        Name   = "WebUI.Smoke"
+        Result = $(if ($ok) { "PASS" } else { "FAIL" })
+        Secs   = [int]$sw.Elapsed.TotalSeconds
+        Fail   = $(if ($ok) { 0 } else { 1 })
+    })
+} else {
+    Write-Head "WEBUI SMOKE SKIPPED (-SkipWebUI)"
+}
+
+# ── 4. summary ──
 Write-Head "SUMMARY"
 $failed = 0
 foreach ($r in $results) {
@@ -138,8 +162,8 @@ foreach ($r in $results) {
 
 Write-Host ""
 if ($failed -eq 0) {
-    Write-Host "CI GATE PASSED ($($results.Count)/$($results.Count) executables green)" -ForegroundColor Green
+    Write-Host "CI GATE PASSED ($($results.Count)/$($results.Count) steps green)" -ForegroundColor Green
 } else {
-    Write-Host ("CI GATE FAILED: {0} of {1} executables failed" -f $failed, $results.Count) -ForegroundColor Red
+    Write-Host ("CI GATE FAILED: {0} of {1} steps failed" -f $failed, $results.Count) -ForegroundColor Red
 }
 exit $failed
