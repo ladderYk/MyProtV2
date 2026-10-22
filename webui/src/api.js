@@ -24,10 +24,11 @@ const REQUEST_TIMEOUT_MS = 15000
 // v6: 客户端节流 + 429 退避重试
 //   后端默认 rateLimitRps=5 / burst=10 (configs/server.json)。快速切页会瞬间发出
 //   多个配置请求 (列表 + 内容 + 备份 + 校验), 直接透传 "rate limit exceeded" 会让
-//   页面出现空列表/空表单。这里用同参数的令牌桶削峰 (burst 留 2 个余量给 SSE),
-//   万一仍被限流则退避重试, 不把限流错误直接暴露给界面。
+//   页面出现空列表/空表单。这里用同参数的令牌桶削峰。burst 取 6 (低于后端 10):
+//   SSE 长连接、启动探测等不经过本桶的请求会额外消耗服务端令牌, 留 4 个余量后
+//   实测快速切页不再偶发 429。万一仍被限流则退避重试, 不把错误直接暴露给界面。
 const CLIENT_RPS = 5
-const CLIENT_BURST = 8
+const CLIENT_BURST = 6
 const RETRY_429 = 3
 let tokens = CLIENT_BURST
 let lastRefill = Date.now()
