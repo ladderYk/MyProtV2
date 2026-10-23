@@ -38,8 +38,8 @@ LOG_ERROR("[dev={}] 握手失败: {} (step={})", deviceId, err.message, stepName
 #   - 生命周期/熔断:    SessionContext (myprot_device_lifecycle_state gauge,
 #                      myprot_device_lifecycle_transitions_total counter,
 #                      myprot_circuit_state gauge, myprot_circuit_opens_total counter)
-#   - 写路径:           RuntimeGlue (WriteViaGateway 计数)
-# GET /api/metrics 端点未实装 (见 ROADMAP.md)。目标指标形态:
+#   - 写路径:           Gateway::WriteService (写路径计数)
+# GET /metrics 已实装 (Prometheus text v0.0.4, 免认证; 路由表统一注册)。目标指标形态:
 myprot_reads_total{device="PLC1",status="success"} 12345
 myprot_reads_total{device="PLC1",status="failed"} 3
 myprot_device_lifecycle_state{device="PLC1"} 2   # New/Connecting/Connected/Degraded/Disabled
@@ -52,8 +52,8 @@ myprot_write_queue_size{device="PLC1"} 2         # per-device 写互斥队列长
 ### 10.3 健康检查
 
 ```
-GET /api/health → 200 { "status": "ok", "devices": { "PLC1": "connected", "PLC2": "disconnected" } }
-GET /api/health/ready → 200 或 503 (初始化中)
+GET /health → 200 { "status": "ok", "authRequired": bool }
+GET /metrics → 200 (Prometheus text v0.0.4)
 ```
 
 ### 10.4 关联与追踪（correlation id）
@@ -76,8 +76,8 @@ GET /api/health/ready → 200 或 503 (初始化中)
   ├─ CLI 参数解析 (--config <dir> [port]; 无参数默认 configs:8080)
   ├─ Service::ConfigDirectoryLoader::Load(configDir, schemaVersion)   # 唯一装载入口
   │   ├─ SchemaRegistry: 字段清单 / 类型 / 默认值 (单次扫描)
-  │   ├─ ConfigDeepValidator: 十五项规则 (协议字段完整性 / 设备→协议引用 /
-  │   │   标签→设备 / 标签→操作 / framing 字段间一致性 / resilience 块 ...)
+  │   ├─ ConfigDeepValidator: 规则编排 (结构规则 SchemaChecker / 语义规则 SemanticChecker /
+  │   │   帧一致性试算 TrialRenderer / 解析 ProtocolJsonParser)
   │   └─ 失败 → Expected::Error → main 打印详情 → exit 2
   ├─ 协议查找回调注入 (ProtocolLookup)
   ├─ 构造闭包依赖 (ProtocolLookup / ChannelFactory / EngineStarter / ResultDispatch)
@@ -122,11 +122,11 @@ GET /api/health/ready → 200 或 503 (初始化中)
 | `MyProt.Core` | 静态库（header-only，ForceLib 强制符号） | — |
 | `MyProt.Engine` | 静态库 | Core |
 | `MyProt.Transport` | 静态库 | Core, asio |
-| `MyProt.Service` | 静态库 | Core, nlohmann/json |
+| `MyProt.Service` | 静态库 | Core, Engine, nlohmann/json（加载期校验复用 Engine 原语，ADR-0015） |
 | `MyProt.Gateway` | 静态库 | Core, Engine, Transport, Service |
-| `MyProt.Polling` | 静态库 | Core, Gateway, Transport |
+| `MyProt.Polling` | 静态库 | Core, Engine, Gateway, Transport |
 | `MyProt.WebApi` | 静态库 | Core, Service |
-| `MyProt.Simulation` | 静态库 | Core, asio |
+| `MyProt.Simulation` | 静态库 | Core, Engine, Transport, asio |
 | `MyProt.App` | 应用程序（生产入口 exe） | 全部模块 |
 | `MyProt.E2E` | 应用程序（E2E 测试进程，与生产共用 RuntimeGlue 装配） | 全部模块 |
 
@@ -140,9 +140,8 @@ GET /api/health/ready → 200 或 503 (初始化中)
 |------|------|------|
 | standalone asio | 已验证 | 唯一运行时第三方依赖（仅回调 API，不启用协程） |
 | nlohmann/json | 3.7.3 | 配置解析（启动路径，热路径不涉及 JSON） |
-| OpenSSL | 1.1.1 系列 | 预留（TlsChannel / 管理面 TLS 启用时引入） |
-| GoogleTest | 1.8.x | 单元测试（tests/） |
-| cpp-httplib / spdlog / efsw / tl-expected | — | 未引入（自研替代） |
+| OpenSSL | 1.1.1 系列 | 预留（TlsChannel / 管理面 TLS 启用时再接入 include/lib） |
+| cpp-httplib / spdlog / GoogleTest / efsw / tl-expected | — | 未引入（自研替代：HTTP / 日志 / MiniTest） |
 
 ---
 
@@ -153,7 +152,7 @@ GET /api/health/ready → 200 或 503 (初始化中)
 | 层级 | 载体 | 内容 | 状态 |
 |------|------|------|------|
 | **E2E 集成测试** | 自研套件 `src/Tests/E2EMain.cpp`（独立 MyProt.E2E 进程） | TagGrouper 合并 / 轮询统计 / 熔断恢复与韧性覆盖 / 写路径（标量 + 变长 + read-back）/ framing 拒绝 / 仿真器重建等 16+ 用例；与生产共用 RuntimeGlue 装配（同构验证） | ✅ v1 主验证手段 |
-| **单元测试** | GoogleTest（仓库 tests/ 工程） | Expected / Optional / ByteView / 帧解析等纯函数 | 骨架就位，按模块补充 |
+| **单元测试** | 自研 MiniTest（`tests/MiniTest.hpp` + 仓库 tests/ 工程） | Expected / Optional / ByteView / 帧解析 / 配置默认值一致性等纯函数 | 骨架就位，按模块补充 |
 | **压力/性能** | google-benchmark | 性能目标验收（§十二） | 未引入（ADR-0010 §4） |
 
 ### 14.2 Mock 策略

@@ -46,14 +46,18 @@ Fail-Fast; protocol file inconsistent with the root = `ConfigError`.
 ```
 configs/
 ├── protocols/      # one protocol per file (e.g. modbus-tcp.json)
+│                   # optional top-level simulation — one instance per protocol
 ├── tags.json       # devices + tags + global resilience + WebApi
-└── server.json     # global server-side config (simulation)
-                    # optional; a missing file — listenPort default 0 = simulation off
+└── server.json     # legacy global simulation instance (fallback)
+                    # optional; listenPort default 0 = simulation off
 ```
 
-The `server.json` `simulation` section carries listenPort / registerCount /
-initialValues / operations, decoupled from protocol syntax. Multiple protocols share the
-same `ServerConfig.simulation`.
+Simulators are configured per protocol: a top-level `simulation` in
+`protocols/*.json` declares one independent simulator for that protocol (own port, own
+register data region), so multiple simulators can run in one process. The `simulation`
+section in `server.json` is legacy compatibility only: it is used when **no protocol**
+declares `simulation.listenPort > 0`, and it hosts protocol #0 (lexicographic file
+order). See §2.6 / §13 and [ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md) *zh*.
 
 ---
 
@@ -72,6 +76,7 @@ same `ServerConfig.simulation`.
 | `schemaVersion` | int | ✗ | current gen | Config generation (§0 conventions / [ADR-0005](../adr/0005-config-versioning.md) *zh*); absent = Warning + assume current generation; if present must equal `kSupportedSchemaVersion` and match the config root |
 | `variableAliases` | map\<string, string\> | ✗ | `{}` | Variable alias map (`alias → contract name`), letting protocol authors write templates and variable tables in their own names while the engine still works on contract names internally. See the next section |
 | `maxSpanBytes` | int | ✗ | `250` | Max span (in **bytes**) for coalescing tags by address proximity, used by `TagGrouper::CoalesceAdjacent` to bound a single batch-read span — i.e. the protocol family's "single-read ceiling". Modbus should use `250` (FC03 ceiling 125 registers × 2 bytes). Must be > 0 |
+| `simulation` | SimulationConfig | ✗ | `{}` | This protocol's simulator; `listenPort > 0` enables it. One instance per protocol; several protocols may each enable one (ports must differ) — this is the multi-device path. Fields in §13.2 |
 
 > Underscore-prefixed fields (e.g. `_provenance`) are ignored by the parser, do not
 > enter the POCO, and are not validated; they exist purely for machine-irrelevant notes —
@@ -80,9 +85,10 @@ same `ServerConfig.simulation`.
 > field to document the independent derivation of its byte conventions (ownership and
 > clean-room evidence).
 >
-> The protocol layer does **not** contain simulation config (`listenPort` /
-> `initialValues` / `packetLossRate` are server-side behavior); the simulation section
-> lives in `server.json`'s `ServerConfig.simulation`.
+> The protocol-level `simulation` is a **deployment binding for a simulator instance**
+> (port / data region); it does not take part in message syntax — `transport` /
+> `framing` / `operations` remain the only source of protocol syntax. Simulation
+> behavior does not affect real device connections.
 
 **`variableAliases` (variable alias map)**
 
@@ -271,14 +277,14 @@ ResponseParser::Parse. The parser defines no standalone type-conversion utility 
 | `sessionVariable` | string | ✗ | `""` | Session-variable name to store the extracted result; **must appear as a pair** with the previous field |
 | `timeoutMs` | int | ✗ | 0 | 0 = inherit `device.connection.timeoutMs` |
 
-### 2.6 SimulationConfig (moved to the server layer)
+### 2.6 SimulationConfig (per-protocol simulator)
 
-> `SimulationConfig` is not part of `ProtocolConfig`. The simulator (listenPort /
-> registerCount / initialValues / operations) lives in [`server.json`](#13-server-config-serverconfig)'s
-> `ServerConfig.simulation`, decoupled from protocol syntax. This section gives the schema
-> field reference; the implementation location and activation path are in §13.
+> `SimulationConfig` lives in `ProtocolConfig.simulation` (top-level `simulation` in
+> `protocols/*.json`) and declares one simulator for that protocol, decoupled from
+> message syntax. The same section in `server.json` is a legacy fallback — see
+> [§13](#13-simulator-config-simulationconfig).
 
-**SimOperationConfig** field table (the schema inside `server.json` matches this):
+**SimOperationConfig** field table (protocol-level and `server.json` share one schema):
 
 | Field | Type | Req | Default | Description |
 |------|------|:--:|------|------|
@@ -755,7 +761,7 @@ Validate collects **all** errors then returns them at once (no early exit); Warn
 6. `operations` is non-empty; each op's `requestTemplate` is non-empty and each line matches the §3 grammar; placeholder formats are valid.
 7. Template function tokens are built-in capabilities, validated against the built-in whitelist. A checksum placeholder's format width must match the algorithm (`crc16*`→X4, `crc32`→X8, `lrc`/`xor8`→X2); a mismatch is an Error.
 8. A handshake's `sessionExtractExpr` and `sessionVariable` appear as a pair.
-9. The protocol layer contains no simulation fields; simulation validation is in [§13](#13-server-config-serverconfig) `ServerConfig.simulation`.
+9. The optional protocol-level `simulation` section describes simulator deployment only (port / data region / simulated operations) and is validated per §2.6 / §13; simulation-only fields must not appear inside `transport` / `framing` / `operations`.
 10. In `variables`, a `source=static` `value` (if provided) must be an integer (0~4294967295); `source` is only `static` / `auto` (other values error); the same-named-key priority = the tag layer's `variables` > the operation layer's `variables` > the protocol layer's `variables(static)` (merge implemented in `RequestBuilder::MergeVariables`); `source=auto` must give a valid `strategy`, and `derivedLength` must declare `expr` (an arithmetic expression referencing names declared in `inputs`, `{name:len}` yields the byte length; rule 10 and the length-offset self-check are in §3.2).
 
 **Device layer**
@@ -914,53 +920,58 @@ If a module doc conflicts with this schema, **this document wins** (the schema i
 
 ---
 
-## 13. Server config (ServerConfig)
+## 13. Simulator config (SimulationConfig)
 
-> Extracts "server-side behavior" (simulation) out of `ProtocolConfig` into a single global instance. Not-yet-implemented fields like `alertSink` / `webhook` are in [ROADMAP.md](../ROADMAP.md) *zh*.
+> Simulators are no longer a single global instance: **protocol-level `simulation` is
+the multi-device path** ([ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md) *zh*),
+> with `server.json` kept as a legacy fallback. Not-yet-implemented fields like
+> `alertSink` / `webhook` are in [ROADMAP.md](../ROADMAP.md) *zh*.
 
-### 13.1 File
+### 13.1 Location and precedence
 
-`<dir>/server.json` (a sibling of `tags.json`). May be absent; absent = simulation disabled by default (`simulation.listenPort = 0`).
+| Location | Scope | Description |
+|------|--------|------|
+| Top-level `simulation` in `protocols/<proto>.json` | One instance for that protocol | **Recommended**; `listenPort > 0` enables it. Give each protocol a distinct port to run several simulators at once |
+| Top-level `simulation` in `server.json` | Global single instance (fallback) | Used only when no protocol enables simulation; hosts protocol #0 (lexicographic file order). When both exist the protocol-level wins and a WARN is logged |
 
-### 13.2 Top-level fields
+`<dir>/server.json` is a sibling of `tags.json` and may be absent; absent + no
+protocol-level simulation = no simulator is started.
 
-| Field | Type | Req | Default | Description |
-|------|------|:--:|------|------|
-| `schemaVersion` | int | ✗ | `kSupportedSchemaVersion` | Same as §0 conventions; absent = Warning + assume the current generation |
-| `simulation` | SimulationConfig | ✗ | `{}` (off) | Simulator config; the schema matches §2.6 (field names/types/validation rules identical) |
-
-### 13.3 SimulationConfig fields
+### 13.2 SimulationConfig fields
 
 | Field | Type | Req | Default | Description |
 |------|------|:--:|------|------|
 | `listenPort` | uint16 | ✓ | 0 | The simulator's TCP listen port (binds loopback 127.0.0.1 only); `0` = disabled |
 | `registerCount` | int | ✓ | 65536 | Length of the simulation's 16-bit register array, range 1~65536 |
-| `initialValues` | map&lt;string, uint32&gt; | ✗ | `{}` | Register initial values; key = the decimal-string address, value = 0~65535 |
-| `operations` | map&lt;string, SimOperationConfig&gt; | ✗ | `{}` | Operation-level simulation behavior; the key must be an operation name already declared in some `protocols/*.json`'s `operations` |
+| `initialValues` | map&lt;string, uint32&gt; | ✗ | `{}` | Register initial values; key = the decimal-string address (must be < `registerCount`), value = 0~65535 |
+| `operations` | map&lt;string, SimOperationConfig&gt; | ✗ | `{}` | Operation-level simulation behavior; the key must be an operation name declared in the **owning protocol**'s `operations` (protocol #0 for the `server.json` fallback) |
 
-**SimOperationConfig** fields: see [§2.6](#26-simulationconfig-moved-to-the-server-layer).
+**SimOperationConfig** fields: see [§2.6](#26-simulationconfig-per-protocol-simulator).
 
-### 13.4 Validation
+### 13.3 Validation
 
-After the loader parses `server.json` it checks:
+After the loader parses a protocol file or `server.json` it checks:
 
-1. The top level must be an object; otherwise `ConfigError`
+1. `simulation` must be an object; otherwise `ConfigError`
 2. `schemaVersion` (if present) must equal `kSupportedSchemaVersion`, otherwise `ConfigError`
 3. `simulation.listenPort ∈ [0, 65535]`
 4. `simulation.registerCount ∈ [1, 65536]`
-5. `simulation.initialValues` values must be integers
+5. `simulation.initialValues` values ∈ [0, 65535]; keys must be decimal addresses < `registerCount`
 6. `simulation.operations[].kind ∈ {"read", "write"}`
-7. When `simulation.operations[].kind == "read"`, `countVar` is required
+7. When `simulation.operations[].kind == "read"`, `countVar` is required; `dataOffset >= -1`
 8. `simulation.operations[].responseTemplate` (an optional array) is matched line-by-line against the simulation template grammar — an empty line / hex literal / `{data}` / `{req:N:M}` (numeric forms); anything illegal rejects the load
+9. **Across instances**: one port must not be claimed by two enabled simulators; `ApplyRuntimeSync` rejects a conflict with `ConfigError` before stopping the old instances
 
-### 13.5 Minimal example
+### 13.4 Minimal example (protocol-level, recommended)
 
 ```jsonc
+// configs/protocols/modbus-tcp.json
 {
-  "schemaVersion": 1,
+  "protocolName": "modbus-tcp",
+  // ... transport / framing / operations ...
   "simulation": {
     "listenPort": 11520,            // loopback-only listen; 0 = disabled
-    "registerCount": 65536,
+    "registerCount": 1000,
     "initialValues": { "0": 5, "1": 100 },
     "operations": {
       "ReadHoldingRegisters": {
@@ -977,10 +988,34 @@ After the loader parses `server.json` it checks:
 }
 ```
 
+To add a second simulator, write a different port (e.g. `11521`) in another protocol
+file; both run at the same time.
+
+### 13.5 Legacy fallback example (server.json)
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "simulation": {
+    "listenPort": 11520,
+    "registerCount": 65536
+    // operations / initialValues as in §13.4
+  }
+}
+```
+
+Effective only when no protocol-level simulation exists. To retire it, set
+`listenPort` to `0` or configure simulation in the protocol files.
+
 ### 13.6 Relation to protocols
 
-- `ServerConfig.simulation` is decoupled from `ProtocolConfig`; **multiple protocols share the same simulator**
-- `SimulationServer` takes a `ProtocolConfig &` (for the protocol syntax knowledge: operations / framing / transport) and a `SimulationConfig &` (for the data behavior: listenPort / registerCount / initialValues / operations)
+- Each simulator instance is bound to one `ProtocolConfig`: `SimulationServer` takes
+  the syntax knowledge (operations / framing / transport) from the protocol object and
+  the data behavior (listenPort / registerCount / initialValues / operations) from `simulation`
+- Multiple instances = "multiple simulated devices": `SimServerMap` is keyed by protocol
+  name and `/api/sim/*` selects an instance via `?proto=<protocolName>` (see [modules/07](../modules/07_WebApi.md) *zh*)
+- Several data regions / slaves for the same protocol are not supported by the current
+  model (one instance per protocol) and need a separate design review
 
 ---
 

@@ -39,11 +39,13 @@
 ├─ Engine ───────────────┬─ Service ──────────────────────────────
 │  RequestBuilder        │  ConfigDirectoryLoader (parse + deep
 │  ResponseParser        │    validate in one, Fail-Fast)
-│  ExpressionEval        │  ConfigStore (CRUD / atomic write / backup /
-│  AutoIncrement         │    rollback / reload callback)
-│  (pure concrete-class  │  SchemaRegistry / ConfigDeepValidator /
-│   toolkit, no          │  SessionContext (circuit breaker)
-│   orchestrator)        │  DeviceLifecycle (5-state machine)
+│  AutoCompute           │  ConfigStore (CRUD / atomic write / backup /
+│  MiniExpression        │    rollback / reload callback)
+│  (pure concrete-class  │  SchemaRegistry / ConfigDeepValidator
+│   toolkit, no          │    (orchestration) / ProtocolJsonParser
+│   orchestrator)        │  SchemaChecker / SemanticChecker /
+│                        │  TrialRenderer / SessionContext
+│                        │  DeviceLifecycle (5-state machine)
 ├─ Transport ────────────┴─ Simulation ───────────────────────────
 │  IChannel / TcpChannel   │  SimulationServer
 │  (auto-reconnect) /      │  (standalone TCP black-box sim,
@@ -101,14 +103,14 @@
 
 | Rule | Description |
 |------|-------------|
-| `Core` static lib (header-only, ForceLib to force symbols) | Hand-written `Expected<T>` / `Optional<T>` / `ByteView` + Config POCO (tagged struct) + `Log` / `Metrics` facades; C++11/VS2015 (`tl::expected` / `std::optional` / `std::span` are forbidden) |
-| `Engine` depends only on `Core` | Pure concrete-class toolkit (RequestBuilder / ResponseParser / ExpressionEvaluator / AutoIncrementProvider); no orchestrator, no interface layer; pipeline assembly lives in the Gateway layer's `TagReader` |
+| `Core` static lib (header-only, ForceLib to force symbols) | Hand-written `Expected<T>` / `Optional<T>` / `ByteView` + Config POCO (tagged struct) + `TemplateGrammar` (single template-grammar implementation) / `RuntimeSnapshot` (runtime config snapshot) + `Log` / `Metrics` facades; C++11/VS2015 (`tl::expected` / `std::optional` / `std::span` are forbidden) |
+| `Engine` depends only on `Core` | Pure concrete-class toolkit (RequestBuilder / ResponseParser / MiniExpression / AutoComputeProvider); no orchestrator, no interface layer; pipeline assembly lives in the Gateway layer's `TagReader` |
 | `Transport` depends on `Core` + asio | Independent of business logic; `TlsChannel` is a stub (OpenSSL reserved, see [ROADMAP.md](../../ROADMAP.md)) |
-| `Service` depends on `Core` + nlohmann/json | Config plane (load / validate / store) + `SessionContext` (session / circuit breaker) + `DeviceLifecycle`; independent of runtime |
-| `Gateway` depends on `Engine` + `Transport` + `Service` | Orchestration layer; `ChannelManager` endpoint-shared bus (ADR-0002), per-device write mutex (ADR-0011 P1 C) |
-| `Polling` depends on `Gateway` + `Transport` + `Core` | Poll scheduling + `LatestValueStore` live snapshot; no standalone DataDispatcher (retracted) |
-| `WebApi` depends on `Core` + `Service` (ConfigStore) | In-house HTTP/1.1 (cpp-httplib not adopted); business routes injected by the App layer via `SetExtHandler` + `HttpRouter` |
-| `Simulation` depends on `Core` + asio | Standalone TCP **black-box simulation** (its own io_context dedicated worker thread), does not go through `IChannel` |
+| `Service` depends on `Core` + `Engine` + nlohmann/json | Config plane (load / validate / store) + `SessionContext` (session / circuit breaker) + `DeviceLifecycle`; validation is split into `ProtocolJsonParser` / `SchemaChecker` / `SemanticChecker` / `TrialRenderer`, with `ConfigDeepValidator.cpp` orchestrating only; `TrialRenderer` / `validCondition` validation reuses Engine's RequestBuilder / AutoComputeProvider / MiniExpression directly (one grammar at load time and runtime; the dependency direction is kept and constrained by [ADR-0015](../adr/0015-service-engine-dependency-direction.md) *zh*) |
+| `Gateway` depends on `Core` + `Engine` + `Transport` | Orchestration layer; `ChannelManager` endpoint-shared bus (ADR-0002), per-device write mutex (ADR-0011 P1 C); `WriteService` owns the full scalar/variable-length write chain (optional read-back); App performs HTTP adaptation only |
+| `Polling` depends on `Core` + `Engine` + `Gateway` | Poll scheduling + `LatestValueStore` live snapshot; no standalone DataDispatcher (retracted) |
+| `WebApi` depends on `Core` + `Service` (ConfigStore) | In-house HTTP/1.1 (cpp-httplib not adopted); built-in management routes are registered in `RouteTable` (method + pattern + `:param`), business routes are still injected by the App layer via `SetExtHandler` + `HttpRouter` |
+| `Simulation` depends on `Core` + `Engine` + `Transport` | Standalone TCP **black-box simulation** (its own io_context dedicated worker thread), does not go through `IChannel`; template matching reuses the Engine grammar |
 | `App` depends on all of the above | Composition root: main.cpp wires directly + RuntimeGlue shared glue (production and E2E are isomorphic) |
 
 ---
@@ -120,7 +122,7 @@ MyProt/                                   # repo root
 ├── MyProt.sln                            # VS2015 solution (main artifact, PlatformToolset v140)
 ├── README.md
 ├── docs/                                 # this documentation set (index: docs/README.md)
-│   ├── adr/                              # ADR-0001~0013 architecture decision records
+│   ├── adr/                              # ADR-0001~0015 architecture decision records
 │   ├── architecture/                      # architecture series (6 docs)
 │   ├── modules/                           # module detailed design series (10 docs)
 │   ├── protocols/                         # protocol tutorials (config↔byte mapping)
@@ -139,18 +141,21 @@ MyProt/                                   # repo root
 │   │   │   ├── Value.hpp                # TypedValue / TagValue / QualityCode
 │   │   │   ├── Log.hpp                  # LOG_* facade (stdout + file rotation)
 │   │   │   ├── Metrics.hpp              # counter/gauge internal facade
+│   │   │   ├── RuntimeSnapshot.hpp      # runtime config snapshot (ADR-0014)
 │   │   │   ├── ServerConfig.hpp         # LoadedConfig.server
-│   │   │   └── SimulationConfig.hpp     # simulator config (ServerConfig.simulation)
+│   │   │   ├── SimulationConfig.hpp     # simulator instance config (ProtocolConfig.simulation; server.json fallback)
+│   │   │   └── TemplateGrammar.hpp      # single template-grammar implementation
 │   │   └── src/
-│   │       └── MyProt.Core.ForceLib.cpp # force link symbols
+│   │       ├── MyProt.Core.ForceLib.cpp # force link symbols
+│   │       └── TemplateGrammar.cpp      # template parsing implementation
 │   │
 │   ├── Engine/                           # pure concrete-class toolkit (no orchestrator/interface layer)
 │   │   ├── MyProt.Engine.vcxproj
 │   │   ├── include/MyProt/Engine/
-│   │   │   ├── ExpressionEvaluator.hpp  # recursive-descent evaluator (validCondition etc.)
+│   │   │   ├── MiniExpression.hpp       # unified expression engine (validCondition/handshake)
+│   │   │   ├── AutoComputeProvider.hpp  # auto variable evaluation (incl. derivedLength)
 │   │   │   ├── RequestBuilder.hpp       # template expansion (single pass)
 │   │   │   ├── ResponseParser.hpp       # validate/extract/byte-order adjudication (FromBytes)
-│   │   │   └── AutoIncrementProvider.hpp # {Name:auto:Xn} increment counter
 │   │   └── src/                          # same-name .cpp × 4
 │   │
 │   ├── Transport/
@@ -176,9 +181,10 @@ MyProt/                                   # repo root
 │   │   │   ├── SchemaRegistry.hpp        # field list/type/defaults (single scan)
 │   │   │   ├── SessionContext.hpp        # session vars + circuit breaker (Closed/Open/HalfOpen)
 │   │   │   └── DeviceLifecycle.hpp       # 5-state lifecycle machine
-│   │   └── src/                          # ConfigDirectoryLoader / ConfigStore /
-│   │                                     #   SchemaRegistry / ConfigDeepValidator /
-│   │                                     #   SessionContext .cpp
+│   │   └── src/                          # ConfigDirectoryLoader / ConfigStore / SchemaRegistry /
+│   │                                     #   ConfigDeepValidator / ProtocolJsonParser /
+│   │                                     #   SchemaChecker / SemanticChecker / TrialRenderer /
+│   │                                     #   SessionContext / ValidationIssue .cpp
 │   │
 │   ├── Gateway/
 │   │   ├── MyProt.Gateway.vcxproj
@@ -188,9 +194,9 @@ MyProt/                                   # repo root
 │   │   │   ├── TagReader.hpp            # sole owner of the Build→SendReceive→Parse pipeline
 │   │   │   ├── TagGrouper.hpp           # same-device/same-op/contiguous-address merging
 │   │   │   ├── MergedRequest.hpp         # merge product (tagIndices)
-│   │   │   ├── ProtocolLookup.hpp        # protocol lookup callback type
-│   │   │   ├── ResponseParser.hpp        # response parser
-│   │   └── src/                          # same-name .cpp × 5
+│   │   │   ├── WriteService.hpp          # write-path library (tag resolve/encode/ReadBack); App only adapts HTTP
+│   │   │   └── ProtocolLookup.hpp        # protocol lookup callback type
+│   │   └── src/                          # same-name .cpp × 5 (including WriteService.cpp)
 │   │
 │   ├── Polling/
 │   │   ├── MyProt.Polling.vcxproj
@@ -204,6 +210,7 @@ MyProt/                                   # repo root
 │   │   ├── MyProt.WebApi.vcxproj
 │   │   ├── include/MyProt/WebApi/
 │   │   │   ├── WebApiServer.hpp          # in-house HTTP/1.1 + SetExtHandler/SetStreamRoute
+│   │   │   ├── RouteTable.hpp            # built-in route table (method + pattern + :param, enumerable)
 │   │   │   └── AuthMiddleware.hpp        # token constant-time compare + token-bucket rate limit
 │   │   └── src/                          # WebApiServer / AuthMiddleware .cpp
 │   │
@@ -226,12 +233,12 @@ MyProt/                                   # repo root
 │       ├── AppContext.hpp                # runtime state aggregation (the fix for the 13-arg function problem)
 │       └── HttpRouter.hpp                # ext route table (header-only, prefix match)
 │
-├── tests/                                # GoogleTest unit tests (Core/Engine/Transport)
+├── tests/                                # in-house MiniTest unit tests (Core/Engine/Service/Transport)
 ├── third_party/                          # vendoring (asio etc.; version source: third_party/README.md)
 ├── scripts/                              # setup / build helper scripts
 ├── configs/                              # protocols/*.json + tags.json
 ├── build/                                # build output (not committed)
-└── MyProtCpp/                            # V1 monolithic reference implementation (not part of the V2 build)
+└── archive/MyProtCpp/                    # V1 monolithic reference implementation (not part of the V2 build)
 ```
 
 > Transport has no `CanChannel` implementation (not implemented, see [ROADMAP.md](../../ROADMAP.md)); Service has no `FileWatcher` (manual/API-triggered reload only); Polling has no standalone `DataDispatcher` (callback delivered straight to consumers); Simulation has no ISimChannel / PlaybackEngine / FaultInjector.

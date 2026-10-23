@@ -4,7 +4,9 @@
 // The client builds requests with requestTemplate; the simulator compiles the same template into a "byte-shape pattern",
 // recognizing a received complete request frame in reverse: yielding the operation name + extracting variable values at placeholder positions.
 //
-// The grammar matches RequestBuilder (Config_Schema §3.2, the actually-implemented subset):
+// The grammar is the single implementation in Core/TemplateGrammar (shared with
+// RequestBuilder and ConfigDeepValidator); the simulator additionally accepts the legacy
+// {Name:auto:Xn} wildcard form. Supported subset (Config_Schema §3.2):
 //   - hex-literal line: an even-length hex string, every 2 chars = 1 byte (spaces ignored)
 //   - placeholder {Name:Xn}      -> fixed-width variable segment, extracts a big-endian value on match
 //   - placeholder {Name:auto:Xn} -> fixed-width wildcard segment (auto-increment fields like TransactionId), content skipped
@@ -76,7 +78,6 @@ private:
 
     static bool CompileLine(const std::string& raw, std::vector<Segment>& segs,
                             std::size_t& lineSize);
-    static std::size_t WidthSpecToBytes(const std::string& widthSpec);
 
     const Core::ProtocolConfig& _protocol;
     std::vector<CompiledOp> _ops;

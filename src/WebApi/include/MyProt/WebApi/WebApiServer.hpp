@@ -9,11 +9,13 @@
 #include <functional>
 #include <memory>
 #include <utility>
+#include <vector>
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
 #include "MyProt/Service/ConfigStore.hpp"
 #include "MyProt/WebApi/AuthMiddleware.hpp"
+#include "MyProt/WebApi/RouteTable.hpp"
 
 namespace MyProt { namespace WebApi {
 
@@ -72,18 +74,15 @@ public:
     /// Stop the server (thread-safe, can be called from another thread)
     void Stop();
 
-private:
-    /// HTTP response
-    struct Response {
-        int status;
-        std::string contentType;
-        std::string body;
-        bool cacheable;     // static resources true (Vite hashed file names can be safely cached); API always no-store
+    /// 内置路由清单（"METHOD /pattern"）— 供文档、覆盖检查与自测枚举
+    std::vector<std::string> DescribeRoutes() const { return _routes.Describe(); }
 
-        Response() : status(200), cacheable(false) {}
-        Response(int s, const std::string& ct, const std::string& b, bool c = false)
-            : status(s), contentType(ct), body(b), cacheable(c) {}
-    };
+private:
+    /// HTTP response (RouteResult 别名 — 路由表与服务器共用同一值类型)
+    typedef RouteResult Response;
+
+    /// 注册内置管理面路由（构造函数调用；扩展域仍由 SetExtHandler 兜底）
+    void RegisterRoutes();
 
     /// Route dispatch (parsed request -> response)
     Response Route(const std::string& method,
@@ -136,6 +135,7 @@ private:
     RateLimiter _limiter;
     ExtHandler _ext;
     SnapshotProvider _streamProvider;
+    RouteTable _routes;             // 内置路由表 (method + pattern + :param)
     std::string _streamPrefix;      // SSE path prefix (when unregistered _streamProvider is empty)
     int _streamIntervalMs;
     asio::io_context _io;

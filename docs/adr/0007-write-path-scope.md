@@ -170,7 +170,7 @@ POST /api/data/write  body: {"tag":"PLC-001.MultiReg","bytes":"01 0A 0B 0C"}
 
 > 写路径与读网关共用同一套模板管线：写非幂等 → 恒单次尝试；响应只做 echo 校验。
 
-**端到端链路**（`src/App/RuntimeGlue.cpp` `WriteViaGateway` / `HandleWriteApi`）：
+**端到端链路**（`src/Gateway/src/WriteService.cpp` `WriteService::Write` + `src/App/DataApi.cpp` `HandleWriteApi`）：
 
 ```
 POST /api/data/write  body: {"tag":"PLC-001.SetPoint","value":123}

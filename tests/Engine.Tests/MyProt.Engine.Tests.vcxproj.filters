@@ -12,7 +12,7 @@
     <ClCompile Include="ResponseParserTests.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ExpressionEvaluatorTests.cpp">
+    <ClCompile Include="MiniExpressionTests.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

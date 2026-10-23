@@ -18,6 +18,7 @@
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
+#include "MyProt/Core/RuntimeSnapshot.hpp"  // 运行时配置快照 (唯一数据源)
 #include "MyProt/Core/ServerConfig.hpp"  // LoadedConfig.server
 #include "MyProt/Core/Value.hpp"
 #include "MyProt/Core/Log.hpp"
@@ -177,17 +178,18 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
 
     asio::io_context io;
 
-    // ── 2. 协议查找表 (闭包持有协议副本) ──
-    typedef std::vector<MyProt::Core::ProtocolConfig> ProtoList;
-    auto protosPtr = std::make_shared<ProtoList>(protos);
+    // ── 2. 运行时配置快照 (唯一数据源) ──
+    // lookup/factory 每次调用取当前代快照: 首次装配由 ApplyRuntimeSync 发布,
+    // 热重载整代替换 — 不再持有独立的协议/设备副本。
+    MyProt::Core::RuntimeSnapshotHolder snapshotHolder;
     MyProt::Gateway::ProtocolLookup lookup =
-        [protosPtr](const std::string& name)
+        [&snapshotHolder](const std::string& name)
             -> MyProt::Core::Expected<MyProt::Core::ProtocolConfig> {
-        for (size_t i = 0; i < protosPtr->size(); ++i) {
-            if ((*protosPtr)[i].protocolName == name) {
-                return MyProt::Core::Expected<MyProt::Core::ProtocolConfig>(
-                    (*protosPtr)[i]);
-            }
+        const MyProt::Core::RuntimeSnapshotPtr snapshot = snapshotHolder.Get();
+        const MyProt::Core::ProtocolConfig* proto =
+            snapshot ? snapshot->FindProtocol(name) : 0;
+        if (proto) {
+            return MyProt::Core::Expected<MyProt::Core::ProtocolConfig>(*proto);
         }
         return MyProt::Core::Unexpected(
             MyProt::Core::Error::Code::ProtocolNotFound, name);
@@ -195,31 +197,17 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
 
     // ── 3. 通道工厂: 设备 → 协议 → transport 类型 分派 ──
     // v1: Tcp 真实通道; Tls/Serial 未接入时返回空 → 连接失败走韧性重连
-    auto devicesPtr =
-        std::make_shared<std::vector<MyProt::Core::DeviceConfig> >(root.devices);
-    // 标签查找表 — 写路径 (/api/data/write) 在 io 线程读取;
-    // ApplyRuntimeSync 热重载时同线程替换, 无竞争
-    auto tagsPtr =
-        std::make_shared<std::vector<MyProt::Core::TagDefinition> >(root.tags);
     MyProt::Gateway::ChannelFactory factory =
-        [devicesPtr, protosPtr](asio::io_context& ioCtx, const std::string& channelId)
+        [&snapshotHolder](asio::io_context& ioCtx, const std::string& channelId)
             -> std::shared_ptr<MyProt::Transport::IChannel> {
-        std::string protoName;
-        for (size_t i = 0; i < devicesPtr->size(); ++i) {
-            if ((*devicesPtr)[i].id == channelId) {
-                protoName = (*devicesPtr)[i].protocol;
-                break;
-            }
-        }
-        for (size_t j = 0; j < protosPtr->size(); ++j) {
-            if ((*protosPtr)[j].protocolName == protoName) {
-                if ((*protosPtr)[j].transport.type ==
-                        MyProt::Core::TransportType::Tcp) {
-                    return std::make_shared<MyProt::Transport::TcpChannel>(
-                        ioCtx, channelId);
-                }
-                break;
-            }
+        const MyProt::Core::RuntimeSnapshotPtr snapshot = snapshotHolder.Get();
+        const MyProt::Core::DeviceConfig* device =
+            snapshot ? snapshot->FindDevice(channelId) : 0;
+        const MyProt::Core::ProtocolConfig* proto =
+            device ? snapshot->FindProtocol(device->protocol) : 0;
+        if (proto && proto->transport.type == MyProt::Core::TransportType::Tcp) {
+            return std::make_shared<MyProt::Transport::TcpChannel>(
+                ioCtx, channelId);
         }
         LOG_WARN("ChannelFactory",
                  "设备 %s 的协议传输类型暂未支持通道创建 (仅 Tcp)",
@@ -285,8 +273,7 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
         };
 
     // ── 4.5 运行时状态聚合 (AppContext — 新增接口所需状态统一在此挂接) ──
-    // protoStore: SimulationServer 持有其元素引用, reload 时整体替换
-    std::vector<MyProt::Core::ProtocolConfig> protoStore;
+    // 配置真源: snapshotHolder (ApplyRuntimeSync 发布/整代替换)
     SimServerMap sims;
     std::vector<std::unique_ptr<MyProt::Simulation::SimulationServer> > simOwners;
 
@@ -297,12 +284,20 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
 
     AppContext ctx = {
         &io, &gateway, &engine, startEngine,
-        protosPtr, devicesPtr, tagsPtr,
-        &latest, &sims, &simOwners, &protoStore, &store
+        &snapshotHolder,
+        &latest, &sims, &simOwners, &store
     };
 
     // ── 5. 首次运行时装配 (仿真器 + 引擎; 与 reload 热重载同一入口) ──
-    ApplyRuntimeSync(configDir, ctx, &std::cout);
+    // 首次装配失败同样 Fail-Fast (典型: 协议级仿真端口冲突) — 否则进程会带着
+    // 零仿真器继续运行, 用户只能从"端口没人监听"倒查配置。
+    const MyProt::Core::VoidExpected firstSync =
+        ApplyRuntimeSync(configDir, ctx, &std::cout);
+    if (!firstSync.has_value()) {
+        fprintf(stderr, "[FATAL] 首次运行时装配失败: %s\n",
+                firstSync.error().message.c_str());
+        return 2;
+    }
 
     // 热重载联动: Save / /api/config/reload 成功后走同一装配路径
     // (新配置非法时 ApplyRuntimeSync 报错 → ConfigStore 自动回滚)

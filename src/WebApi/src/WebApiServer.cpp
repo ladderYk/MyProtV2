@@ -108,6 +108,12 @@ int StatusFromError(const Core::Error::Code code) {
     }
 }
 
+/// 配置域统一错误响应：Error::Code → HTTP 状态码 + {"error":...}
+RouteResult ErrorResponse(const Core::Error& err) {
+    return RouteResult(StatusFromError(err.code), "application/json",
+                       "{\"error\":" + JsonString(err.message) + "}");
+}
+
 /// 静态文件扩展名 → Content-Type (覆盖 Vite 构建产物所需集合)
 const char* MimeFromExtension(const std::string& path) {
     const size_t dot = path.rfind('.');
@@ -190,6 +196,7 @@ WebApiServer::WebApiServer(const Core::WebApiConfig& config, Service::ConfigStor
     if (_config.requireAuth && _token.empty()) {
         throw std::runtime_error("WebApi: MYPROT_API_TOKEN 未设置但 webApi.requireAuth=true");
     }
+    RegisterRoutes();
 }
 
 void WebApiServer::Start() {
@@ -471,37 +478,121 @@ void WebApiServer::StreamClose(const std::shared_ptr<StreamSession>& session) {
 
 // ────────── 路由 ──────────
 
-WebApiServer::Response WebApiServer::Route(const std::string& method,
-                                           const std::string& path,
-                                           const std::string& body,
-                                           const std::string& authToken) {
+void WebApiServer::RegisterRoutes() {
     using Service::ConfigScope;
 
     // ── /health 免认证 (存活探针) ──
     // authRequired: 前端据此决定是否展示登录页与「退出」; 关闭认证时退出无意义
-    if (path == "/health") {
-        if (method != "GET") {
-            return Response(405, "application/json", "{\"error\":\"method not allowed\"}");
-        }
+    _routes.Add("GET", "/health", [this](const RouteRequest&) -> Response {
         return Response(200, "application/json",
                         std::string("{\"status\":\"ok\",\"authRequired\":") +
                             (_config.requireAuth ? "true" : "false") + "}");
-    }
+    });
 
     // ── /metrics 免认证 (Prometheus 抓取; architecture/05 可观测性) ──
-    if (path == "/metrics") {
-        if (method != "GET") {
-            return Response(405, "application/json", "{\"error\":\"method not allowed\"}");
-        }
+    _routes.Add("GET", "/metrics", [](const RouteRequest&) -> Response {
         return Response(200,
                         "text/plain; version=0.0.4; charset=utf-8",
                         Core::MetricsRegistry::Instance().RenderPrometheus());
-    }
+    });
 
-    // ── 静态前端托管: 免认证免限流 ──
-    // 浏览器须在无 token 时加载登录页; 保护面是 API, 静态 JS/CSS 为公开资产
+    // ── /api/config/reload (POST) ──
+    _routes.Add("POST", "/api/config/reload", [this](const RouteRequest&) -> Response {
+        auto res = _store.Reload();
+        if (!res.has_value()) return ErrorResponse(res.error());
+        return Response(200, "application/json", "{\"ok\":true}");
+    });
+
+    // ── /api/config/schema (GET=字段注册表下发, UI 动态表单供数) ──
+    _routes.Add("GET", "/api/config/schema", [this](const RouteRequest&) -> Response {
+        return Response(200, "application/json",
+                        Service::SchemaRegistry::ToJson(_store.SupportedSchemaVersion()));
+    });
+
+    // ── /api/config/{scope} (GET=List) ──
+    _routes.Add("GET", "/api/config/:scope", [this](const RouteRequest& req) -> Response {
+        ConfigScope scope;
+        if (!ScopeFromString(req.Param("scope"), &scope)) {
+            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
+        }
+        auto res = _store.List(scope);
+        if (!res.has_value()) return ErrorResponse(res.error());
+        return Response(200, "application/json", JsonArray(res.value()));
+    });
+
+    // ── /api/config/{scope}/{name} — GET=读 / PUT=写 / DELETE=删 ──
+    _routes.Add("GET", "/api/config/:scope/:name", [this](const RouteRequest& req) -> Response {
+        ConfigScope scope;
+        if (!ScopeFromString(req.Param("scope"), &scope)) {
+            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
+        }
+        auto res = _store.Get(scope, req.Param("name"));
+        if (!res.has_value()) return ErrorResponse(res.error());
+        return Response(200, "application/json", res.value());
+    });
+
+    _routes.Add("PUT", "/api/config/:scope/:name", [this](const RouteRequest& req) -> Response {
+        ConfigScope scope;                                    // Save: 校验→备份→原子写→热重载
+        if (!ScopeFromString(req.Param("scope"), &scope)) {
+            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
+        }
+        auto res = _store.Save(scope, req.Param("name"), req.body);
+        if (!res.has_value()) return ErrorResponse(res.error());
+        return Response(200, "application/json", "{\"ok\":true}");
+    });
+
+    _routes.Add("DELETE", "/api/config/:scope/:name", [this](const RouteRequest& req) -> Response {
+        ConfigScope scope;                                    // Delete: 删除文件+备份
+        if (!ScopeFromString(req.Param("scope"), &scope)) {
+            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
+        }
+        auto res = _store.Delete(scope, req.Param("name"));
+        if (!res.has_value()) return ErrorResponse(res.error());
+        return Response(200, "application/json", "{\"ok\":true}");
+    });
+
+    // ── /api/config/{scope}/{name}/backups (GET=备份列表) ──
+    _routes.Add("GET", "/api/config/:scope/:name/backups",
+                [this](const RouteRequest& req) -> Response {
+        ConfigScope scope;
+        if (!ScopeFromString(req.Param("scope"), &scope)) {
+            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
+        }
+        auto res = _store.ListBackups(scope, req.Param("name"));
+        if (!res.has_value()) return ErrorResponse(res.error());
+        return Response(200, "application/json", JsonArray(res.value()));
+    });
+
+    // ── /api/config/{scope}/{name}/backups/{tag}/restore (POST=回滚) ──
+    _routes.Add("POST", "/api/config/:scope/:name/backups/:tag/restore",
+                [this](const RouteRequest& req) -> Response {
+        ConfigScope scope;
+        if (!ScopeFromString(req.Param("scope"), &scope)) {
+            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
+        }
+        auto res = _store.Rollback(scope, req.Param("name"), req.Param("tag"));
+        if (!res.has_value()) return ErrorResponse(res.error());
+        return Response(200, "application/json", "{\"ok\":true}");
+    });
+}
+
+WebApiServer::Response WebApiServer::Route(const std::string& method,
+                                           const std::string& path,
+                                           const std::string& body,
+                                           const std::string& authToken) {
     const std::vector<std::string> seg = SplitPath(path);
+
+    // ── 免认证域: /health、/metrics 与静态前端 ──
+    // 浏览器须在无 token 时加载登录页; 保护面是 API, 静态 JS/CSS 为公开资产
     if (seg.empty() || seg[0] != "api") {
+        RouteRequest req;
+        req.method = method;
+        req.path = path;
+        req.pathOnly = path.substr(0, path.find('?'));
+        req.body = body;
+        req.authToken = authToken;
+        Response out;
+        if (_routes.Dispatch(req, out) == RouteTable::Found) return out;
         if (method == "GET" || method == "HEAD") {
             return ServeStatic(path);
         }
@@ -518,8 +609,23 @@ WebApiServer::Response WebApiServer::Route(const std::string& method,
         return Response(401, "application/json", "{\"error\":\"unauthorized\"}");
     }
 
+    // ── 内置路由表 (method + pattern + :param) ──
+    RouteRequest req;
+    req.method = method;
+    req.path = path;
+    req.pathOnly = path.substr(0, path.find('?'));
+    req.body = body;
+    req.authToken = authToken;
+
+    Response out;
+    const RouteTable::MatchResult match = _routes.Dispatch(req, out);
+    if (match == RouteTable::Found) return out;
+    if (match == RouteTable::MethodNotAllowed) {
+        return Response(405, "application/json", "{\"error\":\"method not allowed\"}");
+    }
+
     // ── 扩展路由 (App 层注入的业务 handler): 非内置域的 /api/* ──
-    //   内置域只有 "config" (下列各分支) 与更上方的 /health、/metrics;
+    //   内置域只有 "config" (路由表) 与更上方的 /health、/metrics;
     //   其余 (sim / data / validate / 未来新增) 一律交扩展路由 —
     //   新增端点只需在 App 层实现 handler + main.cpp 注册一行, 不必改本文件。
     if (seg.size() >= 2 && seg[0] == "api" && seg[1] != "config") {
@@ -534,123 +640,6 @@ WebApiServer::Response WebApiServer::Route(const std::string& method,
             return Response(500, "application/json",
                             "{\"error\":\"internal error\"}");
         }
-    }
-
-    // ── /api/config/reload (POST) ──
-    if (seg.size() == 3 && seg[0] == "api" && seg[1] == "config" && seg[2] == "reload") {
-        if (method != "POST") {
-            return Response(405, "application/json", "{\"error\":\"method not allowed\"}");
-        }
-        auto res = _store.Reload();
-        if (!res.has_value()) {
-            const Core::Error& err = res.error();
-            return Response(StatusFromError(err.code), "application/json",
-                            "{\"error\":" + JsonString(err.message) + "}");
-        }
-        return Response(200, "application/json", "{\"ok\":true}");
-    }
-
-    // ── /api/config/schema (GET=字段注册表下发, UI 动态表单供数) ──
-    if (seg.size() == 3 && seg[0] == "api" && seg[1] == "config" && seg[2] == "schema") {
-        if (method != "GET") {
-            return Response(405, "application/json", "{\"error\":\"method not allowed\"}");
-        }
-        return Response(200, "application/json",
-                        Service::SchemaRegistry::ToJson(_store.SupportedSchemaVersion()));
-    }
-
-    // ── /api/config/{scope} (GET=List) ──
-    if (seg.size() == 3 && seg[0] == "api" && seg[1] == "config") {
-        ConfigScope scope;
-        if (!ScopeFromString(seg[2], &scope)) {
-            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
-        }
-        if (method != "GET") {
-            return Response(405, "application/json", "{\"error\":\"method not allowed\"}");
-        }
-        auto res = _store.List(scope);
-        if (!res.has_value()) {
-            const Core::Error& err = res.error();
-            return Response(StatusFromError(err.code), "application/json",
-                            "{\"error\":" + JsonString(err.message) + "}");
-        }
-        return Response(200, "application/json", JsonArray(res.value()));
-    }
-
-    // ── /api/config/{scope}/{name} (GET=读 / PUT=写 / DELETE=删) ──
-    if (seg.size() == 4 && seg[0] == "api" && seg[1] == "config") {
-        ConfigScope scope;
-        if (!ScopeFromString(seg[2], &scope)) {
-            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
-        }
-        const std::string name = seg[3];
-
-        if (method == "GET") {
-            auto res = _store.Get(scope, name);
-            if (!res.has_value()) {
-                const Core::Error& err = res.error();
-                return Response(StatusFromError(err.code), "application/json",
-                                "{\"error\":" + JsonString(err.message) + "}");
-            }
-            return Response(200, "application/json", res.value());
-        }
-
-        if (method == "PUT") {                            // Save: 校验→备份→原子写→热重载
-            auto res = _store.Save(scope, name, body);
-            if (!res.has_value()) {
-                const Core::Error& err = res.error();
-                return Response(StatusFromError(err.code), "application/json",
-                                "{\"error\":" + JsonString(err.message) + "}");
-            }
-            return Response(200, "application/json", "{\"ok\":true}");
-        }
-
-        if (method == "DELETE") {                         // Delete: 删除文件+备份
-            auto res = _store.Delete(scope, name);
-            if (!res.has_value()) {
-                const Core::Error& err = res.error();
-                return Response(StatusFromError(err.code), "application/json",
-                                "{\"error\":" + JsonString(err.message) + "}");
-            }
-            return Response(200, "application/json", "{\"ok\":true}");
-        }
-
-        return Response(405, "application/json", "{\"error\":\"method not allowed\"}");
-    }
-
-    // ── /api/config/{scope}/{name}/backups (GET=备份列表) ──
-    if (seg.size() == 5 && seg[0] == "api" && seg[1] == "config"
-            && seg[4] == "backups" && method == "GET") {
-        ConfigScope scope;
-        if (!ScopeFromString(seg[2], &scope)) {
-            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
-        }
-        auto res = _store.ListBackups(scope, seg[3]);
-        if (!res.has_value()) {
-            const Core::Error& err = res.error();
-            return Response(StatusFromError(err.code), "application/json",
-                            "{\"error\":" + JsonString(err.message) + "}");
-        }
-        return Response(200, "application/json", JsonArray(res.value()));
-    }
-
-    // ── /api/config/{scope}/{name}/backups/{tag}/restore (POST=回滚) ──
-    if (seg.size() == 7 && seg[0] == "api" && seg[1] == "config"
-            && seg[4] == "backups" && seg[6] == "restore") {
-        if (method != "POST") {
-            return Response(405, "application/json", "{\"error\":\"method not allowed\"}");
-        }
-        ConfigScope scope;
-        if (!ScopeFromString(seg[2], &scope)) {
-            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
-        }
-        auto res = _store.Rollback(scope, seg[3], seg[5]);
-        if (!res.has_value()) {
-            const Core::Error& err = res.error();
-            return Response(StatusFromError(err.code), "application/json",
-                            "{\"error\":" + JsonString(err.message) + "}");
-        }
-        return Response(200, "application/json", "{\"ok\":true}");
     }
 
     // ── 未匹配的 API 路径 ──

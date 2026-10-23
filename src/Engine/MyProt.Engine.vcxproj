@@ -119,15 +119,12 @@
   <ItemGroup>
     <ClInclude Include="include\MyProt\Engine\RequestBuilder.hpp" />
     <ClInclude Include="include\MyProt\Engine\ResponseParser.hpp" />
-    <ClInclude Include="include\MyProt\Engine\ExpressionEvaluator.hpp" />
-    <ClInclude Include="include\MyProt\Engine\AutoIncrementProvider.hpp" />
     <ClInclude Include="include\MyProt\Engine\AutoComputeProvider.hpp" />
     <ClInclude Include="include\MyProt\Engine\MiniExpression.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\RequestBuilder.cpp" />
     <ClCompile Include="src\ResponseParser.cpp" />
-    <ClCompile Include="src\ExpressionEvaluator.cpp" />
     <ClCompile Include="src\AutoComputeProvider.cpp" />
     <ClCompile Include="src\MiniExpression.cpp" />
   </ItemGroup>

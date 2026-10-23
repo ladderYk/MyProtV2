@@ -13,37 +13,12 @@
 #include "MyProt/Core/Platform.hpp"     // 跨平台目录枚举
 #include "MyProt/Service/ConfigValidator.hpp"
 #include "MyProt/Core/ServerConfig.hpp"  // 解析 server.json
+#include "ConfigInternals.hpp"            // simulation 段共用解析/校验
 #include <nlohmann/json.hpp>
 
 namespace MyProt { namespace Service {
 
 namespace {
-
-// server.json simulation.operations[].responseTemplate 模板行校验
-// (文法同 §5: hex 字面量 | {data} | {req:N:M})。
-// hex 字面量分支复用 ConfigValidator::isValidHexLiteral — 单一实现, 避免双份漂移。
-bool IsValidSimTemplateLineLocal(const std::string& raw) {
-    std::size_t b = 0, e = raw.size();
-    while (b < e && std::isspace(static_cast<unsigned char>(raw[b]))) ++b;
-    while (e > b && std::isspace(static_cast<unsigned char>(raw[e - 1]))) --e;
-    const std::string s = raw.substr(b, e - b);
-    if (s.empty()) return true;
-    if (s[0] == '{') {
-        if (s.size() < 2 || s[s.size() - 1] != '}') return false;
-        const std::string inner = s.substr(1, s.size() - 2);
-        if (inner == "data") return true;
-        if (inner.compare(0, 4, "req:") != 0 || inner.size() < 5) return false;
-        bool sawDigit = false;
-        for (std::size_t i = 4; i < inner.size(); ++i) {
-            const char c = inner[i];
-            if (c == ':') continue;
-            if (!std::isdigit(static_cast<unsigned char>(c))) return false;
-            sawDigit = true;
-        }
-        return sawDigit;
-    }
-    return ConfigValidator::isValidHexLiteral(s);
-}
 
 bool ReadTextFile(const std::string& path, std::string& out, std::string& err) {
     std::ifstream f(path.c_str(), std::ios::binary);
@@ -308,55 +283,25 @@ Core::Expected<LoadedConfig> ConfigDirectoryLoader::Load(
                         " 与配置根版本 " + std::to_string(supportedSchemaVersion) + " 不一致");
                 }
             }
-                        // simulation 段 (可选)
-            if (svDoc.contains("simulation") && svDoc["simulation"].is_object()) {
-                const auto& sim = svDoc["simulation"];
-                if (sim.contains("listenPort") && sim["listenPort"].is_number_integer()) {
-                    out.server.simulation.listenPort = static_cast<uint16_t>(
-                        sim["listenPort"].get<int>());
+            // simulation 段 (可选; 旧版单实例回退，只在无协议级仿真时生效)
+            if (svDoc.contains("simulation")) {
+                std::string simErr;
+                if (!detail::ParseSimulationDocImpl(
+                        svDoc.at("simulation"), out.server.simulation, simErr)) {
+                    return Core::Unexpected(Core::Error::Code::ConfigError,
+                        "server.json simulation: " + simErr);
                 }
-                if (sim.contains("registerCount") && sim["registerCount"].is_number_integer()) {
-                    out.server.simulation.registerCount = sim["registerCount"].get<int>();
-                }
-                if (sim.contains("initialValues") && sim["initialValues"].is_object()) {
-                    for (auto it = sim["initialValues"].begin();
-                         it != sim["initialValues"].end(); ++it) {
-                        if (it.value().is_number_integer()) {
-                            out.server.simulation.initialValues[it.key()] =
-                                it.value().get<uint32_t>();
-                        }
+                const std::vector<std::string> simErrs =
+                    detail::ValidateSimulationConfig(out.server.simulation,
+                                                     "server.json");
+                if (!simErrs.empty()) {
+                    std::string detail;
+                    for (std::size_t e = 0; e < simErrs.size(); ++e) {
+                        if (e) detail += "; ";
+                        detail += simErrs[e];
                     }
-                }
-                if (sim.contains("operations") && sim["operations"].is_object()) {
-                    for (auto it = sim["operations"].begin();
-                         it != sim["operations"].end(); ++it) {
-                        Core::SimOperationConfig soc;
-                        const auto& op = it.value();
-                        if (op.contains("kind") && op["kind"].is_string()) {
-                            soc.kind = op["kind"].get<std::string>();
-                        }
-                        if (op.contains("addressVar") && op["addressVar"].is_string()) {
-                            soc.addressVar = op["addressVar"].get<std::string>();
-                        }
-                        if (op.contains("countVar") && op["countVar"].is_string()) {
-                            soc.countVar = op["countVar"].get<std::string>();
-                        }
-                        if (op.contains("dataOffset") && op["dataOffset"].is_number_integer()) {
-                            soc.dataOffset = op["dataOffset"].get<int>();
-                        }
-                        if (op.contains("responseTemplate") && op["responseTemplate"].is_array()) {
-                            for (const auto& t : op["responseTemplate"]) {
-                                if (!t.is_string()) continue;
-                                if (!IsValidSimTemplateLineLocal(t.get<std::string>())) {
-                                    return Core::Unexpected(Core::Error::Code::ConfigError,
-                                        "server.json simulation.operations." + it.key() +
-                                        " responseTemplate 行既非 hex 字面量也非 {data}/{req:N:M} 占位符");
-                                }
-                                soc.responseTemplate.push_back(t.get<std::string>());
-                            }
-                        }
-                        out.server.simulation.operations[it.key()] = soc;
-                    }
+                    return Core::Unexpected(Core::Error::Code::ConfigError,
+                                            "server.json 仿真校验失败", detail);
                 }
             }
         } catch (const std::exception& e) {

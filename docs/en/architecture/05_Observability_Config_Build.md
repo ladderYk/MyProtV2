@@ -41,8 +41,8 @@ Log-level usage convention:
 #   - lifecycle/breaker: SessionContext (myprot_device_lifecycle_state gauge,
 #                      myprot_device_lifecycle_transitions_total counter,
 #                      myprot_circuit_state gauge, myprot_circuit_opens_total counter)
-#   - write path:        RuntimeGlue (WriteViaGateway counting)
-# GET /api/metrics endpoint not implemented (see ROADMAP.md). Target metric shape:
+#   - write path:        Gateway::WriteService (write-path counting)
+# GET /metrics is implemented (Prometheus text v0.0.4, no auth; registered in the route table). Target metric shape:
 myprot_reads_total{device="PLC1",status="success"} 12345
 myprot_reads_total{device="PLC1",status="failed"} 3
 myprot_device_lifecycle_state{device="PLC1"} 2   # New/Connecting/Connected/Degraded/Disabled
@@ -55,8 +55,8 @@ myprot_write_queue_size{device="PLC1"} 2         # per-device write-mutex queue 
 ### 10.3 Health checks
 
 ```
-GET /api/health → 200 { "status": "ok", "devices": { "PLC1": "connected", "PLC2": "disconnected" } }
-GET /api/health/ready → 200 or 503 (initializing)
+GET /health → 200 { "status": "ok", "authRequired": bool }
+GET /metrics → 200 (Prometheus text v0.0.4)
 ```
 
 ### 10.4 Correlation & tracing (correlation id)
@@ -79,8 +79,9 @@ Startup (RunProduction)
   ├─ CLI arg parsing (--config <dir> [port]; no args defaults to configs:8080)
   ├─ Service::ConfigDirectoryLoader::Load(configDir, schemaVersion)   # sole load entry
   │   ├─ SchemaRegistry: field list / types / defaults (single scan)
-  │   ├─ ConfigDeepValidator: fifteen rules (protocol-field completeness / device→protocol ref /
-  │   │   tag→device / tag→operation / framing inter-field consistency / resilience block ...)
+  │   ├─ ConfigDeepValidator: rule orchestration (structure rules in SchemaChecker /
+  │   │   semantic rules in SemanticChecker / frame trial in TrialRenderer /
+  │   │   parsing in ProtocolJsonParser)
   │   └─ failure → Expected::Error → main prints detail → exit 2
   ├─ protocol-lookup callback injection (ProtocolLookup)
   ├─ construct closure dependencies (ProtocolLookup / ChannelFactory / EngineStarter / ResultDispatch)
@@ -125,11 +126,11 @@ The main artifact is **`MyProt.sln`** at the repo root (PlatformToolset **v140**
 | `MyProt.Core` | static lib (header-only, ForceLib to force symbols) | — |
 | `MyProt.Engine` | static lib | Core |
 | `MyProt.Transport` | static lib | Core, asio |
-| `MyProt.Service` | static lib | Core, nlohmann/json |
+| `MyProt.Service` | static lib | Core, Engine, nlohmann/json (load-time validation reuses Engine primitives, ADR-0015) |
 | `MyProt.Gateway` | static lib | Core, Engine, Transport, Service |
-| `MyProt.Polling` | static lib | Core, Gateway, Transport |
+| `MyProt.Polling` | static lib | Core, Engine, Gateway, Transport |
 | `MyProt.WebApi` | static lib | Core, Service |
-| `MyProt.Simulation` | static lib | Core, asio |
+| `MyProt.Simulation` | static lib | Core, Engine, Transport, asio |
 | `MyProt.App` | application (production entry exe) | all modules |
 | `MyProt.E2E` | application (E2E test process, shares the RuntimeGlue assembly with production) | all modules |
 
@@ -143,9 +144,8 @@ All dependencies are collected under `third_party/` as source/prebuilt (versions
 |------|------|------|
 | standalone asio | verified | the sole runtime third-party dependency (callback API only, coroutines not enabled) |
 | nlohmann/json | 3.7.3 | config parsing (startup path; the hot path does not touch JSON) |
-| OpenSSL | 1.1.1 line | reserved (introduced when TlsChannel / management-plane TLS is enabled) |
-| GoogleTest | 1.8.x | unit tests (tests/) |
-| cpp-httplib / spdlog / efsw / tl-expected | — | not introduced (in-house replacements) |
+| OpenSSL | 1.1.1 line | reserved (re-add include/lib when TlsChannel / management-plane TLS is enabled) |
+| cpp-httplib / spdlog / GoogleTest / efsw / tl-expected | — | not introduced (in-house replacements: HTTP / logging / MiniTest) |
 
 ---
 
@@ -156,7 +156,7 @@ All dependencies are collected under `third_party/` as source/prebuilt (versions
 | Tier | Carrier | Content | Status |
 |------|------|------|------|
 | **E2E integration test** | in-house suite `src/Tests/E2EMain.cpp` (standalone MyProt.E2E process) | TagGrouper coalescing / poll stats / circuit-breaker recovery & resilience coverage / write path (scalar + variable-length + read-back) / framing rejection / simulator rebuild, 16+ cases; shares the RuntimeGlue assembly with production (isomorphic verification) | ✅ v1's primary verification means |
-| **unit test** | GoogleTest (in-repo tests/ project) | Expected / Optional / ByteView / frame parsing and other pure functions | skeleton in place, filled per module |
+| **unit test** | in-house MiniTest (`tests/MiniTest.hpp` + in-repo tests/ project) | Expected / Optional / ByteView / frame parsing / config-default consistency and other pure functions | skeleton in place, filled per module |
 | **stress/perf** | google-benchmark | performance-target acceptance (§12) | not introduced (ADR-0010 §4) |
 
 ### 14.2 Mock strategy

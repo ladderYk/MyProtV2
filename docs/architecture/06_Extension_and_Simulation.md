@@ -46,7 +46,7 @@ v1 的 RequestBuilder 为**单遍展开的具体类**，无 `IFunctionProvider` 
 |------|------|------|
 | `{Name:Xn}` | 变量定宽十六进制输出 | RequestBuilder |
 | `{Name:raw}` | 变长字节流直插（载荷由写请求运行时注入） | RequestBuilder::BuildBytes 重载（见 ADR-0007） |
-| `{Name:auto:Xn}` | 原子自增计数（按宽度取模） | AutoIncrementProvider |
+| `{Name:Xn}` + `strategy=autoIncrement` | 原子自增计数（按宽度取模） | AutoComputeProvider（模板只做定宽渲染，不接受 `:auto:` 令牌） |
 | `0A1B` | 十六进制字面量 | RequestBuilder |
 
 新增片段（如 BCD 编码、协议专有编码）属 **Engine 核心变更**（见 [ROADMAP.md](../ROADMAP.md)），不在协议层局部引入，统一走 ROADMAP 评估；协议特有计算（如 Modbus PDU 长度）用**注册式策略**在 App 层解决（[PDULengthRegistry](../modules/05_Gateway.md)，启动时按协议注册，Engine 模板不感知协议知识）。
@@ -73,12 +73,13 @@ class UdpChannel : public Transport::IChannel { /* asio socket + 回调式三件
 
 | 组件 | 职责 |
 |------|------|
-| `SimulationServer` | 每个仿真设备一个实例；自有 `io_context` + 专用工作线程，全异步 accept/read；监听 `ServerConfig.simulation` 指定端口 |
+| `SimulationServer` | 每个仿真实例一个对象；自有 `io_context` + 专用工作线程，全异步 accept/read；监听协议级 `ProtocolConfig.simulation.listenPort`（`server.json` 仅为无协议级配置时的回退） |
 | `TemplateMatcher` | 按协议 `OperationConfig.requestTemplate` 渲染出的字节模式匹配入站请求 |
 | `ResponseSynthesizer` | 依响应模板合成应答字节 |
 | `SimulationDataStore` | `/api/sim` 寄存器读写的寄存器数据底座 |
 
-- **装配**：App 层 `ApplyRuntimeSync` 按设备配置批量创建 / 重建仿真器（首次启动与热重载同一入口）
+- **装配**：App 层 `ApplyRuntimeSync` 逐协议扫描 `simulation.listenPort > 0`，为每个协议创建独立仿真实例（首次启动与热重载同一入口）；端口冲突在停止旧实例前拒绝
+- **多设备**：增加仿真设备 = 在目标 `protocols/*.json` 写 `simulation` 段（端口互异），无需新增进程或配置目录；`server.json.simulation` 仅作旧配置回退（[ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md)）
 - **操控**：WebApi `/api/sim/*`（status 清单 / registers 读 GET 写 POST），handler 在 `App/RuntimeGlue`
 - **价值**：E2E 全链路（真实 TCP → ChannelManager → 轮询 → 解析）无硬件验证
 

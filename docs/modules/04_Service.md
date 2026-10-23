@@ -6,7 +6,7 @@
 
 ---
 
-**依赖**: `Core`（nlohmann/json 仅在实现文件内部使用，头文件不外泄）
+**依赖**: `Core` + `Engine`（加载期校验复用 `MiniExpression` / `RequestBuilder` / `AutoComputeProvider`，保证保存期与运行时同一套文法；依赖边界见 [ADR-0015](../adr/0015-service-engine-dependency-direction.md)）。nlohmann/json 仅在实现文件内部使用，头文件不外泄。
 
 > ⚠️ 配置契约（字段、文法、校验规则）以 [Config_Schema.md](../Config_Schema.md) 为准。
 > 本模块**没有接口继承体系**——全部为具体类与静态方法，错误统一用 `Core::Expected`
@@ -23,7 +23,12 @@ src/Service/
 │   ├── SchemaRegistry.hpp         # 字段描述符注册表
 │   └── SessionContext.hpp         # 设备会话上下文
 └── src/
-    ├── ConfigDeepValidator.cpp    # ConfigValidator 实现 (~1450 行)
+    ├── ConfigDeepValidator.cpp    # 编排层: 校验入口 + 规则串联 (~330 行)
+    ├── ProtocolJsonParser.cpp     # JSON → POCO 解析 (detail::Parse*Impl)
+    ├── SchemaChecker.cpp          # 结构规则: 版本/传输/成帧/握手/设备/物性/WebApi
+    ├── SemanticChecker.cpp        # 语义规则: 模板文法/派生长度/跨文件引用
+    ├── TrialRenderer.cpp          # 写帧试算 + 成帧长度槽位比对
+    ├── ConfigInternals.hpp        # 拆分内部契约 (detail 命名空间声明, 不对外)
     ├── ConfigDirectoryLoader.cpp
     ├── ConfigStore.cpp
     ├── SchemaRegistry.cpp
@@ -32,7 +37,7 @@ src/Service/
 
 | 组件 | 职责 | 主要消费者 |
 |---|---|---|
-| `ConfigValidator` | 十五项规则深度校验 + JSON→POCO 解析（一体入口） | `ConfigDirectoryLoader` / `ConfigStore` |
+| `ConfigValidator` | 校验编排（入口串联 + 结果合并）；规则实现分居 4 个 TU | `ConfigDirectoryLoader` / `ConfigStore` |
 | `ConfigDirectoryLoader` | 目录布局加载（生产启动链路） | App `RunProduction` |
 | `ConfigStore` | 读写、原子写、备份/回滚 + 热重载回调 | `WebApiServer` |
 | `SchemaRegistry` | 字段描述符注册表 — `GET /api/config/schema` | `WebApiServer` |
@@ -117,15 +122,21 @@ public:
 
 私有方法与 Config_Schema 规则逐组对应，全部**收集式**（不提前终止），唯一例外：
 
-| 分组 | 方法 | 规则 |
+| 分组 | 实现位置 | 规则 |
 |---|---|---|
-| 版本门禁 | `checkVersionGate` | **唯一提前终止**: schemaVersion 不在支持代际立即返回（ADR-0005） |
-| 协议层 | `validateTransport` / `validateFraming` / `validateOperations` / `validateHandshake` | §7 规则 1~8 |
-| 模板文法 | `validateTemplate` / `validateBuiltInFunctions` / `validateChecksumWidths` | §3 占位符文法 + 内建函数 + 校验和宽度匹配（`validateChecksumWidths` 仅做 `line.width` 字段与算法名 `crc16/crc32/...` 的字符串匹配，不调用已撤回 A1 的 `ComputeChecksum`/`ChecksumSize` 函数） |
-| 设备层 | `validateDevice` | §7 规则 9~11 |
-| 标签层 | `validateTag` | §7 规则 12~15（含跨文件引用） |
-| 韧性 | `validateResilience` | §11 |
-| 管理面 | `validateWebApi` | §12 |
+| 版本门禁 | `SchemaChecker.cpp` `checkVersionGate` | **唯一提前终止**: schemaVersion 不在支持代际立即返回（ADR-0005） |
+| 协议层 | `SchemaChecker.cpp` `validateTransport` / `validateFraming` / `validateHandshake` | §7 规则 1~8 |
+| 模板文法 | `SemanticChecker.cpp` `validateTemplate` / `ValidateDerivedLengthOffsets` | §3 占位符文法 + 派生长度可解性 + 已删除三段语法的显式拦截 |
+| 设备层 | `SchemaChecker.cpp` `validateDevice` | §7 规则 9~11 |
+| 标签层 | `SemanticChecker.cpp` `validateTag` | §7 规则 12~15（含跨文件引用） |
+| 配置根 | `SemanticChecker.cpp` `validateConfigRoot` | 设备/标签/协议引用链与跨文件一致性 |
+| 韧性 | `SchemaChecker.cpp` `validateResilience` | §11 |
+| 管理面 | `SchemaChecker.cpp` `validateWebApi` | §12 |
+| 帧一致性试算 | `TrialRenderer.cpp` | ADR-0012 §2：真实渲染写帧 + 成帧长度槽位比对 |
+
+> **内部契约**：解析与文法工具在 `ConfigInternals.hpp` 的 `detail` 命名空间声明，
+> 仅 Service 内部 TU 可见；头文件不随 `include/MyProt/Service/` 对外暴露。
+> `ConfigDeepValidator.cpp` 只保留入口与规则串联，不再承载规则实现体。
 
 ### 三类入口的选用
 
@@ -169,16 +180,18 @@ public:
 <dir>/
 ├── protocols/*.json    # 一文件一协议
 ├── tags.json           # 设备 + 标签 + 全局韧性 + WebApi
-└── server.json         # 全局服务端配置（仿真 + 未来 alertSink/webhook）；可选缺失
+└── server.json         # 旧版全局仿真实例（回退）；可选缺失
 ```
 
 1. 遍历 `protocols/*.json`，每个文件调用 `validateAndParseProtocolJson` —
+   结构解析、字段校验与试渲染；协议级可选的 `simulation` 段在同一入口解析/校验（[ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md)）——
    深度校验（Fail-Fast，错误携带文件名）与 POCO 转换一次完成；
 2. 任一协议文件校验失败 → 整体 `Load` 失败；
 3. 读取 `tags.json`，调用 `validateAndParseConfigRootJson(text, protocols, ver)`
    — 复用第 1 步已解析的协议集做跨文件引用校验，**不再重复解析协议**；
 4. 读取 `server.json`（缺失 = OK，`ServerConfig.simulation.listenPort` 默认 0 即关闭仿真），
-   解析后挂到 `LoadedConfig.server` 供 `RuntimeGlue` 启动仿真器；解析失败 = 整体 `Load` 失败；
+   解析后挂到 `LoadedConfig.server`；其 `simulation` 段与协议级共用同一解析/校验实现，
+   仅在无任何协议启用仿真时作为回退实例；解析失败 = 整体 `Load` 失败；
 5. 校验期 Warning 输出到 stderr，不阻断加载。
 
 > 演进记录: 改造前协议文件经历 3 次 JSON 解析、tags.json 经历 2 次；

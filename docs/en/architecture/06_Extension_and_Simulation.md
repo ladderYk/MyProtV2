@@ -49,7 +49,7 @@ v1's RequestBuilder is a **single-pass-expanding concrete class**, with no `IFun
 |------|------|------|
 | `{Name:Xn}` | fixed-width hex output of a variable | RequestBuilder |
 | `{Name:raw}` | variable-length byte-stream splice (payload injected at runtime by the write request) | RequestBuilder::BuildBytes overload (see ADR-0007) |
-| `{Name:auto:Xn}` | auto-increment counter (modulo the width) | AutoIncrementProvider |
+| `{Name:Xn}` + `strategy=autoIncrement` | auto-increment counter (modulo the width) | AutoComputeProvider (the template only renders fixed width and does not accept the `:auto:` token) |
 | `0A1B` | hex literal | RequestBuilder |
 
 Adding a fragment (e.g. BCD encoding, a protocol-specific encoding) is an **Engine core change** (see [ROADMAP.md](../../ROADMAP.md) *zh*), not introduced locally at the protocol layer — it goes through ROADMAP review uniformly; protocol-specific computation (e.g. the Modbus PDU length) is solved at the App layer with a **registry-based strategy** ([PDULengthRegistry](../../modules/05_Gateway.md) *zh*, registered per protocol at startup, so the Engine template carries no protocol knowledge).
@@ -76,12 +76,13 @@ There is no `IProtocolRepository` repository abstraction — protocols / devices
 
 | Component | Responsibility |
 |------|------|
-| `SimulationServer` | one instance per simulated device; own `io_context` + dedicated worker thread, fully async accept/read; listens on the port given by `ServerConfig.simulation` |
+| `SimulationServer` | one object per simulator instance; own `io_context` + dedicated worker thread, fully async accept/read; listens on the protocol-level `ProtocolConfig.simulation.listenPort` (`server.json` is only the fallback when no protocol-level config exists) |
 | `TemplateMatcher` | matches inbound requests against the byte pattern rendered from the protocol's `OperationConfig.requestTemplate` |
 | `ResponseSynthesizer` | synthesizes response bytes per the response template |
 | `SimulationDataStore` | the register data substrate for `/api/sim` register reads/writes |
 
-- **Assembly**: the App layer's `ApplyRuntimeSync` batch-creates / rebuilds simulators per device config (the same entry for first startup and hot reload)
+- **Assembly**: the App layer's `ApplyRuntimeSync` scans every protocol with `simulation.listenPort > 0` and creates one independent simulator per protocol (the same entry for first startup and hot reload); port conflicts are rejected before stopping the old instances
+- **Multiple devices**: adding a simulated device means writing a `simulation` section in the target `protocols/*.json` (distinct ports) — no extra process or config directory; `server.json.simulation` is a legacy fallback only ([ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md) *zh*)
 - **Control**: WebApi `/api/sim/*` (status listing / registers read GET write POST), handlers in `App/RuntimeGlue`
 - **Value**: E2E full-chain (real TCP → ChannelManager → polling → parse) verified without hardware
 

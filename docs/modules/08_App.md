@@ -22,6 +22,9 @@ src/App/                          → 工程 MyProt.App (生产入口)
 ├── main.cpp                      # main + RunProduction 装配
 ├── AppContext.hpp                # 运行时状态聚合体 + HttpRequest 值类
 ├── HttpRouter.hpp                # 扩展路由注册器 (header-only)
+├── DataApi.cpp                   # /api/data/* 与写端点 HTTP 适配（写业务在 Gateway::WriteService）
+├── SimApi.cpp                    # /api/sim/* 扩展路由
+├── ValidateApi.cpp               # /api/validate 只读校验
 ├── RuntimeGlue.hpp               # 生产/E2E 两进程共享胶水层 API
 └── RuntimeGlue.cpp
 
@@ -63,19 +66,20 @@ int RunProduction(const std::string& configDir, uint16_t apiPort);
    `InstallCrashDiagnostics()`（崩溃取证）。
 2. **配置加载**（Fail-Fast）：`Service::ConfigDirectoryLoader::Load(configDir, 1)`
    ——深度校验与解析一体（见 [04_Service.md §4.2](./04_Service.md)），失败退出码 `2`。
-3. **协议查找注入**：`Gateway::ProtocolLookup` 闭包持有协议副本
-   （`shared_ptr<ProtoList>`），按名查找返回 `Expected<ProtocolConfig>`。
-4. **通道工厂注入**：`Gateway::ChannelFactory` 作设备→协议→transport 分派，
-   v1 仅支持 `TcpChannel`，其余类型返回空通道 + 连接失败走韧性重连；
-   同时持有 `tagsPtr`（写路径 `/api/data/write` 与热重载共用，同线程替换无竞争）。
+3. **协议查找注入**：`Gateway::ProtocolLookup` 闭包捕获
+   `Core::RuntimeSnapshotHolder*`，每次调用 `Get()` 取当前代快照后按名查找
+   （`RuntimeSnapshot::FindProtocol`），返回 `Expected<ProtocolConfig>`。
+4. **通道工厂注入**：`Gateway::ChannelFactory` 同样从当前代快照读取
+   设备→协议→transport，v1 仅支持 `TcpChannel`，其余类型返回空通道 +
+   连接失败走韧性重连。
 5. **核心对象直构造**：
    - `ProtocolGateway gateway(io, lookup, factory)`（见 05_Gateway.md §5.1）；
    - `PollingEngine engine(io, gateway)`；
    - `LatestValueStore latest`（轮询回调写入 / `/api/data/latest` 读取，线程安全）；
    - `ResultDispatch`：写快照 + 控制台打印。
 6. **运行时状态聚合**：构造 `ConfigStore` 后以聚合初始化建立
-   `AppContext ctx = {&io, &gateway, &engine, startEngine, protosPtr,
-   devicesPtr, tagsPtr, &latest, &sims, &simOwners, &protoStore, &store}`
+   `AppContext ctx = {&io, &gateway, &engine, startEngine, &snapshotHolder,
+   &latest, &sims, &simOwners, &store}`
    ——新增接口所需运行时状态的唯一挂接点（成员顺序见 AppContext.hpp）。
 7. **运行时装配**：`ApplyRuntimeSync(configDir, ctx, &std::cout)` ——首次装配
    与热重载**同一条代码路径**，见 §8.2；随后注册 reload 回调
@@ -92,7 +96,7 @@ int RunProduction(const std::string& configDir, uint16_t apiPort);
    - `SetStreamRoute("/api/data/stream", 3000ms)`：SSE 每 3s 推 latest 快照。
    - WebApi 运行于独立线程，启动异常记入 `serverError`（退出码 `3`）。
 9. **常驻运行**：`InstallStopSignals()` 后主线程 `io.run_for(200ms)` 循环，
-   停止信号使 `IsRunning()==false`（[main.cpp L274-280](file:///d:/workSpaces/c#/MyProt-master/src/App/main.cpp#L274-L280) 逐轮检查标志位后退出主循环）。
+   停止信号使 `IsRunning()==false`（[main.cpp L374-L380](file:///d:/workSpaces/c++/MyProt-master/src/App/main.cpp#L374-L380) 逐轮检查标志位后退出主循环）。
 10. **优雅关闭**：`engine.Stop()` + `gateway.Shutdown()` + `server.Stop()` +
     join + `SimulationServer::Stop()`。
 
@@ -122,7 +126,7 @@ struct HttpRequest {
     std::string body;
 };
 
-/// 设备 ID → 仿真服务器句柄 (sim 扩展路由的查找表)
+/// 协议名 → 仿真服务器句柄 (sim 扩展路由的查找表; 每个启用仿真的协议一个实例)
 typedef std::map<std::string, Simulation::SimulationServer*> SimServerMap;
 
 /// 启动(或重启)轮询引擎的回调; ApplyRuntimeSync 在重装配完成后调用
@@ -138,13 +142,10 @@ struct AppContext {
     Gateway::ProtocolGateway* gateway;
     Polling::PollingEngine* engine;
     EngineStarter startEngine;
-    std::shared_ptr<std::vector<Core::ProtocolConfig> > protos;
-    std::shared_ptr<std::vector<Core::DeviceConfig> > devices;
-    std::shared_ptr<std::vector<Core::TagDefinition> > tags;
+    Core::RuntimeSnapshotHolder* snapshot;   // 当前代配置（唯一数据源）
     Polling::LatestValueStore* latest;
     SimServerMap* sims;
     std::vector<std::unique_ptr<Simulation::SimulationServer> >* simOwners;
-    std::vector<Core::ProtocolConfig>* protoStore;
     Service::ConfigStore* store;
 };
 ```
@@ -195,13 +196,19 @@ server.SetExtHandler([&ctx, &extRoutes](const std::string& m,
 });
 ```
 
+> **写路径已下沉（P2-2）**：`HandleWriteApi` 只保留 HTTP 适配（JSON body 解析、
+> `tag/value/bytes/readBack` 提取、`Error::Code` → 状态码映射），实际写逻辑全部在
+> `Gateway::WriteService::Write(WriteRequest)`；App 不再依赖 `TagReader` / 编码原语。
+> 内置管理面路由（`/health`、`/metrics`、`/api/config/*`）由 WebApi 自己的 `RouteTable`
+> 注册，扩展路由只接管 `/api/data|sim|validate` 等非 `config` 域。
+
 > **实现约定**：`RuntimeGlue.cpp` 各函数开头将 ctx 成员绑定回原名局部引用
 > （如 `SimServerMap& sims = *ctx.sims;`），业务正文与 lambda 捕获保持不变——
 > 收参重构不触碰业务逻辑。
 
 #### AppContext 字段添加顺序约束
 
-[AppContext 聚合初始化](file:///d:/workSpaces/c#/MyProt-master/src/App/AppContext.hpp#L110-L124) 的顺序即成员声明顺序——C++11 标准保证；`AppContext ctx{io, gateway, engine, ...}` 的实参顺序必须严格匹配声明顺序，**编译器不检查**：
+[AppContext 聚合初始化](file:///d:/workSpaces/c++/MyProt-master/src/App/AppContext.hpp#L44-L56) 的顺序即成员声明顺序——C++11 标准保证；`AppContext ctx{io, gateway, engine, ...}` 的实参顺序必须严格匹配声明顺序，**编译器不检查**：
 
 | 位置 | 字段 | 类型 | 用途 |
 |---|---|---|---|
@@ -209,51 +216,49 @@ server.SetExtHandler([&ctx, &extRoutes](const std::string& m,
 | 2 | `gateway` | `Gateway::ProtocolGateway*` | 协议网关 |
 | 3 | `engine` | `Polling::PollingEngine*` | 轮询引擎 |
 | 4 | `startEngine` | `EngineStarter` | 重装配回调 |
-| 5 | `protos` | `shared_ptr<vector<ProtocolConfig>>` | **指针值**指向运行时 shared_ptr（业务读）|
-| 6 | `devices` | `shared_ptr<vector<DeviceConfig>>` | 同上 |
-| 7 | `tags` | `shared_ptr<vector<TagDefinition>>` | 同上 |
-| 8 | `latest` | `Polling::LatestValueStore*` | 最新值表裸指针 |
-| 9 | `sims` | `SimServerMap*` | 仿真器映射裸指针 |
-| 10 | `simOwners` | `vector<unique_ptr<SimulationServer>>*` | 仿真器所有权 |
-| 11 | `protoStore` | `vector<ProtocolConfig>*` | 协议值引用（ApplyRuntimeSync 写入）|
-| 12 | `store` | `Service::ConfigStore*` | 配置存储 |
+| 5 | `snapshot` | `Core::RuntimeSnapshotHolder*` | 当前代配置（协议/设备/标签/server）唯一数据源 |
+| 6 | `latest` | `Polling::LatestValueStore*` | 最新值表裸指针 |
+| 7 | `sims` | `SimServerMap*` | 仿真器映射裸指针（键 = 协议名） |
+| 8 | `simOwners` | `vector<unique_ptr<SimulationServer>>*` | 仿真器所有权 |
+| 9 | `store` | `Service::ConfigStore*` | 配置存储 |
 
 **约束**：
-1. **5/6/7 必须以 `shared_ptr` 形式**持有 `protosPtr/devicesPtr/tagsPtr` 的**值**（[main.cpp L188-202](file:///d:/workSpaces/c#/MyProt-master/src/App/main.cpp#L188-L202)），handler 闭包内可安全捕获 `ctx.protos` 按值拷贝一份。
-2. **8/9 必须是裸指针**（`latest` / `sims` 生命周期归 PollingEngine / RuntimeGlue 内部所有）。
-3. **11 protoStore 必须是 `vector*` 引用**，ApplyRuntimeSync 写入时通过 swap 不触发引用计数增减。
-4. **添加新字段必须同时修改 4 处**：[AppContext.hpp 声明](file:///d:/workSpaces/c#/MyProt-master/src/App/AppContext.hpp#L116-L129) / [main.cpp 首次装配](file:///d:/workSpaces/c#/MyProt-master/src/App/main.cpp#L188-L202) / [E2EMain.cpp 测试装配](file:///d:/workSpaces/c#/MyProt-master/src/Tests/E2EMain.cpp) / 任何引用新字段的 handler / 任何持有 ctx 的回调闭包。
+1. **5 snapshot 是配置的唯一读入口**：handler 闭包捕获 `Core::RuntimeSnapshotPtr`（`Get()` 返回的 shared_ptr）即可保活整代配置，不得再按字段分发副本。
+2. **6/7/8 必须是裸指针或容器指针**（`latest` 生命周期归 `RunProduction` 栈，`sims` / `simOwners` 归 RuntimeGlue 重装配逻辑所有）。
+3. **不得在 AppContext 重新挂共享容器副本**（`protos/devices/tags/protoStore` 已删除）——多副本会造成跨线程读到不同代配置（[ADR-0014](../adr/0014-runtime-snapshot-single-source.md)）。
+4. **添加新字段必须同时修改 3 个装配点**：[AppContext.hpp 声明](file:///d:/workSpaces/c++/MyProt-master/src/App/AppContext.hpp) / [main.cpp 首次装配](file:///d:/workSpaces/c++/MyProt-master/src/App/main.cpp) / [E2EMain.cpp 测试装配](file:///d:/workSpaces/c++/MyProt-master/src/Tests/E2EMain.cpp)，外加所有引用新字段的 handler / 持有 ctx 的回调闭包。
 
-> **历史教训**：v3.0 曾尝试在 `AppContext` 中放 `unique_ptr<asio::io_context>`——但 main.cpp 用裸 `io` 栈对象，类型不匹配；v4.0 改用裸指针统一。**聚合初始化无编译器强校验**，未来加字段须人审 4 处一致性。
+> **历史教训**：v3.0 曾尝试在 `AppContext` 中放 `unique_ptr<asio::io_context>`——但 main.cpp 用裸 `io` 栈对象，类型不匹配；v4.0 改用裸指针统一。**聚合初始化无编译器强校验**，未来加字段须人审 3 个装配点一致性。
 
 ### ApplyRuntimeSync 语义
 
-配置变更生效的**单一汇聚点**：重新执行 `ConfigDirectoryLoader::Load` → 校验失败则返回错误（上层 `ConfigStore` 据此自动回滚）→ 成功则整体替换 `ctx` 内的 `protoStore/devicesPtr/tagsPtr` 内容、按新配置重建全部仿真服务器、经
-`gateway.ResetDevices` 重建设备会话、最后调用 `ctx.startEngine` 以新标签集重启轮询。首次装配与 Save/reload 触发的热重载共用此函数，保证两条路径行为一致。
+配置变更生效的**单一汇聚点**：重新执行 `ConfigDirectoryLoader::Load` → 校验失败则返回错误（上层 `ConfigStore` 据此自动回滚）→ 成功则构建新一代不可变 `RuntimeSnapshot`（加载产物直接 move 入内），按协议收集 `simulation.listenPort > 0` 的实例（无协议级配置时回退 `server.json`）→ **端口冲突前置校验**（失败则旧实例/旧快照保持不变）→ 通过后才停旧实例、**同步发布**新快照到 `ctx.snapshot` 并逐个启动新仿真器 → `io.post` 到 io 线程依次执行 `engine.Stop()` / `gateway.Shutdown()` / `ResetDevices()` / `ctx.startEngine()`。首次装配与 Save/reload 触发的热重载共用此函数，保证两条路径行为一致；多实例语义见 [ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md)。
+
+> 同步发布是为了消除“配置已保存、首个写请求仍走旧标签”的可见性窗口；io 队列 FIFO 保证新到写请求的重装配先于执行。详见 [ADR-0014](../adr/0014-runtime-snapshot-single-source.md)。
 
 ---
 
 ## 8.3 崩溃取证 / 停止信号
 
-生产入口在 `RunProduction` 第 1 步调用 [`InstallCrashDiagnostics()`](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L643-L658)，覆盖三类不可恢复异常：
+生产入口在 `RunProduction` 第 1 步调用 [`InstallCrashDiagnostics()`](file:///d:/workSpaces/c++/MyProt-master/src/App/CrashDiagnostics.cpp#L150-L165)，覆盖三类不可恢复异常：
 
 | 异常源 | 钩子入口 | 取证内容 | 代码定位 |
 |---|---|---|---|
-| **SEH 硬件异常**（访问违例 / 非法指令 / 栈溢出 / 0xC0000005 段错误等）| `SetUnhandledExceptionFilter(OnUnhandledExc)` | `[FATAL] code=0xXXXXX addr=0xXXXXX` + `PrintStackTrace` 32 帧 dbghelp 栈回溯（带符号、偏移、源文件:行号）| [RuntimeGlue.cpp L111-162](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L111-L162) |
-| **`std::terminate()`**（未捕获异常 / 析构抛错 / noexcept 函数抛错）| `std::set_terminate(OnTerminate)` | `[FATAL] terminate: <消息>` + 栈回溯 | [RuntimeGlue.cpp L40-63](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L40-L63) |
-| **`SIGABRT`**（`assert` 失败 / `abort()` 调用）| `signal(SIGABRT, OnSigAbort)` | `[FATAL] SIGABRT` + 栈回溯 | [RuntimeGlue.cpp L164-167](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L164-L167) |
-| **Debug CRT 断言**（仅 `_DEBUG` 编译）| `_CrtSetReportHook(OnCrtReport)` | `[CRT-REPORT] <消息>` + 栈回溯；默认弹窗改写 stderr 以便取证 | [RuntimeGlue.cpp L100-110](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L100-L110) |
+| **SEH 硬件异常**（访问违例 / 非法指令 / 栈溢出 / 0xC0000005 段错误等）| `SetUnhandledExceptionFilter(OnUnhandledExc)` | `[FATAL] code=0xXXXXX addr=0xXXXXX` + `PrintStackTrace` 32 帧 dbghelp 栈回溯（带符号、偏移、源文件:行号）| [CrashDiagnostics.cpp L136-L143](file:///d:/workSpaces/c++/MyProt-master/src/App/CrashDiagnostics.cpp#L136-L143) |
+| **`std::terminate()`**（未捕获异常 / 析构抛错 / noexcept 函数抛错）| `std::set_terminate(OnTerminate)` | `[FATAL] terminate: <消息>` + 栈回溯 | [CrashDiagnostics.cpp L28-L43](file:///d:/workSpaces/c++/MyProt-master/src/App/CrashDiagnostics.cpp#L28-L43) |
+| **`SIGABRT`**（`assert` 失败 / `abort()` 调用）| `signal(SIGABRT, OnSigAbort)` | `[FATAL] SIGABRT` + 栈回溯 | [CrashDiagnostics.cpp L145-L148](file:///d:/workSpaces/c++/MyProt-master/src/App/CrashDiagnostics.cpp#L145-L148) |
+| **Debug CRT 断言**（仅 `_DEBUG` 编译）| `_CrtSetReportHook(OnCrtReport)` | `[CRT-REPORT] <消息>` + 栈回溯；默认弹窗改写 stderr 以便取证 | [CrashDiagnostics.cpp L83-L90](file:///d:/workSpaces/c++/MyProt-master/src/App/CrashDiagnostics.cpp#L83-L90) |
 
 **关键设计**：
-- **预热符号引擎**（[L656-657](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L656-L657)）：`SymInitialize` 必须在崩溃发生**前**调用，崩溃上下文里初始化不可靠。
-- **DBGHELP 调用方**：[`dbghelp` 库](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L25-L26) 由 `#pragma comment(lib, "dbghelp.lib")` 静态链接。
-- **栈回溯帧数上限**：32 帧（[L67](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L67) `frames[32]` + [L134](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L134) `for (int i = 0; i < 32; ++i)`），溢出即停止。
-- **错误码体系集成**：所有 `Core::Unexpected(Error::Code, msg)` 经 [`Expected.hpp` 错误传播链](file:///d:/workSpaces/c#/MyProt-master/src/Core/include/MyProt/Core/Expected.hpp) 上抛，崩溃层只覆盖**未被预期捕获的硬件/系统级错误**；业务错误（如 TagNotFound、ConfigError）正常返回 4xx/5xx HTTP 响应。
+- **预热符号引擎**（[CrashDiagnostics.cpp L162-L164](file:///d:/workSpaces/c++/MyProt-master/src/App/CrashDiagnostics.cpp#L162-L164)）：`SymInitialize` 必须在崩溃发生**前**调用，崩溃上下文里初始化不可靠。
+- **DBGHELP 调用方**：[`dbghelp` 库](file:///d:/workSpaces/c++/MyProt-master/src/App/CrashDiagnostics.cpp#L17-L21) 由 `#pragma comment(lib, "dbghelp.lib")` 静态链接。
+- **栈回溯帧数上限**：32 帧（[L48](file:///d:/workSpaces/c++/MyProt-master/src/App/CrashDiagnostics.cpp#L48) `frames[32]` + [L49-L51](file:///d:/workSpaces/c++/MyProt-master/src/App/CrashDiagnostics.cpp#L49-L51) `CaptureStackBackTrace(..., 32, ...)`），超出部分即停止。
+- **错误码体系集成**：所有 `Core::Unexpected(Error::Code, msg)` 经 [`Expected.hpp` 错误传播链](file:///d:/workSpaces/c++/MyProt-master/src/Core/include/MyProt/Core/Expected.hpp) 上抛，崩溃层只覆盖**未被预期捕获的硬件/系统级错误**；业务错误（如 TagNotFound、ConfigError）正常返回 4xx/5xx HTTP 响应。
 
-**停止信号**（[L660-665](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L660-L665)）：
+**停止信号**（[AppSignals.cpp L10-L19](file:///d:/workSpaces/c++/MyProt-master/src/App/AppSignals.cpp#L10-L19)）：
 - `IsRunning()` 返回 `std::atomic<bool> g_running`（`main.cpp` 启动时置 true）。
 - `InstallStopSignals()` 注册 `SIGINT`（Ctrl+C）+ `SIGTERM`（服务停止 / `taskkill`）处理器，置 `g_running = false`。
-- 主线程 `io.run_for(200ms)` 循环每轮检查 `IsRunning()==false`（[main.cpp L274-280](file:///d:/workSpaces/c#/MyProt-master/src/App/main.cpp#L274-L280)）→ 退出主循环 → 进入第 10 步优雅关闭。
+- 主线程 `io.run_for(200ms)` 循环每轮检查 `IsRunning()==false`（[main.cpp L374-L380](file:///d:/workSpaces/c++/MyProt-master/src/App/main.cpp#L374-L380)）→ 退出主循环 → 进入第 10 步优雅关闭。
 
 ---
 
@@ -267,7 +272,7 @@ server.SetExtHandler([&ctx, &extRoutes](const std::string& m,
 - **内建模拟设备**：`SimulatedModbusDevice`——loopback TCP 服务器，支持多连接，
   应答 Modbus 功能码（如 0x03 读保持寄存器），供管线各环节做真实验证。
 - **覆盖范围**（include 清单可见）：Transport 帧解析、Engine 三原语
-  （RequestBuilder / ResponseParser / AutoIncrementProvider）、字节序矩阵、
+  （RequestBuilder / ResponseParser / AutoComputeProvider）、字节序矩阵、
   TagGrouper 合并、ChannelManager 会话、ProtocolGateway 全链路、PollingEngine、
   ConfigValidator 校验规则（含 `{L:calc:Xn}` 拒绝断言）、ConfigStore 读写回滚、
   WebApi 端点、Simulation 模板匹配等。

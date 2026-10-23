@@ -39,6 +39,9 @@
     <ClInclude Include="include\MyProt\Gateway\ProtocolLookup.hpp">
       <Filter>Header Files\include_MyProt_Gateway</Filter>
     </ClInclude>
+    <ClInclude Include="include\MyProt\Gateway\WriteService.hpp">
+      <Filter>Header Files\include_MyProt_Gateway</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\TagGrouper.cpp">
@@ -51,6 +54,9 @@
       <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="src\ProtocolGateway.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\WriteService.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
   </ItemGroup>

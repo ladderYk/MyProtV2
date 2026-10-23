@@ -20,7 +20,7 @@ MyProt-master/
 ├── src/
 │   ├── Core/           # Expected<T,E>/Optional/ByteView/ByteOrder value types + config POCOs
 │   ├── Transport/      # IChannel abstraction + TCP/TLS/serial channels, LengthField/Silence framing
-│   ├── Engine/         # RequestBuilder / ResponseParser / ExpressionEvaluator (type conversion lives in ResponseParser::Parse)
+│   ├── Engine/         # RequestBuilder / ResponseParser / MiniExpression / AutoComputeProvider (type conversion lives in ResponseParser::Parse)
 │   ├── Service/        # Config store, deep validation, directory loading, session circuit breaker
 │   ├── Gateway/        # ProtocolGateway facade, ChannelManager pool, TagReader, TagGrouper
 │   ├── Polling/        # Grouped polling engine, latest-value cache (results go straight to consumers)

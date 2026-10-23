@@ -55,12 +55,12 @@ endif()
 # ── 分层静态库 (与 vcxproj 一一对应) ──
 add_library(myprot_core STATIC
     src/Core/src/MyProt.Core.ForceLib.cpp
+    src/Core/src/TemplateGrammar.cpp
 )
 target_link_libraries(myprot_core PUBLIC myprot_build_flags)
 
 add_library(myprot_engine STATIC
     src/Engine/src/AutoComputeProvider.cpp
-    src/Engine/src/ExpressionEvaluator.cpp
     src/Engine/src/MiniExpression.cpp
     src/Engine/src/RequestBuilder.cpp
     src/Engine/src/ResponseParser.cpp
@@ -80,6 +80,7 @@ add_library(myprot_gateway STATIC
     src/Gateway/src/ProtocolGateway.cpp
     src/Gateway/src/TagGrouper.cpp
     src/Gateway/src/TagReader.cpp
+    src/Gateway/src/WriteService.cpp
 )
 target_link_libraries(myprot_gateway PUBLIC myprot_core myprot_engine myprot_transport)
 
@@ -93,7 +94,10 @@ add_library(myprot_service STATIC
     src/Service/src/ConfigDeepValidator.cpp
     src/Service/src/ConfigDirectoryLoader.cpp
     src/Service/src/ConfigStore.cpp
-    src/Service/src/FrameConsistencyCheck.cpp
+    src/Service/src/ProtocolJsonParser.cpp
+    src/Service/src/SchemaChecker.cpp
+    src/Service/src/SemanticChecker.cpp
+    src/Service/src/TrialRenderer.cpp
     src/Service/src/SchemaRegistry.cpp
     src/Service/src/SessionContext.cpp
     src/Service/src/ValidationIssue.cpp
@@ -148,13 +152,14 @@ if(MYPROT_BUILD_TESTS)
     target_link_libraries(MyProt.Core.Tests PRIVATE myprot_test_main myprot_core)
 
     add_executable(MyProt.Engine.Tests
-        tests/Engine.Tests/ExpressionEvaluatorTests.cpp
+        tests/Engine.Tests/MiniExpressionTests.cpp
         tests/Engine.Tests/RequestBuilderTests.cpp
         tests/Engine.Tests/ResponseParserTests.cpp
     )
     target_link_libraries(MyProt.Engine.Tests PRIVATE myprot_test_main myprot_engine)
 
     add_executable(MyProt.Service.Tests
+        tests/Service.Tests/SchemaDefaultsTests.cpp
         tests/Service.Tests/ValidationIssueTests.cpp
     )
     target_link_libraries(MyProt.Service.Tests PRIVATE myprot_test_main myprot_service)

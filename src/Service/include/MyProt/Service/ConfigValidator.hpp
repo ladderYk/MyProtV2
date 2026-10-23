@@ -71,7 +71,7 @@ public:
     static Core::Expected<Core::ProtocolConfig> parseProtocolJson(const std::string& json);
     static Core::Expected<Core::ConfigRoot> parseConfigRootJson(const std::string& json);
 
-    // ── Trial validation (ADR-0012 §2, implemented in FrameConsistencyCheck.cpp) ──
+    // ── Trial validation (ADR-0012 §2, implemented in TrialRenderer.cpp) ──
     /// For a protocol's LengthField write operations containing {Name:raw} payload placeholders, trial-render one frame with the real pipeline:
     ///   1) derived-length expr resolvability (evaluation failure -> error, sealing off a silent runtime 0 value);
     ///   2) consistency between the rendered frame and the framing length slot (a three-way cross-check of template fixed segment <-> outputs constant <-> framing);

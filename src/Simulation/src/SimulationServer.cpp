@@ -69,11 +69,12 @@ void DeriveSimDescriptors(const Core::ProtocolConfig& proto,
 
 } // namespace
 
-SimulationServer::SimulationServer(const Core::ProtocolConfig& protocol,
-                                   const Core::SimulationConfig& simOverride)
+SimulationServer::SimulationServer(
+        const std::shared_ptr<const Core::ProtocolConfig>& protocol,
+        const Core::SimulationConfig& simOverride)
     : _protocol(protocol)
     , _sim(simOverride)
-    , _matcher(protocol)
+    , _matcher(*protocol)
     , _store(static_cast<std::size_t>(
           simOverride.registerCount > 0 ? simOverride.registerCount : 1))
     , _running(false)
@@ -95,7 +96,7 @@ bool SimulationServer::Start(std::string& err) {
     // 模板形状歧义告警 (不阻断 — Match 仍按编译序取首个)
     for (std::size_t i = 0; i < _matcher.Ambiguities().size(); ++i) {
         std::fprintf(stderr, "[SimMatcher][warn] protocol '%s': %s\n",
-                     _protocol.protocolName.c_str(),
+                     _protocol->protocolName.c_str(),
                      _matcher.Ambiguities()[i].c_str());
     }
     _plans.clear();
@@ -103,15 +104,15 @@ bool SimulationServer::Start(std::string& err) {
     // 缺失描述符由 DeriveSimDescriptors 补全 —— 故 server.json 通常只需
     // listenPort / initialValues, 无需重复协议已表达的方向与变量名.
     std::unordered_map<std::string, Core::OperationConfig>::const_iterator pit;
-    for (pit = _protocol.operations.begin();
-         pit != _protocol.operations.end(); ++pit) {
+    for (pit = _protocol->operations.begin();
+         pit != _protocol->operations.end(); ++pit) {
         const std::string& opName = pit->first;
 
         Core::SimOperationConfig cfg;
         std::map<std::string, Core::SimOperationConfig>::const_iterator sit =
             _sim.operations.find(opName);
         if (sit != _sim.operations.end()) cfg = sit->second;   // 显式声明覆盖推导值
-        DeriveSimDescriptors(_protocol, pit->second, cfg);
+        DeriveSimDescriptors(*_protocol, pit->second, cfg);
 
         SimPlan plan;
         plan.cfg = cfg;
@@ -124,7 +125,7 @@ bool SimulationServer::Start(std::string& err) {
             std::fprintf(stderr,
                 "[SimMatcher][warn] protocol '%s' op '%s': write has no dataOffset "
                 "and no {..:raw} tail; write frames will be ignored\n",
-                _protocol.protocolName.c_str(), opName.c_str());
+                _protocol->protocolName.c_str(), opName.c_str());
         }
         _plans[opName] = plan;
     }
@@ -145,7 +146,7 @@ bool SimulationServer::Start(std::string& err) {
     // 旧同步阻塞 accept 无法被另一线程 close() 唤醒 (WinSock 语义),
     // 曾导致热重载 Stop→join 永久挂起并拖死 WebApi 单线程事件循环。
     _ioCtx.reset(new asio::io_context());
-    tcp::endpoint ep(tcp::v4(), _sim.listenPort);
+    tcp::endpoint ep(asio::ip::address_v4::loopback(), _sim.listenPort);
     std::unique_ptr<tcp::acceptor> acc(new tcp::acceptor(*_ioCtx));
     asio::error_code ec;
     // 注: 失败路径不手动 reset _ioCtx — 局部 acc 仍持有它, 交由成员
@@ -229,9 +230,9 @@ std::size_t SimulationServer::TryExtractFrame(std::vector<std::uint8_t>& buf,
     if (buf.empty()) return 0;
     Core::ByteView view(&buf[0], buf.size());
 
-    switch (_protocol.framing.type) {
+    switch (_protocol->framing.type) {
         case Core::FramingType::LengthField: {
-            Transport::LengthFieldFrameParser parser(_protocol.framing.lengthField);
+            Transport::LengthFieldFrameParser parser(_protocol->framing.lengthField);
             Transport::Expected<Transport::FrameParseResult> r = parser.Parse(view, 0);
             if (!r.has_value() || r.value().needMoreData) return 0;
             frame = r.value().frame;
@@ -239,8 +240,8 @@ std::size_t SimulationServer::TryExtractFrame(std::vector<std::uint8_t>& buf,
         }
         case Core::FramingType::Fixed: {
             const std::size_t len =
-                _protocol.framing.fixed.fixedLength > 0
-                    ? static_cast<std::size_t>(_protocol.framing.fixed.fixedLength) : 0;
+                _protocol->framing.fixed.fixedLength > 0
+                    ? static_cast<std::size_t>(_protocol->framing.fixed.fixedLength) : 0;
             if (len == 0 || buf.size() < len) return 0;
             frame.assign(buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(len));
             return len;
@@ -293,12 +294,12 @@ void SimulationServer::HandleFrame(const SocketPtr& socket,
     if (!plan.cfg.responseTemplate.empty()) {
         if (!ResponseSynthesizer::SynthesizeFromTemplate(
                 plan.cfg.responseTemplate, frame, data,
-                _protocol.framing, resp)) {
+                _protocol->framing, resp)) {
             return; // 模板文法/越界: 不应答 (加载期校验应已拦截)
         }
     } else {
         resp = ResponseSynthesizer::Synthesize(plan.spec, frame, data,
-                                               _protocol.framing);
+                                               _protocol->framing);
     }
     if (resp.empty()) return;
 

@@ -1631,6 +1631,34 @@ int RunE2E() {
         Check("GET /health reports authRequired",
               healthResp.find("\"authRequired\":false") != std::string::npos);
 
+        // 路由表可枚举 (P2-3): method + pattern 统一注册, 不再散落 if 链
+        const std::vector<std::string> routes = server.DescribeRoutes();
+        Check("路由表: 内置 10 条", routes.size() == 10);
+        bool hasScopeList = false;
+        bool hasRestore = false;
+        for (size_t i = 0; i < routes.size(); ++i) {
+            if (routes[i] == "GET /api/config/:scope") hasScopeList = true;
+            if (routes[i] == "POST /api/config/:scope/:name/backups/:tag/restore") {
+                hasRestore = true;
+            }
+        }
+        Check("路由表含 GET /api/config/:scope", hasScopeList);
+        Check("路由表含 backup restore", hasRestore);
+
+        // /metrics 免认证 (Prometheus)
+        const std::string metricsResp = HttpGet(
+            "GET /metrics HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n",
+            18080);
+        Check("GET /metrics → 200 (免认证)",
+              metricsResp.find("200") != std::string::npos);
+
+        // 路径存在但 method 不匹配 → 405 (不能被 :scope 兜成 404)
+        const std::string wrongMethodResp = HttpGet(
+            "GET /api/config/reload HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n",
+            18080);
+        Check("GET /api/config/reload → 405",
+              wrongMethodResp.find("405") != std::string::npos);
+
         // 列表端点 閳?鎼存柨鎯?modbus
         const std::string listResp = HttpGet(
             "GET /api/config/protocols HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n",
@@ -1852,7 +1880,9 @@ int RunE2E() {
                       SynthesizeFromTemplate(oob, req, dat, fr, out3));
         }
 
-        SimulationServer simServer(proto, sim);
+        const std::shared_ptr<const MyProt::Core::ProtocolConfig> protoPtr =
+            std::make_shared<const MyProt::Core::ProtocolConfig>(proto);
+        SimulationServer simServer(protoPtr, sim);
         std::string simErr;
         Check("模拟器启动成功", simServer.Start(simErr));
 
@@ -2386,6 +2416,8 @@ int RunE2E() {
         MyProt::Core::Platform::EnsureDirectory(kDir);
         const std::string pDir = std::string(kDir) + "/protocols";
         MyProt::Core::Platform::EnsureDirectory(pDir);
+        // 多仿真器用例会落盘 simmodbus2.json; 先清掉上一轮残留, 保证冷启动场景
+        MyProt::Core::Platform::RemoveFile(pDir + "/simmodbus2.json");
 
         // 重载 JSON: nTags=标签数, devPort=仿真器端口 (双变更点)
         auto TagsJson = [](int nTags, int devPort) {
@@ -2413,10 +2445,10 @@ int RunE2E() {
             std::ofstream f((std::string(kDir) + "/tags.json").c_str());
             f << TagsJson(1, 11531);
         }
-        // 仿真 JSON 重载: listenPort 变更应生效
-        auto ProtoJson = [](uint16_t port) {
+        // 协议 JSON: name/simPort 可配 — simPort > 0 表示该协议自带仿真实例
+        auto ProtoJson = [](uint16_t port, const std::string& name, uint16_t simPort) {
             std::ostringstream ss;
-            ss << "{\"schemaVersion\":2,\"protocolName\":\"SimModbus\","
+            ss << "{\"schemaVersion\":2,\"protocolName\":\"" << name << "\","
                << "\"transport\":{\"type\":\"Tcp\",\"defaultPort\":" << port
                << "},"
                << "\"framing\":{\"type\":\"LengthField\","
@@ -2437,11 +2469,16 @@ int RunE2E() {
                << "\"RegisterCount\":{\"source\":\"auto\",\"strategy\":\"derivedLength\",\"expr\":\"ByteCount / 2\"}},"
                 << "\"responseParser\":{\"validCondition\":\"resp[7]==0x03\","
                 << "\"dataStartIndex\":9,\"dataLengthExpr\":\"resp[8]\"}}},"
-                << "\"handshake\":[]}";
+                << "\"handshake\":[]";
+            if (simPort > 0) {
+                ss << ",\"simulation\":{\"listenPort\":" << simPort
+                   << ",\"initialValues\":{\"0\":11}}";
+            }
+            ss << "}";
             return ss.str();
         };
         const std::string protoPath = pDir + "/simmodbus.json";
-        { std::ofstream f(protoPath.c_str()); f << ProtoJson(11531); }
+        { std::ofstream f(protoPath.c_str()); f << ProtoJson(11531, "SimModbus", 0); }
                 // server.json: 仿真段归属服务端配置 (不在协议 JSON);
         //   操作描述符 (kind/addressVar/countVar) 由协议 JSON 推导,
         //   故此处只需 listenPort + initialValues.
@@ -2464,24 +2501,19 @@ int RunE2E() {
         SimServerMap sims;
         std::vector<std::unique_ptr<MyProt::Simulation::SimulationServer> > owners;
         MyProt::Polling::LatestValueStore latest;
-        std::vector<MyProt::Core::ProtocolConfig> protoStore;
 
-        // 引擎侧装配 (与 RunProduction 同构): lookup/factory 数据源 + 快照注入
-        typedef std::vector<MyProt::Core::ProtocolConfig> T12ProtoList;
-        std::shared_ptr<T12ProtoList> rProtosPtr =
-            std::make_shared<T12ProtoList>();
-        std::shared_ptr<std::vector<MyProt::Core::DeviceConfig> > rDevicesPtr =
-            std::make_shared<std::vector<MyProt::Core::DeviceConfig> >();
-        std::shared_ptr<std::vector<MyProt::Core::TagDefinition> > rTagsPtr =
-            std::make_shared<std::vector<MyProt::Core::TagDefinition> >();
+        // 引擎侧装配 (与 RunProduction 同构): lookup 读取当前代配置快照
+        MyProt::Core::RuntimeSnapshotHolder rSnapshotHolder;
         MyProt::Gateway::ProtocolLookup rLookup =
-            [rProtosPtr](const std::string& name)
+            [&rSnapshotHolder](const std::string& name)
                 -> MyProt::Core::Expected<MyProt::Core::ProtocolConfig> {
-                for (size_t i = 0; i < rProtosPtr->size(); ++i) {
-                    if ((*rProtosPtr)[i].protocolName == name) {
-                        return MyProt::Core::Expected<
-                            MyProt::Core::ProtocolConfig>((*rProtosPtr)[i]);
-                    }
+                const MyProt::Core::RuntimeSnapshotPtr snapshot =
+                    rSnapshotHolder.Get();
+                const MyProt::Core::ProtocolConfig* proto =
+                    snapshot ? snapshot->FindProtocol(name) : 0;
+                if (proto) {
+                    return MyProt::Core::Expected<
+                        MyProt::Core::ProtocolConfig>(*proto);
                 }
                 return MyProt::Core::Unexpected(
                     MyProt::Core::Error::Code::ProtocolNotFound, name);
@@ -2521,8 +2553,8 @@ int RunE2E() {
         MyProt::Service::ConfigStore rStore(rOpts);
         AppContext rCtx = {
             &rio, &rgw, &rengine, rStart,
-            rProtosPtr, rDevicesPtr, rTagsPtr,
-            &latest, &sims, &owners, &protoStore, &rStore
+            &rSnapshotHolder,
+            &latest, &sims, &owners, &rStore
         };
 
         // 12a: 首次装配 (引擎启动 + 引擎线程 post) → 与生产同一入口
@@ -2551,7 +2583,7 @@ int RunE2E() {
         // 预置旧快照: Old-Dev 引擎永不产出新数据
         Check("16-4: 预置快照 Old-Dev 已存在", !latest.Snapshot("Old-Dev").empty());
 
-        { std::ofstream f(protoPath.c_str()); f << ProtoJson(11532); }
+        { std::ofstream f(protoPath.c_str()); f << ProtoJson(11532, "SimModbus", 0); }
         WriteSimServerJson(11532, 7);   // 仿真器随 server.json 迁移端口
         {
             std::ofstream f((std::string(kDir) + "/tags.json").c_str());
@@ -2603,6 +2635,44 @@ int RunE2E() {
         Check("16-13: 实时快照未被误清", latest.Count() >= 1);
         Check("16-14: 引擎保持 activeTags=2",
               rengine.GetStats().activeTags.load() == 2);
+
+        // 16d: 协议级仿真 — 两个协议各启用一个实例, server.json 单实例回退被忽略
+        { std::ofstream f(protoPath.c_str());
+          f << ProtoJson(11533, "SimModbus", 11533); }
+        { std::ofstream f((pDir + "/simmodbus2.json").c_str());
+          f << ProtoJson(11534, "SimModbus2", 11534); }
+        { std::ofstream f((std::string(kDir) + "/tags.json").c_str());
+          f << TagsJson(2, 11533); }
+        Check("16-15: 多协议仿真 reload 成功", rStore.Reload().has_value());
+        Check("16-16: 两个协议各一个仿真器",
+              sims.size() == 2 && sims.count("SimModbus") == 1 &&
+              sims.count("SimModbus2") == 1);
+        Check("16-17: 协议级端口生效 (11533/11534)",
+              sims.count("SimModbus") == 1 &&
+              sims.count("SimModbus2") == 1 &&
+              sims["SimModbus"]->ListenPort() == 11533 &&
+              sims["SimModbus2"]->ListenPort() == 11534);
+        {
+            asio::io_context oio;
+            SyncTcpClient legacy(oio);
+            Check("16-18: server.json 回退端口 11532 未监听",
+                  !legacy.Connect("127.0.0.1", 11532));
+        }
+        std::uint64_t multiVal = 0;
+        bool multiGood = WaitFor(
+            [&latest, &multiVal]() {
+                std::vector<MyProt::Core::TagValue> snap = latest.Snapshot("");
+                for (size_t i = 0; i < snap.size(); ++i) {
+                    if (snap[i].tagName == "R.V" &&
+                        snap[i].quality == MyProt::Core::QualityCode::Good) {
+                        multiVal = snap[i].typedValue.u;
+                        return true;
+                    }
+                }
+                return false;
+            }, 40);
+        Check("16-19: 多仿真器下 R.V=11 (新端口闭环)",
+              multiGood && multiVal == 11);
 
         rengine.Stop();
         rgw.Shutdown();
@@ -2698,24 +2768,19 @@ int RunE2E() {
         SimServerMap sims;
         std::vector<std::unique_ptr<MyProt::Simulation::SimulationServer> > owners;
         MyProt::Polling::LatestValueStore latest;
-        std::vector<MyProt::Core::ProtocolConfig> protoStore;
 
-        // 引擎侧装配 (与生产/Test12 同构)
-        typedef std::vector<MyProt::Core::ProtocolConfig> T13ProtoList;
-        std::shared_ptr<T13ProtoList> wProtosPtr =
-            std::make_shared<T13ProtoList>();
-        std::shared_ptr<std::vector<MyProt::Core::DeviceConfig> > wDevicesPtr =
-            std::make_shared<std::vector<MyProt::Core::DeviceConfig> >();
-        std::shared_ptr<std::vector<MyProt::Core::TagDefinition> > wTagsPtr =
-            std::make_shared<std::vector<MyProt::Core::TagDefinition> >();
+        // 引擎侧装配 (与生产/Test12 同构): lookup 读取当前代配置快照
+        MyProt::Core::RuntimeSnapshotHolder wSnapshotHolder;
         MyProt::Gateway::ProtocolLookup wLookup =
-            [wProtosPtr](const std::string& name)
+            [&wSnapshotHolder](const std::string& name)
                 -> MyProt::Core::Expected<MyProt::Core::ProtocolConfig> {
-                for (size_t i = 0; i < wProtosPtr->size(); ++i) {
-                    if ((*wProtosPtr)[i].protocolName == name) {
-                        return MyProt::Core::Expected<
-                            MyProt::Core::ProtocolConfig>((*wProtosPtr)[i]);
-                    }
+                const MyProt::Core::RuntimeSnapshotPtr snapshot =
+                    wSnapshotHolder.Get();
+                const MyProt::Core::ProtocolConfig* proto =
+                    snapshot ? snapshot->FindProtocol(name) : 0;
+                if (proto) {
+                    return MyProt::Core::Expected<
+                        MyProt::Core::ProtocolConfig>(*proto);
                 }
                 return MyProt::Core::Unexpected(
                     MyProt::Core::Error::Code::ProtocolNotFound, name);
@@ -2766,8 +2831,8 @@ int RunE2E() {
         MyProt::Service::ConfigStore store(opts);
         AppContext wCtx = {
             &wio, &wgw, &wengine, wStart,
-            wProtosPtr, wDevicesPtr, wTagsPtr,
-            &latest, &sims, &owners, &protoStore, &store
+            &wSnapshotHolder,
+            &latest, &sims, &owners, &store
         };
         Check("17-1: 冷启动 ApplyRuntimeSync 成功",
               ApplyRuntimeSync(kDir, wCtx, nullptr).has_value());
@@ -3000,7 +3065,7 @@ int RunE2E() {
     // =====variant-write bytes path (P1 A) =====
     // Cover HandleWriteApi JSON parse layer: bytes hex parse / value-bytes mutex /
     // bad-hex 400; WriteBytes dispatch (502 due to no FC16 in simulator) verifies
-    // variant path is wired through HandleWriteApi -> WriteViaGateway -> WriteBytes.
+    // variant path is wired through HandleWriteApi -> WriteService::Write -> WriteBytes.
     std::cout << "--- Test 19: variant-write bytes path (P1 A) ---" << std::endl;
     {
         const char* kDir15 = "configs_varwrite_test";
@@ -3070,22 +3135,19 @@ int RunE2E() {
         SimServerMap vSims;
         std::vector<std::unique_ptr<MyProt::Simulation::SimulationServer> > vOwners;
         MyProt::Polling::LatestValueStore vLatest;
-        std::vector<MyProt::Core::ProtocolConfig> vProtoStore;
 
-        typedef std::vector<MyProt::Core::ProtocolConfig> T15ProtoList;
-        std::shared_ptr<T15ProtoList> vProtosPtr = std::make_shared<T15ProtoList>();
-        std::shared_ptr<std::vector<MyProt::Core::DeviceConfig> > vDevicesPtr =
-            std::make_shared<std::vector<MyProt::Core::DeviceConfig> >();
-        std::shared_ptr<std::vector<MyProt::Core::TagDefinition> > vTagsPtr =
-            std::make_shared<std::vector<MyProt::Core::TagDefinition> >();
+        // 引擎侧装配 (与生产同构): lookup 读取当前代配置快照
+        MyProt::Core::RuntimeSnapshotHolder vSnapshotHolder;
         MyProt::Gateway::ProtocolLookup vLookup =
-            [vProtosPtr](const std::string& name)
+            [&vSnapshotHolder](const std::string& name)
                 -> MyProt::Core::Expected<MyProt::Core::ProtocolConfig> {
-                for (size_t i = 0; i < vProtosPtr->size(); ++i) {
-                    if ((*vProtosPtr)[i].protocolName == name) {
-                        return MyProt::Core::Expected<
-                            MyProt::Core::ProtocolConfig>((*vProtosPtr)[i]);
-                    }
+                const MyProt::Core::RuntimeSnapshotPtr snapshot =
+                    vSnapshotHolder.Get();
+                const MyProt::Core::ProtocolConfig* proto =
+                    snapshot ? snapshot->FindProtocol(name) : 0;
+                if (proto) {
+                    return MyProt::Core::Expected<
+                        MyProt::Core::ProtocolConfig>(*proto);
                 }
                 return MyProt::Core::Unexpected(
                     MyProt::Core::Error::Code::ProtocolNotFound,
@@ -3119,8 +3181,8 @@ int RunE2E() {
         MyProt::Service::ConfigStore vStore(vOpts);
         AppContext vCtx = {
             &vio, &vgw, &vengine, vStart,
-            vProtosPtr, vDevicesPtr, vTagsPtr,
-            &vLatest, &vSims, &vOwners, &vProtoStore, &vStore
+            &vSnapshotHolder,
+            &vLatest, &vSims, &vOwners, &vStore
         };
         Check("19-1: ApplyRuntimeSync 成功",
               ApplyRuntimeSync(kDir15, vCtx, nullptr).has_value());
@@ -3260,8 +3322,8 @@ int RunE2E() {
 
         // ── Test 20: write.readBack 闭环 ──
         // 复用 Test 19 的 vio/vSims/vOwners/vLookup/vFactory/vgw/vengine/
-        // vProtosPtr/vDevicesPtr/vTagsPtr/vLatest/vStore；不走 HTTP, 直接调
-        // HandleWriteApi → WriteViaGateway → TagReader (与 Test 19 走同一 io 线程).
+        // vSnapshotHolder/vLatest/vStore；不走 HTTP, 直接调
+        // HandleWriteApi → WriteService::Write → TagReader (与 Test 19 走同一 io 线程).
         std::cout << "[Test 20] write.readBack 闭环" << std::endl;
         // 独立配置集: 标量写要求标签声明 writeOperation + 仿真器接受该写操作.
         // Test 19 的 R.W15 刻意只声明 writeBytesOperation (标量写 fail-fast 断言),
@@ -3356,13 +3418,13 @@ int RunE2E() {
         }
         AppContext t16Ctx = {
             &vio, &vgw, &vengine, vStart,
-            vProtosPtr, vDevicesPtr, vTagsPtr,
-            &vLatest, &vSims, &vOwners, &vProtoStore, &vStore
+            &vSnapshotHolder,
+            &vLatest, &vSims, &vOwners, &vStore
         };
         // Test 16 需要一个 R.W16 标签 + PLC-RB 设备 (与 PLC-V 隔离).
         // 走 ApplyRuntimeSync 不可 (会冲突 R.W15); 用 ConfigStore 局部 PUT
-        // + Reload 不可 (会重建仿真器). 最简: 直接改 vTagsPtr 副本 + Apply.
-        // 但 ApplyRuntimeSync 会全停; 这里只读不回写, 直接复用现有 vTagsPtr
+        // + Reload 不可 (会重建仿真器). 最简: 直接改配置快照副本 + Apply.
+        // 但 ApplyRuntimeSync 会全停; 这里只读不回写, 直接复用现有配置快照
         // 的 R.W15 标签 (StartAddress=0). read-back 路径同样适用, 接受.
         // (注: R.W15 也叫 R.W16 仅在文档中区分; 实际标签名 R.W15)
         Check("20-0: readBack 配置装配成功",
@@ -3409,7 +3471,7 @@ int RunE2E() {
             Check("20e 缺 value+bytes 期望 400", r.first == 400);
         }
         // 20f: FC16 变长写 + 读回闭环 (bytes 路径) ──
-        // 闭环构成: HandleWriteApi → WriteViaGateway → TagReader::WriteBytes
+        // 闭环构成: HandleWriteApi → WriteService::Write → TagReader::WriteBytes
         //   (BuildBytes 展开 {WriteValue:raw}, 派生 PDULength/RegisterCount/
         //    RegByteCount) → 仿真器 TemplateMatcher 变长尾段识别 FC16 →
         //   dataOffset 取载荷写寄存器 10..11 → echo 应答 → BuildWriteBackCheck

@@ -148,7 +148,7 @@
     <ClCompile Include="..\MiniTestMain.cpp" />
     <ClCompile Include="RequestBuilderTests.cpp" />
     <ClCompile Include="ResponseParserTests.cpp" />
-    <ClCompile Include="ExpressionEvaluatorTests.cpp" />
+    <ClCompile Include="MiniExpressionTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Transport\MyProt.Transport.vcxproj">

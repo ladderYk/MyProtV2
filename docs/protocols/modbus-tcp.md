@@ -474,14 +474,14 @@ mbpoll -m tcp -p 502 -a 1 -t 4 -r 5 -c 1 -1 127.0.0.1
 
 启动时无需额外配——**协议 JSON 自描述支持**：
 
+- 仿真段位于 `configs/protocols/modbus-tcp.json` 顶层：`"simulation": { "listenPort": 11520, ... }`（`listenPort > 0` 即启用；删掉或置 0 即关闭）
 - `modbus-tcp.json` 里声明的 8 个 FC，仿真器**全部支持**
 - 启动时看日志：
   ```
-  [INFO][Simulation] 协议 modbus-tcp 解析: 8 个操作
-  [INFO][Simulation] 监听 0.0.0.0:11520
+  [OK] 仿真器 modbus-tcp 已监听 tcp://127.0.0.1:11520
   ```
-- 设备的 `connection.host` 设为 `127.0.0.1`，`connection.port` 设为 `11520`
-- **省去第三方仿真器**——一站式测全 FC 集
+- 仅绑定环回地址；设备的 `connection.host` 设为 `127.0.0.1`，`connection.port` 设为 `11520`
+- **省去第三方仿真器**——一站式测全 FC 集；多个协议各自配置不同 `listenPort` 即可同时运行多个仿真设备（[ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md)）
 
 ### 5.3 完整 tags.json 配置（**多 FC 混合**）
 

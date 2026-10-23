@@ -140,7 +140,7 @@ expected = lengthIncludesHeader ? (total − adjustment)
 | 保存门禁 | `ConfigStore::Validate` Protocol 分支，深度校验通过后追加 | PUT /api/config/protocols/{name} 即受保护 |
 | 启动加载 | `ConfigDirectoryLoader::Load` 沿用 `validateAndParseProtocolJson` 产物（POCO 已就绪）后追加 | 覆盖手改文件、离线导入等旁路 |
 
-两处共用同一 helper（新文件 `src/Service/src/FrameConsistencyCheck.cpp`，声明并入 `ConfigValidator.hpp`），输入为 `Core::ProtocolConfig`（保存路径先经 `parseProtocolJson`，加载路径直接用 POCO，**零重复解析**）。
+两处共用同一 helper（文件 `src/Service/src/TrialRenderer.cpp`，声明并入 `ConfigValidator.hpp`），输入为 `Core::ProtocolConfig`（保存路径先经 `parseProtocolJson`，加载路径直接用 POCO，**零重复解析**）。
 
 ### 2.4 与长度偏移自检的关系
 
@@ -157,7 +157,7 @@ expected = lengthIncludesHeader ? (total − adjustment)
 | `src/Gateway/include/MyProt/Gateway/TagReader.hpp` | `TemplateWidthTable` → `BuildTemplateLayout`（或上移 Engine） |
 | `src/Gateway/src/TagReader.cpp` | 布局扫描重写；`InjectDerivedLengthVariables` 上移 Engine；`WriteBytes` 调用点适配 |
 | `src/Service/include/MyProt/Service/ConfigValidator.hpp` | 声明试算校验入口（POCO 入参） |
-| `src/Service/src/FrameConsistencyCheck.cpp`（新） | 试算渲染 + 槽位比对 + expr 可解性检查 |
+| `src/Service/src/TrialRenderer.cpp` | 试算渲染 + 槽位比对 + expr 可解性检查 |
 | `src/Service/src/ConfigStore.cpp` | `Validate` Protocol 分支追加调用 |
 | `src/Service/src/ConfigDirectoryLoader.cpp` | Load 链路追加调用 |
 | `src/Service/MyProt.Service.vcxproj`（及 filters） | 新文件登记 |
@@ -236,7 +236,7 @@ framing 全套、handshake 全链（含凭据注入/会话变量提取）、inpu
   - 验证：全解决方案 Rebuild 通过（exit=0）；E2E 149 passed / 22 failed——**与不含本改动的基线逐条比对，失败集完全一致（均为既有环境性失败，非回归）**；生产启动 `configs/` 实测 OnChange 告警按预期输出（加载 + 热重载两路径各一次）。
 - **2026-09-07 正文 ① ② 落地**（状态：已验证）：
   - **① 引擎原语**：`TemplateLayout` 结构（widths/offsets/fixedTotal/hasUnknown，`AutoComputeProvider.hpp`）；`ResolveDerivedLength` 新增 layout 参数，lookup 支持 `{Frame:fixed}` / `{Name:offset}`；`MiniExpression::ParseLenToken` 属性集扩展为 len/offset/fixed（保留原令牌文本）；`RequestBuilder::BuildTemplateLayout`（一次扫描产出布局）与 `InjectDerivedLengthVariables`（自 Gateway::TagReader 匿名实现**上移**，Gateway 与 Service 共用）公开；`TagReader::WriteBytes` 改调 Engine 实现（含 `kRawPayloadMarker`/`TemplateWidthTable` 移除）。
-  - **② 试算校验**：新文件 `src/Service/src/FrameConsistencyCheck.cpp`（`ConfigValidator::CheckFrameConsistency`，POCO 入参）——派生长度 expr 可解性预检（**封堵缺口 A**：求值失败显式报错，不再静默 0 值）+ 真实渲染 + 成帧长度槽位比对 + `Frame` 保留名/未知格式拦截；挂接 `ConfigStore::Validate` Protocol 分支（深度校验通过后追加，PUT /api/config/protocols/* 即受保护）。
+  - **② 试算校验**：新文件 `src/Service/src/TrialRenderer.cpp`（`ConfigValidator::CheckFrameConsistency`，POCO 入参）——派生长度 expr 可解性预检（**封堵缺口 A**：求值失败显式报错，不再静默 0 值）+ 真实渲染 + 成帧长度槽位比对 + `Frame` 保留名/未知格式拦截；挂接 `ConfigStore::Validate` Protocol 分支（深度校验通过后追加，PUT /api/config/protocols/* 即受保护）。
   - **引用域规则升级**（`ValidateDerivedLengthExprDomain` prop 感知重写）：`{Frame:fixed}` 恒合法；`{Name:offset}` 合法引用域 = 本协议全部操作模板占位符名集（协议级 outputs 的检查相应移至操作解析后，并集引用域）；`{name:len}`/裸名维持旧域。原 `CollectExprIdentifiers` 删除。
   - **配置迁移**：`configs/protocols/s7-1200.json`（PDULength → `{Frame:fixed} + {WriteValue:len}`）、`configs/protocols/modbus-tcp.json` 与 `configs_demo/protocols/modbus-tcp.json`（PDULength → `{Frame:fixed} - 6 + {WriteValue:len}`）；Config_Schema §3.2.1 已补新原语、保留名、试算校验说明。
   - **验证**：Rebuild 通过；E2E 149/22 与基线失败集逐条一致（无回归）；WebApi 实测四组用例——迁移后 S7 PUT **200**；模板加一字节 + 旧魔数 `+35` PUT **400**（帧长一致性拦截）；expr 引用 `{Typo:offset}` PUT **400**（引用域拦截）；**对照组**模板加同一字节但 expr 保持 `{Frame:fixed}` PUT **200**（自适应生效，手工同步需求消失）。

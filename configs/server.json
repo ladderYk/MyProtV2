@@ -1,39 +1,7 @@
 {
+  "_comment": "仿真设备按协议配置：在 protocols/*.json 的 simulation 段设置 listenPort。此处的 simulation 仅为旧版单实例回退，listenPort=0 表示不再使用。",
   "simulation": {
-    "listenPort": 11520,
-    "registerCount": 1000,
-    "initialValues": {
-      "0": 100,
-      "1": 101,
-      "2": 102,
-      "3": 103,
-      "10": 0,
-      "11": 17143,
-      "20": 2020,
-      "30": 111,
-      "31": 222,
-      "32": 333,
-      "40": 22136,
-      "41": 4660,
-      "100": 4321
-    },
-    "operations": {
-      "ReadHoldingRegisters": {
-        "kind": "read",
-        "addressVar": "StartAddress",
-        "countVar": "RegisterCount"
-      },
-      "ReadInputRegisters": {
-        "kind": "read",
-        "addressVar": "StartAddress",
-        "countVar": "RegisterCount"
-      },
-      "WriteSingleRegister": {
-        "kind": "write",
-        "addressVar": "StartAddress",
-        "dataOffset": 10
-      }
-    }
+    "listenPort": 0
   },
   "schemaVersion": 2
 }

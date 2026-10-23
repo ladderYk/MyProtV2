@@ -124,11 +124,15 @@
     <ClInclude Include="include\MyProt\Service\SessionContext.hpp" />
     <ClInclude Include="include\MyProt\Service\DeviceLifecycle.hpp" />
     <ClInclude Include="include\MyProt\Service\ValidationIssue.hpp" />
+    <ClInclude Include="src\ConfigInternals.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\ConfigStore.cpp" />
-    <ClCompile Include="src\FrameConsistencyCheck.cpp" />
+    <ClCompile Include="src\TrialRenderer.cpp" />
     <ClCompile Include="src\ConfigDeepValidator.cpp" />
+    <ClCompile Include="src\ProtocolJsonParser.cpp" />
+    <ClCompile Include="src\SchemaChecker.cpp" />
+    <ClCompile Include="src\SemanticChecker.cpp" />
     <ClCompile Include="src\SchemaRegistry.cpp" />
     <ClCompile Include="src\ConfigDirectoryLoader.cpp" />
     <ClCompile Include="src\SessionContext.cpp" />
@@ -137,11 +141,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Core\MyProt.Core.vcxproj">
       <Project>{A1B2C3D4-0000-4000-8000-000000000000}</Project>
-      <Private>false</Private>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-    </ProjectReference>
-    <ProjectReference Include="..\Transport\MyProt.Transport.vcxproj">
-      <Project>{A1B2C3D4-1111-4000-8000-000000000001}</Project>
       <Private>false</Private>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>

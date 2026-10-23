@@ -36,23 +36,24 @@ main()                                                  [main.cpp L293-309]
        │
        ├─ 3. 核心对象直构                              [main.cpp L111-199]
        │    ├─ asio::io_context io
-       │    ├─ ProtocolLookup 闭包(protosPtr)          // 协议查找表
-       │    ├─ ChannelFactory 闭包(devicesPtr, protosPtr) // v1 仅 Tcp
+       │    ├─ RuntimeSnapshotHolder snapshotHolder     // 当前代配置唯一数据源
+       │    ├─ ProtocolLookup 闭包(&snapshotHolder)     // 每次 Get() 后查协议
+       │    ├─ ChannelFactory 闭包(&snapshotHolder)     // 设备→协议→transport, v1 仅 Tcp
        │    ├─ ProtocolGateway gateway(io, lookup, factory)
        │    ├─ PollingEngine engine(io, gateway)
        │    ├─ LatestValueStore latest                  // /api/data/latest 快照源
        │    └─ ResultDispatch 闭包(latest)              // 轮询 → 快照 + 日志
        │
-       ├─ 4. AppContext 聚合                            [main.cpp L211-215]
-       │    └─ {&io, &gateway, &engine, startEngine,
-       │        protosPtr, devicesPtr, tagsPtr,
-       │        &latest, &sims, &simOwners, &protoStore, &store}
+       ├─ 4. AppContext 聚合                            [main.cpp]
+       │    └─ {&io, &gateway, &engine, startEngine, &snapshotHolder,
+       │        &latest, &sims, &simOwners, &store}
        │
        ├─ 5. 首次运行时装配                            [main.cpp L218]
        │    └─ ApplyRuntimeSync(configDir, ctx, &std::cout)
-       │         ├─ 重建仿真器(若有 sim 设备)
+       │         ├─ 构建并同步发布 RuntimeSnapshot (唯一配置副本)
+       │         ├─ 逐协议重建仿真实例 (simulation.listenPort > 0; 别名 shared_ptr 保活快照)
        │         ├─ 清空实时快照
-       │         └─ startEngine(tags, devices, resilience)
+       │         └─ io.post: 停引擎/关通道/ResetDevices/startEngine
        │              └─ engine.Start(...)              // PollingEngine 装配
        │                                                    [Polling §6.2]
        │
@@ -105,8 +106,8 @@ PollingEngine::ProcessDevice(group, deviceIdx, ...)
        │
        └─ PerformConnect(entry, protocol, handler)
             ├─ ChannelFactory(io, deviceId)                     [main.cpp 闭包]
-            │    ├─ 查 devicesPtr 找 device.protocol
-            │    └─ 查 protosPtr 找 transport.type
+            │    ├─ snapshot = holder.Get(); FindDevice(deviceId)
+            │    └─ FindProtocol(device.protocol) → transport.type
             │         ├─ Tcp → TcpChannel(io, deviceId)          // v1
             │         └─ 其他 → 空 channel (连接失败走韧性重连)
             │
@@ -119,7 +120,7 @@ PollingEngine::ProcessDevice(group, deviceIdx, ...)
             │    └─ for each HandshakeStep:
             │         ├─ RenderHandshakeRequest(step.requestTemplate, 会话变量)
             │         ├─ channel->SendReceive(request, framingOverride, timeout, handler)
-            │         ├─ ExpressionEvaluator(step.validCondition)
+            │         ├─ MiniExpression(step.validCondition)
             │         └─ ExtractSessionVar("resp[A:B]") → SessionContext
             │
             └─ handler(ConnectResult{channel})   // 会话经 ChannelManager::GetSession(deviceId) 获取

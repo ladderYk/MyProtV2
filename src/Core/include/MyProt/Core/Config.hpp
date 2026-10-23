@@ -231,11 +231,12 @@ struct VariableConfig {
 };
 
 /// Simulation config (optional protocol-level section) ──────────
-
-/// See SimulationConfig.hpp for the simulation operation behavior description.
-
-/// Protocol-level simulation config; simulation lives at the top level of server.json under ServerConfig.simulation.
-/// The protocol layer is fully decoupled from server-behavior fields such as listenPort / initialValues / packetLossRate.
+///
+/// A protocol file may declare its own `simulation` block: one instance per protocol,
+/// which is how multiple simulated devices coexist (each with its own listenPort/data area).
+/// `server.json`'s `ServerConfig.simulation` remains as a legacy single-instance fallback
+/// and is only used when no protocol declares `simulation.listenPort > 0`.
+/// See SimulationConfig.hpp for the field semantics.
 
 /// ────────── config generation ──────────
 
@@ -292,6 +293,10 @@ struct ProtocolConfig {
     //   Note: v1 does not distinguish read-operation types (Modbus FC01 coil cap 2000 far exceeds FC03 register cap 125),
     //       so a protocol author should set it to the tightest read-operation class.
     int maxSpanBytes;
+    /// Per-protocol simulation instance (protocols/*.json "simulation").
+    /// listenPort == 0 = this protocol has no simulator; multiple protocols may each
+    /// enable one (distinct ports required) - this is the multi-device simulation path.
+    SimulationConfig simulation;
 
     ProtocolConfig() : schemaVersion(kSupportedSchemaVersion)
                      , maxSpanBytes(kDefaultMaxSpanBytes) {}
@@ -333,8 +338,8 @@ struct ResilienceConfig {
 /// Management-plane security (Config_Schema §12 / ADR-0008). An optional top-level block in ConfigRoot; nullopt = all defaults.
 struct WebApiConfig {
     std::string bindAddress;       // listen address; loopback-only by default, remote management requires explicitly setting 0.0.0.0
-    std::string certFile;          // TLS certificate; present together with keyFile enables httplib::SSLServer
-    std::string keyFile;           // TLS private key; present together with certFile enables TLS
+    std::string certFile;          // TLS certificate (reserved; v1 serves plaintext HTTP and this field has no effect)
+    std::string keyFile;           // TLS private key (reserved; only the certFile/keyFile pairing is validated)
     bool requireAuth;              // when true, a missing token is a startup Fail-Fast (true recommended in production)
     int rateLimitRps;              // sensitive-endpoint token-bucket rate (per second)
     int rateLimitBurst;            // token-bucket burst cap; over limit -> 429
@@ -396,8 +401,9 @@ const char* const kBitOffsetExprVariable = "BitOffset";
 // ────────── framing reserved names (single source of truth) ──────────
 //   These names are interpreted by the built-in engine - protocol variable names / tag variable names / variableAliases
 //   must not declare them (the validator errors, see ConfigDeepValidator's reserved-name conflict check).
-//   Sole source is here; forbidden to keep literal sets in ConfigDeepValidator / AutoComputeProvider /
-//   FrameConsistencyCheck; now converged here, each name made a constant for direct reference at every use point.
+//   Sole source is here; forbidden to keep literal sets in ConfigDeepValidator / SchemaChecker /
+//   SemanticChecker / AutoComputeProvider / TrialRenderer; now converged here, each name made a
+//   constant for direct reference at every use point.
 
 const char* const kFramePrimitiveName = "Frame";      // {Frame:fixed} template primitive (total width of the template's fixed segments)
 const char* const kExprMagicFrameLen  = "__frameLen"; // expr magic variable = bytes generated so far (excluding this segment itself)

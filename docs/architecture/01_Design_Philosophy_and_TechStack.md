@@ -44,7 +44,7 @@
 | TLS | OpenSSL | 1.1.1 系列 | 预留（TlsChannel stub / 管理面 TLS 启用时引入）；预编译库随包或客户自备 |
 | 错误处理 | 自写 `Expected<T>` | Core header-only | 取代 tl::expected（VS2015 编译风险） |
 | 配置重载 | `ConfigStore` 显式 reload | Service 模块 | 不引入文件监听（不引入文件监听）；PUT /api/config、POST /api/config/reload 触发 |
-| 测试 | 自研 E2E 套件（`src/Tests/E2EMain.cpp`）+ GoogleTest 单元测试 | MyProt.E2E 独立进程 / tests/ | E2E 与生产共用 RuntimeGlue 装配；Mock 手写 fake（trompeloeil 移除） |
+| 测试 | 自研 E2E 套件（`src/Tests/E2EMain.cpp`）+ 自研 MiniTest 单元测试 | MyProt.E2E 独立进程 / tests/ | E2E 与生产共用 RuntimeGlue 装配；单元测试不依赖外部框架（MiniTest.hpp）；Mock 手写 fake（trompeloeil 移除） |
 | 性能测试 | google-benchmark | **未引入** | 当前仅单元测试 |
 
 ---

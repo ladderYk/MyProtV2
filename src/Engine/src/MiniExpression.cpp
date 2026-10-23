@@ -58,8 +58,8 @@ bool Parser::Consume(char c) {
     return false;
 }
 
-// 优先级从低到高: Or(||) → And(&&) → Equality(== !=) → Relational(> < >= <=)
-//   → Expr(+-) → Term(*/%) → BitOr(|) → BitXor(^) → BitAnd(&) → Unary(- ~ + !) → Primary
+// 优先级从低到高 (与 C 对齐): Or(||) → And(&&) → BitOr(|) → BitXor(^) → BitAnd(&)
+//   → Equality(== !=) → Relational(> < >= <=) → Shift(<< >>) → Expr(+-) → Term(*/%) → Unary(- ~ + !) → Primary
 std::unique_ptr<Node> Parser::ParseOr() {
     auto left = ParseAnd();
     while (true) {
@@ -73,12 +73,12 @@ std::unique_ptr<Node> Parser::ParseOr() {
     return left;
 }
 std::unique_ptr<Node> Parser::ParseAnd() {
-    auto left = ParseEquality();
+    auto left = ParseBitOr();
     while (true) {
         SkipWs();
         if (pos_ + 1 < expr_.size() && expr_[pos_] == '&' && expr_[pos_ + 1] == '&') {
             pos_ += 2;
-            auto right = ParseEquality();
+            auto right = ParseBitOr();
             left = MakeBinary('A', std::move(left), std::move(right));
         } else break;
     }
@@ -101,17 +101,37 @@ std::unique_ptr<Node> Parser::ParseEquality() {
     return left;
 }
 std::unique_ptr<Node> Parser::ParseRelational() {
-    auto left = ParseExpr();
+    auto left = ParseShift();
     while (true) {
         SkipWs();
         if (pos_ + 1 < expr_.size() && expr_[pos_] == '>' && expr_[pos_ + 1] == '=') {
-            pos_ += 2; auto r = ParseExpr(); left = MakeBinary('G', std::move(left), std::move(r));
+            pos_ += 2; auto r = ParseShift(); left = MakeBinary('G', std::move(left), std::move(r));
         } else if (pos_ + 1 < expr_.size() && expr_[pos_] == '<' && expr_[pos_ + 1] == '=') {
-            pos_ += 2; auto r = ParseExpr(); left = MakeBinary('L', std::move(left), std::move(r));
+            pos_ += 2; auto r = ParseShift(); left = MakeBinary('L', std::move(left), std::move(r));
+        } else if (pos_ + 1 < expr_.size() && expr_[pos_] == '>' && expr_[pos_ + 1] == '>') {
+            break;   // '>>' belongs to ParseShift
+        } else if (pos_ + 1 < expr_.size() && expr_[pos_] == '<' && expr_[pos_ + 1] == '<') {
+            break;   // '<<' belongs to ParseShift
         } else if (pos_ < expr_.size() && expr_[pos_] == '>') {
-            pos_ += 1; auto r = ParseExpr(); left = MakeBinary('>', std::move(left), std::move(r));
+            pos_ += 1; auto r = ParseShift(); left = MakeBinary('>', std::move(left), std::move(r));
         } else if (pos_ < expr_.size() && expr_[pos_] == '<') {
-            pos_ += 1; auto r = ParseExpr(); left = MakeBinary('<', std::move(left), std::move(r));
+            pos_ += 1; auto r = ParseShift(); left = MakeBinary('<', std::move(left), std::move(r));
+        } else break;
+    }
+    return left;
+}
+std::unique_ptr<Node> Parser::ParseShift() {
+    auto left = ParseExpr();
+    while (true) {
+        SkipWs();
+        if (pos_ + 1 < expr_.size() && expr_[pos_] == '<' && expr_[pos_ + 1] == '<') {
+            pos_ += 2;
+            auto right = ParseExpr();
+            left = MakeBinary('s', std::move(left), std::move(right));
+        } else if (pos_ + 1 < expr_.size() && expr_[pos_] == '>' && expr_[pos_ + 1] == '>') {
+            pos_ += 2;
+            auto right = ParseExpr();
+            left = MakeBinary('S', std::move(left), std::move(right));
         } else break;
     }
     return left;
@@ -129,14 +149,14 @@ std::unique_ptr<Node> Parser::ParseExpr() {
     return left;
 }
 std::unique_ptr<Node> Parser::ParseTerm() {
-    auto left = ParseBitOr();
+    auto left = ParseUnary();
     while (true) {
         char op = 0;
         if (Consume('*')) op = '*';
         else if (Consume('/')) op = '/';
         else if (Consume('%')) op = '%';
         else break;
-        auto right = ParseBitOr();
+        auto right = ParseUnary();
         left = MakeBinary(op, std::move(left), std::move(right));
     }
     return left;
@@ -164,14 +184,14 @@ std::unique_ptr<Node> Parser::ParseBitXor() {
     return left;
 }
 std::unique_ptr<Node> Parser::ParseBitAnd() {
-    auto left = ParseUnary();
+    auto left = ParseEquality();
     while (true) {
         SkipWs();
         // 单个 '&' 才是按位与; '&&' 由 ParseAnd 处理, 此处不消费
         if (pos_ < expr_.size() && expr_[pos_] == '&'
                 && !(pos_ + 1 < expr_.size() && expr_[pos_ + 1] == '&')) {
             ++pos_;
-            auto right = ParseUnary();
+            auto right = ParseEquality();
             left = MakeBinary('&', std::move(left), std::move(right));
         } else break;
     }
@@ -229,7 +249,7 @@ std::unique_ptr<Node> Parser::ParsePrimary() {
         SkipWs();
         if (ident == "resp" && pos_ < expr_.size() && expr_[pos_] == '[') {
             ++pos_;                         // consume '['
-            auto idx = ParseExpr();         // index expression (full arithmetic)
+            auto idx = ParseShift();         // index expression (full arithmetic incl. shifts)
             SkipWs();
             if (pos_ >= expr_.size() || expr_[pos_] != ']') {
                 throw Error("MiniExpression: resp[...] 缺少 ']'");
@@ -351,6 +371,8 @@ uint64_t Parser::EvalNode(const Node& n, const VarLookup& lookup) const {
                 case '&': return a & b;
                 case '|': return a | b;
                 case '^': return a ^ b;
+                case 's': return a << (b & 63);      // <<
+                case 'S': return a >> (b & 63);      // >>
                 // 条件运算 (v1.28) — 结果 0/1
                 case '=': return a == b ? 1 : 0;
                 case 'n': return a != b ? 1 : 0;

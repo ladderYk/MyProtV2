@@ -1,6 +1,6 @@
 // tests/Service.Tests/ValidationIssueTests.cpp
 // 校验消息 → 结构化问题 的单元测试。
-// 消息样本均取自校验器实际产出文本 (ConfigDeepValidator.cpp / FrameConsistencyCheck.cpp),
+// 消息样本均取自校验器实际产出文本 (ConfigDeepValidator.cpp / TrialRenderer.cpp),
 // 避免"测试自己编格式、实现按测试编"的自证循环。
 //
 // 被测 TU 直接编译 (见 vcxproj), 不链接 MyProt.Service.lib — 该 TU 只依赖 <string>/<vector>。

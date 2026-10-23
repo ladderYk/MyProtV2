@@ -2,117 +2,51 @@
 // 请求模板匹配器实现 — 见 TemplateMatcher.hpp 文件头注释
 
 #include "MyProt/Simulation/TemplateMatcher.hpp"
-#include "MyProt/Core/Hex.hpp"
+#include "MyProt/Core/TemplateGrammar.hpp"
 
-#include <cstdlib>
 #include <cstring>
-#include <cctype>
 
 namespace MyProt { namespace Simulation {
-
-using Core::HexVal;   // 单一实现: MyProt/Core/Hex.hpp
-
-namespace {
-
-std::string StripSpaces(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        if (!std::isspace(static_cast<unsigned char>(s[i]))) out.push_back(s[i]);
-    }
-    return out;
-}
-
-/// 按 ':' 切分占位符内部段 (与 RequestBuilder::SplitSegments 一致, 空段丢弃)
-std::vector<std::string> SplitSegments(const std::string& inner) {
-    std::vector<std::string> segs;
-    std::string cur;
-    for (std::size_t i = 0; i <= inner.size(); ++i) {
-        if (i == inner.size() || inner[i] == ':') {
-            if (!cur.empty()) segs.push_back(cur);
-            cur.clear();
-        } else {
-            cur.push_back(inner[i]);
-        }
-    }
-    return segs;
-}
-
-} // namespace
 
 TemplateMatcher::TemplateMatcher(const Core::ProtocolConfig& protocol)
     : _protocol(protocol) {
 }
 
-std::size_t TemplateMatcher::WidthSpecToBytes(const std::string& widthSpec) {
-    // Xn / XnLE → n/2 字节 (与引擎 RenderTemplate 同一文法)。
-    // LE 后缀不改变匹配/提取语义: 字节仍按大端装配出值, 小端字段由业务侧
-    // 按 dataByteOrder 解释 — 匹配只关心形状与定宽。
-    std::string core = widthSpec;
-    if (core.size() > 2 && core.compare(core.size() - 2, 2, "LE") == 0) {
-        core.resize(core.size() - 2);
-    }
-    if (core.size() < 2 || core[0] != 'X') return 0;
-    int hexWidth = 0;
-    for (size_t i = 1; i < core.size(); ++i) {
-        if (core[i] < '0' || core[i] > '9') return 0;
-        hexWidth = hexWidth * 10 + (core[i] - '0');
-    }
-    if (hexWidth < 2 || hexWidth > 16 || hexWidth % 2 != 0) return 0;
-    return static_cast<std::size_t>(hexWidth / 2);
-}
-
 bool TemplateMatcher::CompileLine(const std::string& raw,
                                   std::vector<Segment>& segs,
                                   std::size_t& lineSize) {
-    const std::string line = StripSpaces(raw);
-    if (line.empty()) return true;
+    // 文法唯一实现在 Core::TemplateGrammar; 仿真侧额外接受旧版 {Name:auto:Xn}
+    // (定宽通配, 如 TransactionId), 其余语法错误 → 该行编译失败。
+    namespace TG = Core::TemplateGrammar;
+    std::vector<TG::Segment> parsed;
+    std::string err;
+    if (!TG::ParseLine(raw, parsed, lineSize, true, &err)) return false;
 
-    if (line.size() >= 2 && line[0] == '{' && line[line.size() - 1] == '}') {
-        const std::string inner = line.substr(1, line.size() - 2);
-        const std::vector<std::string> sgs = SplitSegments(inner);
-        if (sgs.empty()) return false;
-
-        // {Name:Xn} / {Name:auto:Xn} / {Name:raw}; 其余文法不支持 → 该行编译失败
-        if (sgs.size() != 2 && !(sgs.size() == 3 && sgs[1] == "auto")) return false;
-
-        // {Name:raw} 变长尾段: 仅允许作为模板最后一行 (Compile 侧校验末段
-        // 位置; raw 之后的定长段偏移不可知, 非末位 raw 编译失败)
-        if (sgs.size() == 2 && sgs[1] == "raw") {
-            Segment seg;
-            seg.kind = Segment::Raw;
-            seg.varName = sgs[0];
-            segs.push_back(seg);
-            return true;
-        }
-
+    for (std::size_t i = 0; i < parsed.size(); ++i) {
+        const TG::Segment& src = parsed[i];
         Segment seg;
-        seg.widthBytes = static_cast<int>(WidthSpecToBytes(sgs[sgs.size() - 1]));
-        if (seg.widthBytes <= 0) return false;
-
-        if (sgs.size() == 3) {
-            seg.kind = Segment::Wildcard; // auto 自增字段: 定宽通配
-        } else {
-            seg.kind = Segment::Variable;
-            seg.varName = sgs[0];
+        switch (src.kind) {
+            case TG::kLiteral:
+                seg.kind = Segment::Literal;
+                seg.literal = src.literal;
+                break;
+            case TG::kVariable:
+                seg.kind = Segment::Variable;
+                seg.varName = src.name;
+                seg.widthBytes = src.widthBytes;
+                break;
+            case TG::kWildcard:
+                seg.kind = Segment::Wildcard;
+                seg.widthBytes = src.widthBytes;
+                break;
+            case TG::kRaw:
+            default:
+                seg.kind = Segment::Raw;
+                seg.varName = src.name;
+                break;
         }
-        lineSize += static_cast<std::size_t>(seg.widthBytes);
         segs.push_back(seg);
-        return true;
     }
-
-    // 十六进制字面量行
-    if (line.size() % 2 != 0) return false;
-    Segment seg;
-    seg.literal.reserve(line.size() / 2);
-    for (std::size_t c = 0; c + 1 < line.size(); c += 2) {
-        const int hi = HexVal(line[c]);
-        const int lo = HexVal(line[c + 1]);
-        if (hi < 0 || lo < 0) return false;
-        seg.literal.push_back(static_cast<std::uint8_t>((hi << 4) | lo));
-    }
-    lineSize += seg.literal.size();
-    segs.push_back(seg);
     return true;
 }
 

@@ -45,16 +45,25 @@
     <ClInclude Include="include\MyProt\Core\Metrics.hpp">
       <Filter>Header Files\include_MyProt_Core</Filter>
     </ClInclude>
+    <ClInclude Include="include\MyProt\Core\RuntimeSnapshot.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
     <ClInclude Include="include\MyProt\Core\ServerConfig.hpp">
       <Filter>Header Files\include_MyProt_Core</Filter>
     </ClInclude>
     <ClInclude Include="include\MyProt\Core\SimulationConfig.hpp">
       <Filter>Header Files\include_MyProt_Core</Filter>
     </ClInclude>
+    <ClInclude Include="include\MyProt\Core\TemplateGrammar.hpp">
+      <Filter>Header Files\include_MyProt_Core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <!-- Core 是 header-only 库, 仅一个空翻译单元用于生成 .lib 供下游 link -->
+    <!-- Core 以 header-only 为主; 非内联实现 (模板文法) 编入 .lib 供下游 link -->
     <ClCompile Include="src\MyProt.Core.ForceLib.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\TemplateGrammar.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
   </ItemGroup>

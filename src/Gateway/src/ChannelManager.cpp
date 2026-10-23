@@ -1,13 +1,15 @@
 // src/Gateway/src/ChannelManager.cpp — 通道管理器实现
 // 异步连接 + 物理端点缓存 + 设备级通道管理 + 协议握手 (ADR-0002, ADR-0010)
 #include "MyProt/Gateway/ChannelManager.hpp"
-#include "MyProt/Engine/ExpressionEvaluator.hpp"
+#include "MyProt/Engine/MiniExpression.hpp"
 #include "MyProt/Core/Metrics.hpp"
 #include "MyProt/Core/Log.hpp"
 #include "MyProt/Service/DeviceLifecycle.hpp"
 
 #include <sstream>
 #include <iomanip>
+#include <cstdlib>
+#include <cstdint>
 
 namespace MyProt { namespace Gateway {
 
@@ -16,6 +18,44 @@ namespace {
 // ── 会话变量提取 ──────────────────────────────────────────────────
 // 支持 resp[A:B] 字节切片 (存为连续大写 hex, 如 "0A1BFF") 与单字节 resp[N];
 // 其他表达式回退为整数求值 (长度表达式)。
+/// MiniExpression 以规范名 "resp[N]" 回调 (见 MiniExpression::Node::Resp),
+/// 在此映射到响应字节; 越界/负索引视为未找到。
+bool LookupResponseByte(Core::ByteView response, const std::string& name,
+                        std::uint64_t& out) {
+    const std::string prefix = "resp[";
+    if (name.size() <= prefix.size() + 1
+            || name.compare(0, prefix.size(), prefix) != 0
+            || name[name.size() - 1] != ']') return false;
+    const std::string idxText = name.substr(prefix.size(),
+                                            name.size() - prefix.size() - 1);
+    char* end = 0;
+    const long idx = std::strtol(idxText.c_str(), &end, 10);
+    if (end == 0 || *end != '\0' || idx < 0) return false;
+    if (static_cast<size_t>(idx) >= response.size) return false;
+    out = response.data[static_cast<size_t>(idx)];
+    return true;
+}
+
+/// 整数表达式求值 — 统一走 Engine::MiniExpression
+/// (与配置校验/派生长度/自动计算同一解析器)。失败时返回 false 并填入原因。
+bool EvaluateNumeric(const std::string& expr, Core::ByteView response,
+                     std::uint64_t& out, std::string& err) {
+    try {
+        Engine::MiniExpression::Parser parser(expr);
+        parser.Parse();
+        out = parser.Evaluate([response](const std::string& name, bool& found) -> std::uint64_t {
+            std::uint64_t v = 0;
+            if (LookupResponseByte(response, name, v)) { found = true; return v; }
+            found = false;
+            return 0;
+        });
+        return true;
+    } catch (const std::exception& e) {
+        err = e.what();
+        return false;
+    }
+}
+
 bool ExtractSessionVar(Core::ByteView response,
                        const std::string& expr,
                        std::string& out) {
@@ -45,12 +85,12 @@ bool ExtractSessionVar(Core::ByteView response,
     }
 
     // 回退: 当作整数表达式 (如 "resp[2] + 1")
-    Engine::ExpressionEvaluator eval;
-    auto len = eval.EvaluateLength(expr, response);
-    if (!len.has_value()) return false;
+    std::uint64_t len = 0;
+    std::string evalErr;
+    if (!EvaluateNumeric(expr, response, len, evalErr)) return false;
     std::ostringstream oss;
     oss << std::uppercase << std::hex << std::setfill('0')
-        << std::setw(2) << (len.value() & 0xFF);
+        << std::setw(2) << (len & 0xFF);
     out = oss.str();
     return true;
 }
@@ -465,13 +505,15 @@ void ChannelManager::PerformHandshake(
 
             // 校验成功条件
             if (!step.validCondition.empty()) {
-                Engine::ExpressionEvaluator eval;
-                auto cond = eval.EvaluateCondition(step.validCondition, respView);
-                if (!cond.has_value()) {
-                    handler(Core::UnexpectedType{cond.error()});
+                std::uint64_t cond = 0;
+                std::string condErr;
+                if (!EvaluateNumeric(step.validCondition, respView, cond, condErr)) {
+                    handler(Core::Unexpected(Core::Error::Code::ParseError,
+                        "握手步骤 \"" + step.name + "\" 条件解析失败: " + condErr,
+                        step.validCondition));
                     return;
                 }
-                if (!cond.value()) {
+                if (cond == 0) {
                     handler(Core::Unexpected(Core::Error::Code::InvalidResponse,
                         "握手步骤 \"" + step.name + "\" 校验失败: " + step.validCondition));
                     return;

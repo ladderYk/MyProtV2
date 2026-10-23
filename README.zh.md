@@ -20,7 +20,7 @@ MyProt-master/
 ├── src/
 │   ├── Core/           # Expected<T,E>/Optional/ByteView/ByteOrder 值类型与配置 POCO
 │   ├── Transport/      # IChannel 抽象 + TCP/TLS/串口通道、LengthField/Silence 成帧
-│   ├── Engine/         # RequestBuilder / ResponseParser / ExpressionEvaluator（类型转换下沉至 ResponseParser::Parse）
+│   ├── Engine/         # RequestBuilder / ResponseParser / MiniExpression / AutoComputeProvider（类型转换下沉至 ResponseParser::Parse）
 │   ├── Service/        # 配置存储、深度校验、目录加载、会话熔断
 │   ├── Gateway/        # ProtocolGateway 门面、ChannelManager 连接池、TagReader、TagGrouper
 │   ├── Polling/        # 分组轮询引擎、最新值缓存（结果回调直送消费者）

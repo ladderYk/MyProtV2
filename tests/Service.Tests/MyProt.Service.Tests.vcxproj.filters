@@ -12,8 +12,14 @@
     <ClCompile Include="..\MiniTestMain.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="SchemaDefaultsTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ValidationIssueTests.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\Service\src\SchemaRegistry.cpp">
+      <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\Service\src\ValidationIssue.cpp">
       <Filter>Source Files\src</Filter>

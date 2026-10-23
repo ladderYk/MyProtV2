@@ -31,12 +31,13 @@ configs/
 ```
 configs/
 ├── protocols/      # 一文件一协议 (例: modbus-tcp.json)
+│                   # 顶层可选 simulation 段 — 每协议一个仿真实例
 ├── tags.json       # 设备 + 标签 + 全局韧性 + WebApi
-└── server.json     # 全局服务端配置 (simulation)
-                    # 可选缺失 — listenPort 默认 0 = 关闭仿真
+└── server.json     # 旧版全局仿真实例 (回退)
+                    # 可选缺失 — listenPort 默认 0 = 关闭
 ```
 
-`server.json` 的 `simulation` 段承载 listenPort / registerCount / initialValues / operations，与协议语法解耦。多个协议共享同一 `ServerConfig.simulation`。
+仿真设备按协议配置：`protocols/*.json` 顶层的 `simulation` 段为该协议声明一个独立仿真实例（独立端口、独立寄存器数据区），因此同一进程内可同时运行多个仿真设备。`server.json` 的 `simulation` 段仅为旧配置兼容：只有当**没有任何协议**声明 `simulation.listenPort > 0` 时才启用，并承载 0 号协议（按文件名字典序）。详见 §2.6 / §13 与 [ADR-0017](./adr/0017-protocol-scoped-simulation-instances.md)。
 
 ---
 
@@ -55,10 +56,11 @@ configs/
 | `schemaVersion` | int | ✗ | 当前代际 | 配置代际号（§0 约定 / [ADR-0005](./adr/0005-config-versioning.md)）；缺省 = Warning + 假定当前代际，存在则须等于 `kSupportedSchemaVersion` 且与配置根一致 |
 | `variableAliases` | map\<string, string\> | ✗ | `{}` | 变量别名映射（`别名 → 契约名`），让协议作者用自己的名字书写模板与变量表，引擎内部仍按契约名工作。详见下节 |
 | `maxSpanBytes` | int | ✗ | `250` | 标签按地址邻近合并的最大跨度（**字节**），供 `TagGrouper::CoalesceAdjacent` 限制单次批读跨度 —— 即协议族的"单次读取上限"。Modbus 应取 `250`（FC03 上限 125 寄存器 × 2 字节）。须 > 0 |
+| `simulation` | SimulationConfig | ✗ | `{}` | 该协议的仿真实例；`listenPort > 0` 即启用。每协议最多一个实例，多协议可各启用一个（端口须互异），这是多仿真设备的主路径。字段见 §13.2 |
 
 > 下划线前缀字段（如 `_provenance`）被解析器忽略，不进 POCO、不参与校验，专用于书写机器无关的备注——约定来源说明（公开规范名称 / 抓包记录 / 手册版本）、商标声明等。建议每个协议文件携带 `_provenance` 字段留痕协议约定的独立推导来源（权属与 clean-room 证据）。
 >
-> 协议层**不含**仿真配置（`listenPort` / `initialValues` / `packetLossRate` 属服务端行为）；仿真段位于 `server.json` 的 `ServerConfig.simulation`。
+> 协议层的 `simulation` 只是**仿真实例的部署绑定**（端口 / 数据区），不参与报文文法；`transport` / `framing` / `operations` 仍是协议语法的唯一来源。仿真行为不影响真实设备连接。
 
 **`variableAliases`（变量别名映射）**
 
@@ -213,11 +215,11 @@ configs/
 | `sessionVariable` | string | ✗ | `""` | 提取结果存入的会话变量名；与上一字段**必须成对出现** |
 | `timeoutMs` | int | ✗ | 0 | 0 = 继承 `device.connection.timeoutMs` |
 
-### 2.6 SimulationConfig（已迁服务端层）
+### 2.6 SimulationConfig（协议级仿真实例）
 
-> `SimulationConfig` 不属于 `ProtocolConfig`。仿真端（listenPort / registerCount / initialValues / operations）位于 [`server.json`](#13-服务端配置-serverconfig) 的 `ServerConfig.simulation`，与协议语法解耦。本节给出 schema 字段参考；实装位置与生效路径见 §13。
+> `SimulationConfig` 挂在 `ProtocolConfig.simulation`（`protocols/*.json` 顶层 `simulation`），为该协议声明一个独立仿真实例；与报文文法解耦。`server.json` 的同名段仅为旧配置回退，见 [§13](#13-仿真实例配置-simulationconfig)。
 
-**SimOperationConfig** 字段表（`server.json` 内 schema 与之一致）：
+**SimOperationConfig** 字段表（协议级与 `server.json` 共用同一 schema）：
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |------|------|:--:|------|------|
@@ -681,7 +683,7 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 6. `operations` 非空；每个操作的 `requestTemplate` 非空且逐行匹配 §3 文法；占位符格式合法。
 7. 模板函数 token 为内置能力，按内置白名单校验合法性。校验和占位符的格式宽度须与算法匹配（`crc16*`→X4、`crc32`→X8、`lrc`/`xor8`→X2），不匹配报 Error。
 8. handshake 的 `sessionExtractExpr` 与 `sessionVariable` 成对出现。
-9. 协议层不含仿真字段；仿真校验见 [§13](#13-服务端配置-serverconfig) `ServerConfig.simulation`。
+9. 协议层可选 `simulation` 段只描述仿真实例部署参数（端口 / 数据区 / 仿真操作），按 §2.6 / §13 校验；`transport` / `framing` / `operations` 内不得出现仿真专用字段。
 10. `variables` 中 `source=static` 的 `value`（若提供）须为整数（0~4294967295）；`source` 仅 `static` / `auto`（其余取值报错）；同名键优先级 = 标签层 `variables` > 操作层 `variables` > 协议层 `variables(static)`（合并实装 `RequestBuilder::MergeVariables`）；`source=auto` 须给合法 `strategy`，`derivedLength` 须声明 `expr`（引用 `inputs` 已声明名的算术表达式，`{name:len}` 取字节长度；规则10、长度偏移自检见 §3.2）。
 
 **设备层**
@@ -810,8 +812,8 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `bindAddress` | string | `"127.0.0.1"` | 监听地址；默认仅环回，远程管理需显式改 `0.0.0.0`（强烈建议同时启用 TLS + token） |
-| `certFile` | string | — | TLS 证书路径；与 `keyFile` 齐备即启用 `httplib::SSLServer` |
-| `keyFile` | string | — | TLS 私钥路径；与 `certFile` 齐备即启用 TLS |
+| `certFile` | string | — | TLS 证书路径（预留）；当前 `WebApiServer` 为明文 HTTP，字段仅做与 `keyFile` 的成对校验，不生效 |
+| `keyFile` | string | — | TLS 私钥路径（预留）；仅与 `certFile` 成对校验，当前不启用 TLS |
 | `requireAuth` | bool | `false` | true 时 bearer token 缺失即启动 Fail-Fast（生产建议 true）；false 可免 token（启动 Warning） |
 | `rateLimitRps` | int | 5 | 敏感端点令牌桶每秒速率；当前实现为全局令牌桶（含 `/api/data/write` 写端点在内统一计数），超限返回 `429 Too Many Requests`；按端点细分见 [ROADMAP.md](./ROADMAP.md) |
 | `rateLimitBurst` | int | 10 | 令牌桶突发上限；超限返回 `429 Too Many Requests` |
@@ -840,53 +842,54 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 
 ---
 
-## 13. 服务端配置 (ServerConfig)
+## 13. 仿真实例配置 (SimulationConfig)
 
-> 将"服务端行为"（仿真）从 `ProtocolConfig` 抽离，全局单实例。`alertSink` / `webhook` 等未实装字段见 [ROADMAP.md](./ROADMAP.md)。
+> 仿真参数不再要求全局单实例：**协议级 `simulation` 是多设备主路径**（[ADR-0017](./adr/0017-protocol-scoped-simulation-instances.md)），`server.json` 保留为旧配置回退。`alertSink` / `webhook` 等未实装字段见 [ROADMAP.md](./ROADMAP.md)。
 
-### 13.1 文件
+### 13.1 位置与优先级
 
-`<dir>/server.json`（与 `tags.json` 同级）。可缺失；缺失 = 默认关闭仿真（`simulation.listenPort = 0`）。
+| 位置 | 作用域 | 说明 |
+|------|--------|------|
+| `protocols/<proto>.json` 顶层 `simulation` | 该协议一个实例 | **推荐**；`listenPort > 0` 即启用。多个协议各写不同端口即可同时运行多个仿真设备 |
+| `server.json` 顶层 `simulation` | 全局单实例（回退） | 仅当没有任何协议启用仿真时生效，承载 0 号协议（文件名字典序）；两者同时存在时协议级优先，启动日志打印 WARN |
 
-### 13.2 顶层字段
+`<dir>/server.json` 与 `tags.json` 同级，可缺失；缺失且无协议级仿真 = 不启动仿真。
 
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|------|------|:--:|------|------|
-| `schemaVersion` | int | ✗ | `kSupportedSchemaVersion` | 同 §0 约定；缺省 = Warning + 假定当前代际 |
-| `simulation` | SimulationConfig | ✗ | `{}` (关闭) | 仿真端配置；schema 与 §2.6 同（字段名/类型/校验规则一致） |
-
-### 13.3 SimulationConfig 字段
+### 13.2 SimulationConfig 字段
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |------|------|:--:|------|------|
 | `listenPort` | uint16 | ✓ | 0 | 仿真服务 TCP 监听端口（仅绑定环回 127.0.0.1）；`0` = 不启用 |
 | `registerCount` | int | ✓ | 65536 | 仿真数据 16 位寄存器阵列长度，取值 1~65536 |
-| `initialValues` | map&lt;string, uint32&gt; | ✗ | `{}` | 寄存器初值；键 = 地址十进制字符串，值 = 0~65535 |
-| `operations` | map&lt;string, SimOperationConfig&gt; | ✗ | `{}` | 操作级仿真行为；key 须为 `protocols/*.json` 中任一协议的 `operations` 已声明的操作名 |
+| `initialValues` | map&lt;string, uint32&gt; | ✗ | `{}` | 寄存器初值；键 = 地址十进制字符串，值 = 0~65535，地址须 < `registerCount` |
+| `operations` | map&lt;string, SimOperationConfig&gt; | ✗ | `{}` | 操作级仿真行为；key 须为**所属协议** `operations` 已声明的操作名（`server.json` 回退时取 0 号协议） |
 
-**SimOperationConfig** 字段见 [§2.6](#26-simulationconfigv11-移出)。
+**SimOperationConfig** 字段见 [§2.6](#26-simulationconfig协议级仿真实例)。
 
-### 13.4 校验
+### 13.3 校验
 
-加载器解析 `server.json` 后做：
+加载器解析协议文件与 `server.json` 时做：
 
-1. 顶层须为对象；否则 `ConfigError`
+1. `simulation` 须为对象；否则 `ConfigError`
 2. `schemaVersion`（如存在）须等于 `kSupportedSchemaVersion`，否则 `ConfigError`
 3. `simulation.listenPort ∈ [0, 65535]`
 4. `simulation.registerCount ∈ [1, 65536]`
-5. `simulation.initialValues` 值须为整数
+5. `simulation.initialValues` 值 ∈ [0, 65535]，键须为十进制地址且 < `registerCount`
 6. `simulation.operations[].kind ∈ {"read", "write"}`
-7. `simulation.operations[].kind == "read"` 时 `countVar` 必填
+7. `simulation.operations[].kind == "read"` 时 `countVar` 必填；`dataOffset >= -1`
 8. `simulation.operations[].responseTemplate`（可选数组）逐行匹配仿真模板文法——空行 / hex 字面量 / `{data}` / `{req:N:M}`（数字格式），非法即拒绝加载
+9. **跨实例**：同一端口不得被两个启用的仿真实例占用；`ApplyRuntimeSync` 在停止旧实例之前拒绝冲突并返回 `ConfigError`
 
-### 13.5 最小示例
+### 13.4 最小示例（协议级，推荐）
 
 ```jsonc
+// configs/protocols/modbus-tcp.json
 {
-  "schemaVersion": 1,
+  "protocolName": "modbus-tcp",
+  // ... transport / framing / operations ...
   "simulation": {
     "listenPort": 11520,            // 仅环回监听; 0 = 不启用
-    "registerCount": 65536,
+    "registerCount": 1000,
     "initialValues": { "0": 5, "1": 100 },
     "operations": {
       "ReadHoldingRegisters": {
@@ -903,10 +906,28 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 }
 ```
 
+增加第二个仿真设备：在另一个协议文件里写不同端口（如 `11521`），两个仿真器同时运行。
+
+### 13.5 旧配置回退示例（server.json）
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "simulation": {
+    "listenPort": 11520,
+    "registerCount": 65536
+    // operations / initialValues 同 §13.4
+  }
+}
+```
+
+仅当没有任何协议级仿真时生效；退出方式：把 `listenPort` 置 `0` 或在协议文件中配置仿真。
+
 ### 13.6 与协议关系
 
-- `ServerConfig.simulation` 与 `ProtocolConfig` 解耦，**多协议共享同一仿真端**
-- `SimulationServer` 接受 `ProtocolConfig &`（取协议语法知识：operations / framing / transport）与 `SimulationConfig &`（取数据行为：listenPort / registerCount / initialValues /operations）
+- 每个仿真实例绑定一份 `ProtocolConfig`：`SimulationServer` 从协议对象取语法知识（operations / framing / transport），从 `simulation` 取数据行为（listenPort / registerCount / initialValues / operations）
+- 多实例即"多仿真设备"：`SimServerMap` 以协议名为键，`/api/sim/*` 用 `?proto=<protocolName>` 选择实例（见 [modules/07](./modules/07_WebApi.md)）
+- 同一协议需要多个数据区/从站时当前模型不支持（一个协议一个实例），需另行评审
 
 ---
 

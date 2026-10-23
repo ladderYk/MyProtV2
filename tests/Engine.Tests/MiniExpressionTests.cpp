@@ -1,0 +1,146 @@
+// tests/Engine.Tests/MiniExpressionTests.cpp
+// MiniExpression 单元测试 — 统一表达式引擎 (原 ExpressionEvaluator 职责已并入)。
+// 覆盖: resp[N] 字节引用 / 十六进制字面量 / 比较与逻辑运算 / C 优先级 / 移位 / 错误传播。
+//
+// 这些表达式是配置里 validCondition / dataLengthExpr / 派生长度 expr 的求值内核,
+// 语义错了会静默产出错误的标签值, 所以在此按"最小可判定集合"固定住。
+
+#include "MyProt/Core/ByteView.hpp"
+#include "MyProt/Engine/MiniExpression.hpp"
+#include "MiniTest.hpp"
+
+#include <cstdlib>
+#include <string>
+
+using namespace MyProt::Core;
+
+namespace {
+
+/// 样本帧: resp[0]=0xAA resp[1]=0x03 resp[2]=0x10 resp[3]=0x00
+Bytes SampleFrame() {
+    Bytes b;
+    b.push_back(0xAA);
+    b.push_back(0x03);
+    b.push_back(0x10);
+    b.push_back(0x00);
+    return b;
+}
+
+/// resp[N] 解析: MiniExpression 以规范名 "resp[N]" 回调 (见 Node::Resp)
+bool LookupResponseByte(ByteView response, const std::string& name, std::uint64_t& out) {
+    const std::string prefix = "resp[";
+    if (name.size() <= prefix.size() + 1
+            || name.compare(0, prefix.size(), prefix) != 0
+            || name[name.size() - 1] != ']') return false;
+    const std::string idxText = name.substr(prefix.size(),
+                                            name.size() - prefix.size() - 1);
+    const long idx = std::strtol(idxText.c_str(), 0, 10);
+    if (idx < 0 || static_cast<std::size_t>(idx) >= response.size) return false;
+    out = response.data[static_cast<std::size_t>(idx)];
+    return true;
+}
+
+/// 求值: 解析或求值失败返回 false (而非抛异常)
+bool TryEval(const std::string& expr, ByteView response, std::uint64_t& out) {
+    try {
+        MyProt::Engine::MiniExpression::Parser parser(expr);
+        parser.Parse();
+        out = parser.Evaluate([response](const std::string& name, bool& found)
+                                  -> std::uint64_t {
+            std::uint64_t v = 0;
+            if (LookupResponseByte(response, name, v)) { found = true; return v; }
+            found = false;
+            return 0;
+        });
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+} // namespace
+
+// ── 条件: resp[N] 与十六进制字面量比较 (配置里最常见的 validCondition) ──
+TEST(MiniExpressionTest, ConditionEqualsHexLiteral) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    std::uint64_t hit = 0;
+    ASSERT_TRUE(TryEval("resp[1] == 0x03", resp, hit));
+    EXPECT_EQ(hit, 1u);
+
+    std::uint64_t miss = 1;
+    ASSERT_TRUE(TryEval("resp[1] == 0x04", resp, miss));
+    EXPECT_EQ(miss, 0u);
+}
+
+// ── 条件: 逻辑与/或 (&& 优先级高于 ||) ──
+TEST(MiniExpressionTest, ConditionLogicalAndOr) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    std::uint64_t a = 0;
+    ASSERT_TRUE(TryEval("resp[1] == 0x03 && resp[2] != 0x00", resp, a));
+    EXPECT_EQ(a, 1u);
+
+    std::uint64_t b = 1;
+    ASSERT_TRUE(TryEval("resp[1] == 0x03 && resp[2] == 0x00", resp, b));
+    EXPECT_EQ(b, 0u);
+
+    std::uint64_t c = 0;
+    ASSERT_TRUE(TryEval("resp[1] == 0x99 || resp[2] == 0x10", resp, c));
+    EXPECT_EQ(c, 1u);
+}
+
+// ── 长度: 单字节引用 ──
+TEST(MiniExpressionTest, LengthFromSingleByteRef) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    std::uint64_t n = 0;
+    ASSERT_TRUE(TryEval("resp[2]", resp, n));
+    EXPECT_EQ(n, 0x10u);
+}
+
+// ── 长度: 算术优先级 (乘除先于加减) 与移位/位运算组合 ──
+TEST(MiniExpressionTest, LengthArithmeticPrecedence) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    // 3 * 2 + 1 = 7 (若优先级反了会得 9)
+    std::uint64_t mulFirst = 0;
+    ASSERT_TRUE(TryEval("resp[1] * 2 + 1", resp, mulFirst));
+    EXPECT_EQ(mulFirst, 7u);
+
+    // (0x03 << 8) | 0x10 = 0x0310 (大端拼字)
+    std::uint64_t bigEndianWord = 0;
+    ASSERT_TRUE(TryEval("(resp[1] << 8) | resp[2]", resp, bigEndianWord));
+    EXPECT_EQ(bigEndianWord, 0x0310u);
+}
+
+// ── 位运算优先级对齐 C: 位与/或低于算术与比较 ──
+TEST(MiniExpressionTest, BitwisePrecedenceMatchesC) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    // C: 1 | 2 * 3 = 7 (旧 MiniExpression 会把 | 绑得更紧 → 9)
+    std::uint64_t orMul = 0;
+    ASSERT_TRUE(TryEval("1 | 2 * 3", resp, orMul));
+    EXPECT_EQ(orMul, 7u);
+
+    // C: resp[1] & 0xFF == 0x03 → resp[1] & (0xFF == 0x03) = 0
+    std::uint64_t andEq = 1;
+    ASSERT_TRUE(TryEval("resp[1] & 0xFF == 0x03", resp, andEq));
+    EXPECT_EQ(andEq, 0u);
+}
+
+// ── 非法表达式必须是"错误"而不是抛异常 / 静默 0 ──
+TEST(MiniExpressionTest, InvalidExpressionReturnsError) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    std::uint64_t unused = 0;
+    EXPECT_FALSE(TryEval("bogus[0] == 1", resp, unused));
+    EXPECT_FALSE(TryEval("resp[1] == 0x03 &&", resp, unused));
+    EXPECT_FALSE(TryEval("", resp, unused));
+}

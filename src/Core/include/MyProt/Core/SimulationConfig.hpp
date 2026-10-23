@@ -1,9 +1,10 @@
 // src/Core/include/MyProt/Core/SimulationConfig.hpp
-// Simulation config POCO. Lives at the top level of server.json (not inside Config.hpp)
-// but extracted here, included jointly by Config.hpp (residual reference) + ServerConfig.hpp.
+// Simulation config POCO. One instance per simulator, configured either in a protocol file
+// (`protocols/*.json` -> ProtocolConfig.simulation, multi-device path) or at the top level of
+// server.json (ServerConfig.simulation, legacy single-instance fallback).
 //
-// Simulation properly belongs to "server behavior" rather than "protocol syntax", but since all
-// fields are structured data it still sits in the Core layer.
+// The data area is protocol-agnostic (a 16-bit register array); frame knowledge still comes
+// from the owning protocol's transport/framing/operations.
 #pragma once
 
 #include <cstdint>
@@ -29,7 +30,7 @@ struct SimOperationConfig {
     SimOperationConfig() : dataOffset(-1) {}
 };
 
-/// Global simulation config (in server.json, not protocols/*.json). listenPort == 0 = simulation server disabled
+/// Simulation instance config. listenPort == 0 = this instance is disabled.
 struct SimulationConfig {
     uint16_t listenPort;
     int registerCount;                                    // number of data-area registers

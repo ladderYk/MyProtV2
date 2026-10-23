@@ -122,7 +122,7 @@ namespace MyProt { namespace Gateway {
 
 /// 标签读取器 — 单读 / 批量读 / 单写
 /// 三条路径共用同一套 Engine 原语实例:
-///   RequestBuilder → IChannel::SendReceive → ResponseParser (+ AutoIncrementProvider)
+///   RequestBuilder → IChannel::SendReceive → ResponseParser (+ AutoComputeProvider)
 class TagReader {
 public:
     using SingleHandler = std::function<void(Core::Expected<Core::TagValue>)>;
@@ -160,7 +160,7 @@ public:
 private:
     Engine::RequestBuilder _requestBuilder;      // ── 管线原语实例
     Engine::ResponseParser _responseParser;      //    (三条路径共用，保证
-    Engine::AutoIncrementProvider _autoProvider; //     自增事务 ID 全局一致)
+    Engine::AutoComputeProvider _autoProvider;   //     auto 求值/自增事务 ID 全局一致)
 };
 
 }} // namespace MyProt { namespace Gateway
@@ -180,6 +180,38 @@ private:
 > **per-bus strand 串行化**：当前部署为单 `io_context` + 单线程 run（`io.run_for(200ms)`），写链天然串行，per-bus strand 为冗余间接层（设计稿见 [ADR-0011 §3.2](../adr/0011-p1cd-write-mutex-and-per-bus-strand.md)）。写互斥以单 device 写 vs 写粒度生效，不依赖 io 线程模型；若切多线程 run 需重立 ADR 评估。
 
 **PDU 长度策略**：PDULength 由协议/操作 `outputs` 段的 `derivedLength` 声明求值，在参数层预解析注入 `variables`；Engine 模板只按名查表，不感知协议族语义。见 [Config_Schema §3.2.1](../Config_Schema.md)。
+
+### 5.3.1 WriteService — 写路径库（P2-2）
+
+```cpp
+// src/Gateway/include/MyProt/Gateway/WriteService.hpp
+struct WriteRequest {
+    std::string tagName;
+    double value;                      // 标量写值
+    std::vector<std::uint8_t> bytes;   // 非空 = 变长/原始字节写
+    bool readBack;                     // 写后读回校验
+};
+
+class WriteService {
+public:
+    WriteService(asio::io_context& io, ProtocolGateway& gateway,
+                 Core::RuntimeSnapshotHolder& snapshot);
+
+    /// 同步完成一次写（内部 post 到 io 线程 + promise/future，10s 上限）
+    Core::VoidExpected Write(const WriteRequest& req);
+
+    // 可单测纯函数: EncodeFinalTypeToBytes / CheckIntegerWriteValue /
+    //                OpNeedsBytePath / BuildWriteBackCheck
+};
+```
+
+调用契约：
+
+- App 层 `HandleWriteApi` 只做 HTTP body 解析与状态码映射，不再持有写业务；
+- `Write()` 查 `RuntimeSnapshot` 的标签/设备/协议 → 可写性判定 → 标量/变长编码
+  → `TagReader::WriteOnce` / `WriteBytes` → 可选 `BuildWriteBackCheck` 读回；
+- 通过 `io.post` 回到 io 线程执行（与轮询回调串行），调用方线程不直接碰 socket；
+- 写路径指标（`myprot_write_*`）随实现下沉，计数点位于 `WriteService`。
 
 ## 5.4 TagGrouper 与 MergedRequest
 

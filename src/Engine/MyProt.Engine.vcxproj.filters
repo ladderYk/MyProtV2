@@ -27,12 +27,6 @@
     <ClInclude Include="include\MyProt\Engine\ResponseParser.hpp">
       <Filter>Header Files\include_MyProt_Engine</Filter>
     </ClInclude>
-    <ClInclude Include="include\MyProt\Engine\ExpressionEvaluator.hpp">
-      <Filter>Header Files\include_MyProt_Engine</Filter>
-    </ClInclude>
-    <ClInclude Include="include\MyProt\Engine\AutoIncrementProvider.hpp">
-      <Filter>Header Files\include_MyProt_Engine</Filter>
-    </ClInclude>
     <ClInclude Include="include\MyProt\Engine\AutoComputeProvider.hpp">
       <Filter>Header Files\include_MyProt_Engine</Filter>
     </ClInclude>
@@ -45,9 +39,6 @@
       <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="src\ResponseParser.cpp">
-      <Filter>Source Files\src</Filter>
-    </ClCompile>
-    <ClCompile Include="src\ExpressionEvaluator.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="src\AutoComputeProvider.cpp">

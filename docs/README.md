@@ -72,6 +72,10 @@
 | [ADR-0011 显式写互斥](./adr/0011-p1cd-write-mutex-and-per-bus-strand.md) | 写互斥实装决策与并发语义 |
 | [ADR-0012 派生长度模板结构原语与保存期试算校验](./adr/0012-derivedlength-template-primitives-and-trial-render.md) | `{Frame:fixed}` / `{Name:offset}` 原语消除 outputs 手工魔数（如 S7 `+35`）；保存期真实渲染写帧并比对成帧长度槽位，封堵 expr 静默 0 值 |
 | [ADR-0013 构建与测试基础设施准入](./adr/0013-infrastructure-admission.md) | 单一构建系统（移除 9 个失效 CMakeLists）、空壳测试禁止、CI 门禁 `scripts/ci.ps1`（编译 + 全部可执行，退出码契约）、外部依赖须开箱可链接 |
+| [ADR-0014 运行时配置快照单一化](./adr/0014-runtime-snapshot-single-source.md) | 一次加载 → 一份不可变 `RuntimeSnapshot`；`RuntimeSnapshotHolder` 同步发布、读侧 shared_ptr 保活；消除 protos/protoStore/LoadedConfig 多副本与仿真器悬垂引用 |
+| [ADR-0015 Service 对 Engine 的依赖方向](./adr/0015-service-engine-dependency-direction.md) | 保留 `Service → Engine`（加载期校验复用 MiniExpression / RequestBuilder / AutoComputeProvider），约束为无状态校验原语并规定复审触发条件 |
+| [ADR-0016 P2 边界收敛](./adr/0016-p2-boundary-consolidation.md) | 校验拆分（Parser/Schema/Semantic/TrialRenderer）、写路径下沉 `Gateway::WriteService`、WebApi 统一 `RouteTable`（§2.4 单协议限制已被 ADR-0017 取代） |
+| [ADR-0017 协议级仿真实例](./adr/0017-protocol-scoped-simulation-instances.md) | 仿真实例改挂 `ProtocolConfig.simulation`：每个协议可各启用一个仿真设备（端口须互异）；`server.json.simulation` 降为旧配置回退；热重载端口冲突前置拒绝 |
 
 > ⚠️ 若 `modules/` 中的 POCO/示例与 [配置 Schema 定稿](./Config_Schema.md) 冲突时，以 Schema 定稿为准。
 

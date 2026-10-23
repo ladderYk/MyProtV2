@@ -2,49 +2,16 @@
 // 请求构建器实现 — 模板展开为字节流 (C++11, ADR-0010 §5)
 
 #include "MyProt/Engine/RequestBuilder.hpp"
+#include "MyProt/Core/TemplateGrammar.hpp"
 #include <string>
 #include <vector>
-#include <cstdlib>
-#include <cctype>
 
 namespace MyProt { namespace Engine {
 
 namespace {
 
-/// 按 ':' 分割模板段内部文本; npos 时取到结尾
-std::vector<std::string> SplitSegments(const std::string& inner) {
-    std::vector<std::string> segs;
-    size_t pos = 0;
-    while (true) {
-        size_t colon = inner.find(':', pos);
-        segs.push_back(inner.substr(pos, colon - pos));
-        if (colon == std::string::npos) break;
-        pos = colon + 1;
-    }
-    return segs;
-}
-
-/// 解析 hex 字符串 ("01 0A 0b" / "010A0B" 混合格式) → 字节流
-/// 容忍空格/制表符分隔; 失败返回 false
-bool ParseHexStringToBytes(const std::string& hex, Core::Bytes& out) {
-    std::string compact;
-    compact.reserve(hex.size());
-    for (size_t i = 0; i < hex.size(); ++i) {
-        if (hex[i] != ' ' && hex[i] != '\t') compact += hex[i];
-    }
-    if (compact.empty()) return true;                          // 空串 = 0 字节 (合法)
-    if (compact.size() % 2 != 0) return false;
-    for (size_t i = 0; i < compact.size(); i += 2) {
-        char buf[3] = { compact[i], compact[i + 1], 0 };
-        char* endp = 0;
-        unsigned long v = std::strtoul(buf, &endp, 16);
-        if (endp != buf + 2) return false;
-        out.push_back(static_cast<uint8_t>(v));
-    }
-    return true;
-}
-
-/// 公共模板展开 (P1 A 重构): 抽离出 Build/BuildBytes 共用逻辑
+/// 公共模板展开: Build/BuildBytes 共用逻辑。
+/// 文法解析统一委托 Core::TemplateGrammar (与仿真/加载期校验同一实现)。
 /// @param variableBytesHex nullptr = 纯标量模式 (Build); 非空 = 启用 {Name:raw} (BuildBytes)
 Core::Expected<Core::Bytes> RenderTemplate(
     const Core::OperationConfig& op,
@@ -53,134 +20,88 @@ Core::Expected<Core::Bytes> RenderTemplate(
     const std::unordered_map<std::string, std::string>& varAliasMap,
     AutoComputeProvider& autoProvider) {
 
+    namespace TG = Core::TemplateGrammar;
     Core::Bytes out;
 
     for (size_t i = 0; i < op.requestTemplate.size(); ++i) {
         const std::string& part = op.requestTemplate[i];
         if (part.empty()) continue;
 
-        if (part.size() >= 2 && part[0] == '{' && part[part.size() - 1] == '}') {
-            // {Name:Xn} 或 {Name:raw}; 是否 auto 由 autoCompute 声明驱动 — 不接受 :auto: 令牌
-            std::string inner = part.substr(1, part.size() - 2);
-            std::vector<std::string> segs = SplitSegments(inner);
+        TG::Segment seg;
+        std::string parseErr;
+        const TG::ParseStatus st = TG::ParseElement(part, seg, false, false, &parseErr);
+        if (st != TG::ParseOk) {
+            return Core::Unexpected(Core::Error::Code::BuildError,
+                                    parseErr.empty() ? "模板段格式无效" : parseErr,
+                                    part);
+        }
 
-            std::string name = segs[0];
-            // 变量别名解析 — 用户自定义名 → 引擎内部名
-            auto ait = varAliasMap.find(name);
-            if (ait != varAliasMap.end()) name = ait->second;
+        if (seg.kind == TG::kLiteral) {
+            out.insert(out.end(), seg.literal.begin(), seg.literal.end());
+            continue;
+        }
 
-            // P1 A: {Name:raw} 变长字节注入
-            if (segs.size() == 2 && segs[1] == "raw") {
-                if (!variableBytesHex) {
-                    return Core::Unexpected(Core::Error::Code::BuildError,
-                                            "模板段 {Name:raw} 仅 BuildBytes 入口支持", part);
-                }
-                std::unordered_map<std::string, std::string>::const_iterator it =
-                    variableBytesHex->find(name);
-                if (it == variableBytesHex->end()) {
-                    return Core::Unexpected(Core::Error::Code::BuildError,
-                                            "变长模板变量未提供", name);
-                }
-                if (!ParseHexStringToBytes(it->second, out)) {
-                    return Core::Unexpected(Core::Error::Code::BuildError,
-                                            "variableBytesHex 值非法 (须为偶数位十六进制)", part);
-                }
-                continue;
-            }
+        // 变量别名解析 — 用户自定义名 → 引擎内部名
+        std::string name = seg.name;
+        std::unordered_map<std::string, std::string>::const_iterator ait =
+            varAliasMap.find(name);
+        if (ait != varAliasMap.end()) name = ait->second;
 
-            // 模板函数令牌仅 CRC/LRC/XOR; auto 行为由 autoCompute 声明驱动
-            if (segs.size() != 2) {
+        // {Name:raw} 变长字节注入
+        if (seg.kind == TG::kRaw) {
+            if (!variableBytesHex) {
                 return Core::Unexpected(Core::Error::Code::BuildError,
-                                        "模板段格式无效 (仅 {Name:Xn} / {Name:XnLE} / {Name:raw})", part);
+                                        "模板段 {Name:raw} 仅 BuildBytes 入口支持", part);
             }
-            // 宽度说明: Xn / XnLE (n = 偶数 hex 位数 2..16, 对应 n/2 字节)
-            //   Xn   → 大端输出 (MSB 在前); XnLE → 小端输出 (LSB 在前)
-            //   字节序只裁决该占位符自身的线序, 与 framing/dataByteOrder 无关
-            std::string widthSpec = segs[1];
-            bool littleEndian = false;
-            if (widthSpec.size() > 2
-                    && widthSpec.compare(widthSpec.size() - 2, 2, "LE") == 0) {
-                littleEndian = true;
-                widthSpec.resize(widthSpec.size() - 2);
-            }
-            int hexWidth = 0;
-            if (widthSpec.size() < 2 || widthSpec[0] != 'X') {
+            std::unordered_map<std::string, std::string>::const_iterator it =
+                variableBytesHex->find(name);
+            if (it == variableBytesHex->end()) {
                 return Core::Unexpected(Core::Error::Code::BuildError,
-                                        "宽度说明须为 Xn 或 XnLE", part);
+                                        "变长模板变量未提供", name);
             }
-            for (size_t ci = 1; ci < widthSpec.size(); ++ci) {
-                if (widthSpec[ci] < '0' || widthSpec[ci] > '9') {
-                    return Core::Unexpected(Core::Error::Code::BuildError,
-                                            "宽度说明须为 Xn 或 XnLE (偶数 hex 位数 2..16)", part);
-                }
-                hexWidth = hexWidth * 10 + (widthSpec[ci] - '0');
-            }
-            if (hexWidth < 2 || hexWidth > 16 || hexWidth % 2 != 0) {
+            if (!TG::ParseHexLiteral(it->second, out)) {
                 return Core::Unexpected(Core::Error::Code::BuildError,
-                                        "宽度说明须为 Xn 或 XnLE (偶数 hex 位数 2..16)", part);
+                                        "variableBytesHex 值非法 (须为偶数位十六进制)", part);
             }
-            int byteWidth = hexWidth / 2;
+            continue;
+        }
 
-            uint64_t value;
-            std::unordered_map<std::string, uint32_t>::const_iterator it = variables.find(name);
-            if (it != variables.end()) {
-                value = it->second;                                  // 静态值 / 标签值优先
-            } else if (autoProvider.IsDeclared(name)) {              // 按声明路由到 auto 策略
-                BuildContext ctx;
-                ctx.variables = &variables;
-                ctx.frameSoFar = &out;
-                value = autoProvider.Resolve(name, byteWidth, ctx);
-            } else {
-                return Core::Unexpected(Core::Error::Code::BuildError,
-                                        "模板变量未提供 (须在 variables 声明 static/auto)", name);
-            }
+        // {Name:Xn} / {Name:XnLE} — 宽度与线序由文法层给出
+        const int byteWidth = seg.widthBytes;
+        uint64_t value;
+        std::unordered_map<std::string, uint32_t>::const_iterator it = variables.find(name);
+        if (it != variables.end()) {
+            value = it->second;                                  // 静态值 / 标签值优先
+        } else if (autoProvider.IsDeclared(name)) {              // 按声明路由到 auto 策略
+            BuildContext ctx;
+            ctx.variables = &variables;
+            ctx.frameSoFar = &out;
+            value = autoProvider.Resolve(name, byteWidth, ctx);
+        } else {
+            return Core::Unexpected(Core::Error::Code::BuildError,
+                                    "模板变量未提供 (须在 variables 声明 static/auto)", name);
+        }
 
-            // 溢出拦截 (ADR-0012 附录A): 派生值超出格式宽度时显式失败 —
-            // 不允许高位静默截断 (如 {PDULength:X4} 超 65535 会让帧长字段偏小, 设备侧解析错位)
-            const uint64_t maxVal = (byteWidth >= 8)
-                ? ~0ULL
-                : ((1ULL << (8 * byteWidth)) - 1ULL);
-            if (value > maxVal) {
-                return Core::Unexpected(Core::Error::Code::BuildError,
-                                        "变量值 " + std::to_string(value)
-                                            + " 超出格式宽度 X" + std::to_string(hexWidth)
-                                            + " (上限 " + std::to_string(maxVal) + ")",
-                                        name);
-            }
+        // 溢出拦截 (ADR-0012 附录A): 派生值超出格式宽度时显式失败 —
+        // 不允许高位静默截断 (如 {PDULength:X4} 超 65535 会让帧长字段偏小, 设备侧解析错位)
+        const uint64_t maxVal = (byteWidth >= 8)
+            ? ~0ULL
+            : ((1ULL << (8 * byteWidth)) - 1ULL);
+        if (value > maxVal) {
+            return Core::Unexpected(Core::Error::Code::BuildError,
+                                    "变量值 " + std::to_string(value)
+                                        + " 超出格式宽度 X" + std::to_string(byteWidth * 2)
+                                        + " (上限 " + std::to_string(maxVal) + ")",
+                                    name);
+        }
 
-            if (littleEndian) {
-                for (int b = 0; b < byteWidth; ++b) {
-                    out.push_back(static_cast<uint8_t>((value >> (b * 8)) & 0xFF));
-                }
-            } else {
-                for (int b = byteWidth - 1; b >= 0; --b) {
-                    out.push_back(static_cast<uint8_t>((value >> (b * 8)) & 0xFF));
-                }
+        if (seg.littleEndian) {
+            for (int b = 0; b < byteWidth; ++b) {
+                out.push_back(static_cast<uint8_t>((value >> (b * 8)) & 0xFF));
             }
         } else {
-            // 十六进制字面量: 每 2 字符 1 字节; 空格/制表符为字节分隔符
-            // (与 ConfigDeepValidator §3.1 / TemplateMatcher 约定一致)
-            std::string hex;
-            hex.reserve(part.size());
-            for (size_t c = 0; c < part.size(); ++c) {
-                if (part[c] != ' ' && part[c] != '\t') {
-                    hex += part[c];
-                }
-            }
-            if (hex.empty()) continue;
-            if (hex.size() % 2 != 0) {
-                return Core::Unexpected(Core::Error::Code::BuildError,
-                                        "十六进制字面量长度须为偶数", part);
-            }
-            for (size_t c = 0; c < hex.size(); c += 2) {
-                char buf[3] = { hex[c], hex[c + 1], 0 };
-                char* end = 0;
-                unsigned long v = std::strtoul(buf, &end, 16);
-                if (end != buf + 2) {
-                    return Core::Unexpected(Core::Error::Code::BuildError,
-                                            "非法十六进制字符", part);
-                }
-                out.push_back(static_cast<uint8_t>(v));
+            for (int b = byteWidth - 1; b >= 0; --b) {
+                out.push_back(static_cast<uint8_t>((value >> (b * 8)) & 0xFF));
             }
         }
     }
@@ -265,7 +186,7 @@ std::string RequestBuilder::CollectAutoComputeJson(const Core::ProtocolConfig& p
 }
 
 // op 级 auto (非 derivedLength) 输入拼接进协议级 autoComputeJson。
-// 单一实现 — Gateway(TagReader) 与 Service(FrameConsistencyCheck) 共用,
+// 单一实现 — Gateway(TagReader) 与 Service(TrialRenderer) 共用,
 // 消除原双份实现 (Gateway 未跳过 derivedLength, 与 Service 语义漂移)。
 std::string RequestBuilder::MergeOpAutoComputeJson(
         const Core::ProtocolConfig& protocol, const Core::OperationConfig& op) {
@@ -294,68 +215,51 @@ std::string RequestBuilder::MergeOpAutoComputeJson(
 
 // ── 模板布局与派生长度注入 (ADR-0012) ──────────────────────────────
 
-// 扫描 requestTemplate 产出布局表. 元素二分法与 RenderTemplate 一致:
+// 扫描 requestTemplate 产出布局表. 元素文法统一来自 Core::TemplateGrammar:
 // 整元素占位符 ({...}) 或 hex 字面量; 未知格式记 hasUnknown (宽度按 0).
 TemplateLayout RequestBuilder::BuildTemplateLayout(
     const std::vector<std::string>& requestTemplate) {
+    namespace TG = Core::TemplateGrammar;
     TemplateLayout out;
     uint32_t cursor = 0;
     for (size_t i = 0; i < requestTemplate.size(); ++i) {
         const std::string& el = requestTemplate[i];
         if (el.empty()) continue;
-        uint32_t w = 0;
+
+        TG::Segment seg;
+        const TG::ParseStatus st = TG::ParseElement(el, seg, false, false, 0);
         const bool isPlaceholder =
             (el.size() >= 2 && el[0] == '{' && el[el.size() - 1] == '}');
+        uint32_t w = 0;
+
         if (isPlaceholder) {
-            const std::string inner = el.substr(1, el.size() - 2);
-            const size_t colon = inner.find(':');
-            if (colon == std::string::npos) {
-                out.hasUnknown = true;                        // 无格式段 (如 "{Name}")
+            if (st == TG::ParseOk && seg.kind == TG::kRaw) {
+                w = TemplateLayout::kRawMarker;
+            } else if (st == TG::ParseOk) {
+                w = static_cast<uint32_t>(seg.widthBytes);
             } else {
-                const std::string name = inner.substr(0, colon);
-                const std::string fmt = inner.substr(colon + 1);
-                if (fmt == "raw") {
-                    w = TemplateLayout::kRawMarker;
-                } else {
-                    // Xn[XLE]: 偶数 hex 位数 2..16 → n/2 字节; LE 后缀 = 小端线序
-                    //   (与 RenderTemplate 同一解析语义; 未知格式记 hasUnknown, 宽度按 0)
-                    std::string fmtCore = fmt;
-                    if (fmtCore.size() > 2
-                            && fmtCore.compare(fmtCore.size() - 2, 2, "LE") == 0) {
-                        fmtCore.resize(fmtCore.size() - 2);
-                    }
-                    if (fmtCore.size() >= 2 && fmtCore[0] == 'X') {
-                        int hexWidth = 0;
-                        bool digitsOk = true;
-                        for (size_t ci = 1; ci < fmtCore.size(); ++ci) {
-                            if (fmtCore[ci] < '0' || fmtCore[ci] > '9') { digitsOk = false; break; }
-                            hexWidth = hexWidth * 10 + (fmtCore[ci] - '0');
-                        }
-                        if (digitsOk && hexWidth >= 2 && hexWidth <= 16 && hexWidth % 2 == 0) {
-                            w = static_cast<uint32_t>(hexWidth / 2);
-                        } else {
-                            out.hasUnknown = true;
-                        }
-                    } else {
-                        out.hasUnknown = true;
-                    }
-                }
+                out.hasUnknown = true;                        // 无格式段 (如 "{Name}") / 未知格式
+            }
+            // 解析失败时 seg.name 为空, 从文法层重新取首段名 (未知格式仍记录首现位置)
+            const std::vector<std::string> parts =
+                TG::SplitSegments(el.substr(1, el.size() - 2));
+            const std::string name = parts.empty() ? std::string() : parts[0];
+            if (!name.empty()) {
                 if (out.offsets.find(name) == out.offsets.end()) {
                     out.offsets[name] = cursor;               // 首现偏移
                 }
                 if (out.widths.find(name) == out.widths.end()) {
                     out.widths[name] = w;                     // 首现宽度
                 }
-                if (w != TemplateLayout::kRawMarker) out.fixedTotal += w;
             }
+            if (w != TemplateLayout::kRawMarker) out.fixedTotal += w;
         } else {
-            // hex 字面量: 非空白字符两两成字节 (与 RenderTemplate/校验器 §3.1 约定一致)
-            size_t hexChars = 0;
-            for (size_t c = 0; c < el.size(); ++c) {
-                const char ch = el[c];
-                if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r') ++hexChars;
+            // hex 字面量: 非空白字符两两成字节
+            if (st == TG::ParseOk) {
+                w = static_cast<uint32_t>(seg.literal.size());
+            } else {
+                out.hasUnknown = true;                        // 非法 hex 字面量
             }
-            w = static_cast<uint32_t>(hexChars / 2);
             out.fixedTotal += w;
         }
         if (w != TemplateLayout::kRawMarker) cursor += w;

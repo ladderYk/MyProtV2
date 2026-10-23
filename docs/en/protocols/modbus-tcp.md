@@ -477,14 +477,14 @@ mbpoll -m tcp -p 502 -a 1 -t 4 -r 5 -c 1 -1 127.0.0.1
 
 No extra config at startup — **the protocol JSON is self-describing**:
 
+- the simulation section lives at the top level of `configs/protocols/modbus-tcp.json`: `"simulation": { "listenPort": 11520, ... }` (`listenPort > 0` enables it; remove it or set 0 to disable)
 - all 8 FCs declared in `modbus-tcp.json` are **fully supported** by the simulator
 - at startup, check the log:
   ```
-  [INFO][Simulation] protocol modbus-tcp parsed: 8 operations
-  [INFO][Simulation] listening on 0.0.0.0:11520
+  [OK] 仿真器 modbus-tcp 已监听 tcp://127.0.0.1:11520
   ```
-- set the device's `connection.host` to `127.0.0.1` and `connection.port` to `11520`
-- **no third-party simulator needed** — one-stop testing of the full FC set
+- loopback-only bind; set the device's `connection.host` to `127.0.0.1` and `connection.port` to `11520`
+- **no third-party simulator needed** — one-stop testing of the full FC set; give each protocol a distinct `listenPort` to run several simulated devices at once ([ADR-0017](../../adr/0017-protocol-scoped-simulation-instances.md) *zh*)
 
 ### 5.3 Full tags.json config (**mixed FCs**)
 

@@ -26,7 +26,7 @@ scripts\build.bat      # 构建 VS2015 解决方案（MyProt.sln）
 scripts\ci.ps1         # 编译 + 运行全部可执行，强制 CI 退出码契约
 ```
 
-- 单元测试在 `tests/`（GoogleTest，vendored 于 `third_party/gtest`）。
+- 单元测试在 `tests/`（自研 `tests/MiniTest.hpp`，不依赖第三方测试框架）。
 - 端到端测试在 `src/Tests/E2EMain.cpp`（`MyProt.E2E` 独立进程）。
 
 ## 代码风格

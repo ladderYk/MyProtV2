@@ -5,8 +5,7 @@
 #
 # ── 前置条件 ──────────────────────────────────────────────────────────────
 #   1. 已编译并运行 MyProt.App (WebApi 监听 127.0.0.1:8080)。
-#      - 运行前确保 third_party 依赖齐全: cpp-httplib/httplib.h, nlohmann, openssl, spdlog
-#        (见 third_party/README.md; httplib.h 需放置到 third_party/cpp-httplib/httplib.h)
+#      - 仅依赖运行中的 MyProt.App (WebApi 为自研 HTTP/1.1, 不需要第三方 HTTP/日志库)
 #   2. 配置目录已就绪: configs/protocols/ 与 configs/tags.json。
 #      (本脚本会创建示例配置, 首次运行无需手动建)
 #   3. 若 WebApiConfig.requireAuth=true, 需设置环境变量 MYPROT_API_TOKEN。

@@ -123,12 +123,14 @@
     <ClInclude Include="include\MyProt\Gateway\ChannelManager.hpp" />
     <ClInclude Include="include\MyProt\Gateway\ProtocolGateway.hpp" />
     <ClInclude Include="include\MyProt\Gateway\ProtocolLookup.hpp" />
+    <ClInclude Include="include\MyProt\Gateway\WriteService.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\TagGrouper.cpp" />
     <ClCompile Include="src\TagReader.cpp" />
     <ClCompile Include="src\ChannelManager.cpp" />
     <ClCompile Include="src\ProtocolGateway.cpp" />
+    <ClCompile Include="src\WriteService.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Core\MyProt.Core.vcxproj">

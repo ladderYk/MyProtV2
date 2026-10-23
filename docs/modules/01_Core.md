@@ -652,20 +652,31 @@ struct VariableConfig {
     bool isDerivedLength() const { return isAuto() && strategy == "derivedLength"; }
 };
 
-/// §1.2.3 表达式引擎与占位符语法（与 [modules/02_Engine §2.1](./02_Engine.md) 衔接）
+/// §1.2.3 表达式引擎与占位符语法（完整说明见 [modules/02_Engine §2.1-2.2](./02_Engine.md)）
 ///
-/// 模板中形如 `{Name}` / `{Name:Xn}` / `{Name:raw}` / `resp[N]` / `resp[a:b]` 的字面量
-/// 由 `ExpressionEvaluator`（位于 [modules/02_Engine §2.2](./02_Engine.md)）求值。EBNF 概要：
+/// 模板中形如 `{Name}` / `{Name:Xn}` / `{Name:raw}` 的字面量由 `Engine::RequestBuilder`
+/// 展开；`resp[N]`、`resp[a:b]` 及算术/比较/逻辑表达式由 `Engine::MiniExpression`
+/// 求值——同一个解析器覆盖 validCondition / derivedLength / 握手条件。EBNF 概要：
 ///
 /// ```text
-/// expr        = term { ("+" | "-" | "<<" | ">>" | "&" | "|" | "^") term }
-/// term        = factor { ("*" | "/" | "%") factor }
-/// factor      = number | placeholder | slice | "(" expr ")"
+/// expression  = logical_or
+/// logical_or  = logical_and { "||" logical_and }
+/// logical_and = bit_or { "&&" bit_or }
+/// bit_or      = bit_xor { "|" bit_xor }
+/// bit_xor     = bit_and { "^" bit_and }
+/// bit_and     = equality { "&" equality }
+/// equality    = relational { ("==" | "!=") relational }
+/// relational  = shift { ("<" | ">" | "<=" | ">=") shift }
+/// shift       = additive { ("<<" | ">>") additive }
+/// additive    = term { ("+" | "-") term }
+/// term        = unary { ("*" | "/" | "%") unary }
+/// unary       = ("!" | "-" | "~") unary | primary
+/// primary     = number | hex | placeholder | resp_ref | "(" expression ")"
 /// placeholder = "{" name [":" format] "}"
 /// format      = "X" digit+       // 定宽 hex
 ///              | "raw"            // 变长字节 (P1 A)
 ///              | (缺省)           // 默认 hex/ASCII 视 name 类别
-/// slice       = "resp[" [int] [":" [int]] "]"
+/// resp_ref    = "resp[" [int] [":" [int]] "]"
 /// name        = identifier (字母/数字/下划线, 首字符非数字)
 /// ```
 ///
@@ -683,7 +694,8 @@ struct VariableConfig {
 /// - `resp[5:9]` → 字节切片（4 字节），用于 `sessionExtractExpr` 提取 SessionID
 /// - `resp[]` → 整帧（仅供 `validCondition` 使用，不作占位符）
 ///
-/// **优先级**：EBNF 已对齐 C 语言优先级（`* / %` 高于 `+ -` 高于 `<< >>` 高于 `&` 高于 `^` 高于 `|`）。
+/// **优先级**：已对齐 C 语言（从松到紧：`||` < `&&` < `|` < `^` < `&` < `== !=` <
+/// `< > <= >=` < `<< >>` < `+ -` < `* / %` < 一元 `! - ~`）。
 /// 表达式求值**不**支持函数调用 / 浮点（仅整数算术）；需要复杂计算时由协议作者的 calc 内置
 /// 函数在写路径处理（详见 §1.2.4）。
 ///
@@ -884,8 +896,8 @@ struct ResilienceConfig {
 /// 管理面安全 (Config_Schema §12 / ADR-0008)。ConfigRoot 顶层可选块; nullopt = 全取默认。
 struct WebApiConfig {
     std::string bindAddress = "127.0.0.1";  // 监听地址; 默认仅环回, 远程管理需显式改 0.0.0.0
-    std::string certFile;                   // TLS 证书; 与 keyFile 齐备即启用 httplib::SSLServer
-    std::string keyFile;                    // TLS 私钥; 与 certFile 齐备即启用 TLS
+    std::string certFile;                   // TLS 证书 (预留); v1 为明文 HTTP, 字段仅参与成对校验
+    std::string keyFile;                    // TLS 私钥 (预留); 仅与 certFile 成对校验
     bool requireAuth = false;               // true 时 token 缺失即启动 Fail-Fast (生产建议 true)
     int rateLimitRps = 5;                   // 敏感端点令牌桶每秒速率
     int rateLimitBurst = 10;                // 令牌桶突发上限, 超限 429
@@ -1897,7 +1909,7 @@ v1.setValueChanged(true);
 > | 机制层 | §1.5~1.12 | Optional 契约 / ByteView 契约 / 日志 / ConfigLoader / Trace / 类型转换 / 并发 / 版本 |
 >
 > **跨文档引用**：
-> - Engine（02_Engine.md）实现 `ResponseParser::Parse`（含 `FromBytesU16/U32/U64` 装配，v1 撤回 A2 独立 `ConvertToFinalType` 工具函数）/ `ExpressionEvaluator` / `RequestBuilder`
+> - Engine（02_Engine.md）实现 `ResponseParser::Parse`（含 `FromBytesU16/U32/U64` 装配，v1 撤回 A2 独立 `ConvertToFinalType` 工具函数）/ `MiniExpression` / `RequestBuilder`
 > - Transport（03_Transport.md）实现 `IChannel` 派发
 > - Gateway（05_Gateway.md）实现 `TagReader` / 写路径
 > - WebApi（07_WebApi.md）实现 `Error → HTTP` 映射

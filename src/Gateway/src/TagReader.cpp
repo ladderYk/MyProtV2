@@ -88,7 +88,7 @@ void ResolveAutoIncrementParameters(
 } // namespace
 
 /// hex 字符串 (可能含空格/制表符分隔) → 实际字节数
-/// WriteViaGateway 编码时每字节 3 字符 "XX ", 直接 (size+1)/2 会高估 50%
+/// WriteService 编码时每字节 3 字符 "XX ", 直接 (size+1)/2 会高估 50%
 std::size_t HexByteCount(const std::string& s) {
     std::size_t hexChars = 0;
     for (std::size_t i = 0; i < s.size(); ++i) {

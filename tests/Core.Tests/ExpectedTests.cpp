@@ -1,5 +1,5 @@
-// tests/Core.Tests/ExpectedTests.cpp — Expected<T> 单元测试占位
-// 测试框架: GoogleTest 1.8.x (VS2015 兼容, ADR-0010 §4)
+// tests/Core.Tests/ExpectedTests.cpp — Expected<T> 单元测试
+// 测试框架: 自研 MiniTest (tests/MiniTest.hpp, ADR-0013)
 
 #include "MyProt/Core/Expected.hpp"
 #include "MiniTest.hpp"

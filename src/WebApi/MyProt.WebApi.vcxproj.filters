@@ -24,6 +24,9 @@
     <ClInclude Include="include\MyProt\WebApi\WebApiServer.hpp">
       <Filter>Header Files\include_MyProt_WebApi</Filter>
     </ClInclude>
+    <ClInclude Include="include\MyProt\WebApi\RouteTable.hpp">
+      <Filter>Header Files\include_MyProt_WebApi</Filter>
+    </ClInclude>
     <ClInclude Include="include\MyProt\WebApi\AuthMiddleware.hpp">
       <Filter>Header Files\include_MyProt_WebApi</Filter>
     </ClInclude>

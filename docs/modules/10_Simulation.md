@@ -21,6 +21,8 @@
 
 报文格式知识（字节布局、长度字段、校验位置）全部来自协议配置，仿真器代码对任意自描述协议零硬编码——新增协议只需改 JSON，仿真器自动可用（前提：`simulation.listenPort > 0` 且声明了对应操作的仿真行为）。
 
+**实例来源（成对关系）**：`SimulationConfig` 来自 [`ProtocolConfig.simulation`](../Config_Schema.md#26-simulationconfig协议级仿真实例)（`protocols/*.json` 顶层），一个协议对应一个仿真实例；多个协议各自写不同端口即可在同一进程运行多个仿真设备。`server.json` 的同名段仅为旧配置回退：仅当没有任何协议启用仿真时，才以 0 号协议（文件名字典序）启动一个实例（[ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md)）。
+
 ## 10.2 目录结构（实际实现）
 
 ```
@@ -131,11 +133,14 @@ public:
 // src/Simulation/include/MyProt/Simulation/SimulationServer.hpp
 class SimulationServer {
 public:
-    /// protocol 须在服务器生命周期内保持有效 (App protoStore 保证, 含 reload 联动)
-    /// simOverride 来自 ServerConfig.simulation (server.json)
+    /// protocol 指向当前代 RuntimeSnapshot 内的协议元素: 别名 shared_ptr 保活整代快照,
+    /// 热重载整代替换时旧代仍活到本服务器 Stop() (无悬垂引用, ADR-0014)
+    /// sim 来自 protocol->simulation (协议级实例), 按值拷贝;
+    /// 仅 legacy 回退路径传入 ServerConfig.simulation
     /// 自持独立 io_context + 全异步 accept/read; Stop() 通过 io.stop() 即刻唤醒
-    explicit SimulationServer(const Core::ProtocolConfig& protocol,
-                              const Core::SimulationConfig& simOverride);
+    explicit SimulationServer(
+        const std::shared_ptr<const Core::ProtocolConfig>& protocol,
+        const Core::SimulationConfig& simOverride);
 
     SimulationDataStore& Store();                 // 给 WebApi 直接读写数据区
     std::uint16_t ListenPort() const;             // Start 成功后有效; 0 = 未启动
@@ -151,11 +156,20 @@ private:
         Core::SimOperationConfig cfg;             // simulation.operations 条目
         ResponseSynthesizer::Spec spec;           // 应答规格 (预解析缓存)
     };
+    std::shared_ptr<const Core::ProtocolConfig> _protocol;  // 整代快照保活
+    Core::SimulationConfig _sim;                             // 所属协议 simulation 段副本
     TemplateMatcher _matcher;
     SimulationDataStore _store;
     std::map<std::string, SimPlan> _plans;        // sim 声明操作的执行计划
 };
 ```
+
+**多实例装配（ADR-0017）**：`ApplyRuntimeSync` 逐协议扫描 `simulation.listenPort > 0`，为每个命中的协议创建一个 `SimulationServer`，以协议名登记到 `SimServerMap`。因此“增加仿真设备”= 在目标 `protocols/*.json` 写 `simulation` 段，无需新增进程或复制配置目录。
+
+- 每个实例拥有独立数据区（`registerCount` / `initialValues` 互不干扰）与独立监听端口，仅绑定环回地址；
+- 同一端口不得被两个实例占用：端口冲突在停止旧实例**之前**拒绝并返回 `ConfigError`，旧运行态保持不变（配合 `ConfigStore` 回滚）；
+- 两者同时配置时协议级优先，`server.json simulation` 被忽略并打印 `[WARN]`；后者仅在无任何协议启用仿真时承载 0 号协议；
+- `/api/sim/status` 列出实际运行的全部实例；用未承载的协议名请求 `?proto=` 会得到 `404 无此仿真协议`。
 
 **静默失败语义**（调试须知）：以下情形一律**不应答直接返回**，客户端读超时即故障信号——
 

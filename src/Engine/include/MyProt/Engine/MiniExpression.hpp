@@ -1,6 +1,7 @@
 // src/Engine/include/MyProt/Engine/MiniExpression.hpp
 // Minimal arithmetic + condition expression evaluator (zero dependency)
 //   Arithmetic: numbers (10/0x1F), variable names, + - * / % & | ^ ~ ( ), unary +/-/~
+//   Shifts (v1.29): << >> — same precedence as C (looser than +/-, tighter than comparisons)
 //   Condition (v1.28): == != > < >= <= && || ! and resp[N] response-byte indexing
 //     — comparison/logical nodes evaluate to 0/1; resp[N] resolves via the VarLookup
 //       callback using the canonical name "resp[<index>]" (index may itself be an expression).
@@ -40,6 +41,7 @@ struct Node {
     std::string text;   // for Var
     uint64_t num = 0;   // for Num
     char op = 0;        // Unary: '-','~','!'  |  Binary arithmetic: '+','-','*','/','%','&','|','^'
+                        // Binary shift: 's' (<<)  'S' (>>)
                         // Binary condition (single-char codes, no collision with the above):
                         //   '=' (==)  'n' (!=)  '>'  '<'  'G' (>=)  'L' (<=)  'A' (&&)  'O' (||)
     std::unique_ptr<Node> lhs, rhs;  // Resp: lhs holds the index expression
@@ -67,9 +69,9 @@ private:
     std::unique_ptr<Node> root_;
 
     // Parser (recursive descent)
-    // Precedence low→high: Or || → And && → Equality ==/!= → Relational >/</>=/<=
-    //                       → Expr +/- → Term */% → BitOr | → BitXor ^ → BitAnd &
-    //                       → Unary (prefix) → Primary
+    // Precedence low→high (C-aligned, ADR-0003 KI-13): Or || → And && → BitOr | → BitXor ^
+    //                       → BitAnd & → Equality ==/!= → Relational >/</>=/<= → Shift << >>
+    //                       → Expr +/- → Term */% → Unary (prefix) → Primary
     void SkipWs();
     bool Peek(char c);
     bool Consume(char c);
@@ -77,6 +79,7 @@ private:
     std::unique_ptr<Node> ParseAnd();        // &&
     std::unique_ptr<Node> ParseEquality();   // == !=
     std::unique_ptr<Node> ParseRelational(); // > < >= <=
+    std::unique_ptr<Node> ParseShift();      // << >>
     std::unique_ptr<Node> ParseExpr();       // + -
     std::unique_ptr<Node> ParseTerm();       // * / %
     std::unique_ptr<Node> ParseBitOr();      // |

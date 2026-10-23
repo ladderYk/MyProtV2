@@ -32,12 +32,13 @@ namespace MyProt { namespace Simulation {
 
 class SimulationServer {
 public:
-    /// protocol must remain valid for the server's lifetime; simOverride must come from ServerConfig.simulation
-        /// (parsed from server.json, decoupled from ProtocolConfig).
-    /// Note: no longer shares an external io_context - the server owns its own io_context running on a dedicated thread,
-    /// guaranteeing that Stop()'s cross-thread io.stop() takes effect immediately (fixes hot-reload hang, see the KI registry).
-    explicit SimulationServer(const Core::ProtocolConfig& protocol,
-                              const Core::SimulationConfig& simOverride);
+    /// protocol 以 shared_ptr 保活 (通常为 RuntimeSnapshot 内的别名指针); simOverride 按值拷贝。
+    /// 此前持 const& 指向 ApplyRuntimeSync 内的局部对象, 热重载后即悬垂。
+    /// 注: 不再共享外部 io_context — 服务器自持 io_context 并跑在专用线程,
+    /// 保证 Stop() 的跨线程 io.stop() 立即生效 (修复热重载卡死, 见 KI 登记表)。
+    explicit SimulationServer(
+        const std::shared_ptr<const Core::ProtocolConfig>& protocol,
+        const Core::SimulationConfig& simOverride);
     ~SimulationServer();
 
     SimulationDataStore& Store() { return _store; }
@@ -72,8 +73,8 @@ private:
     std::size_t TryExtractFrame(std::vector<std::uint8_t>& buf,
                                 std::vector<std::uint8_t>& frame) const;
 
-    const Core::ProtocolConfig& _protocol;
-        const Core::SimulationConfig& _sim;  // references the externally passed sim (server.json)
+    std::shared_ptr<const Core::ProtocolConfig> _protocol;  ///< 保活其所属快照
+    Core::SimulationConfig _sim;                            ///< 值拷贝 (server.json 的 simulation 段)
     TemplateMatcher _matcher;
     SimulationDataStore _store;
     std::map<std::string, SimPlan> _plans;              ///< execution plans for the operations declared in sim

@@ -1,4 +1,4 @@
-// src/Service/src/FrameConsistencyCheck.cpp
+// src/Service/src/TrialRenderer.cpp
 // 保存期试算校验 (ADR-0012 §2) — 对含 {Name:raw} 载荷的写操作以真实管线试渲染一帧:
 //   1) 派生长度 expr 可解性: 求值失败/引用未知变量 → 错误 (封堵运行时静默 0 值路径,
 //      即自检 known=false → continue 的缺口 A);

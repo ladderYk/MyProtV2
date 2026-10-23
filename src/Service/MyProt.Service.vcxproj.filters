@@ -36,15 +36,27 @@
     <ClInclude Include="include\MyProt\Service\ValidationIssue.hpp">
       <Filter>Header Files\include_MyProt_Service</Filter>
     </ClInclude>
+    <ClInclude Include="src\ConfigInternals.hpp">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\ConfigStore.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
-    <ClCompile Include="src\FrameConsistencyCheck.cpp">
+    <ClCompile Include="src\TrialRenderer.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="src\ConfigDeepValidator.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ProtocolJsonParser.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SchemaChecker.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SemanticChecker.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="src\SchemaRegistry.cpp">

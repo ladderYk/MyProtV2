@@ -16,10 +16,10 @@
 
 | 头文件 | 内容 |
 |--------|------|
-| `ExpressionEvaluator.hpp` | 表达式求值器（递归下降）|
-| `RequestBuilder.hpp` | 请求模板展开器 |
+| `MiniExpression.hpp` | 统一表达式引擎（`validCondition` / `derivedLength` / 握手条件 / 会话提取），加载期与运行时同一解析器 |
+| `RequestBuilder.hpp` | 请求模板展开、模板布局与派生长度注入 |
+| `AutoComputeProvider.hpp` | `source=auto` 变量求值（autoIncrement / frameSlice / expr / crc） |
 | `ResponseParser.hpp` | 响应校验、数据提取、字节序裁决 |
-| `AutoIncrementProvider.hpp` | `{Name:auto:Xn}` 自增计数器 |
 
 ## 2.1 表达式语法 (EBNF)
 
@@ -58,36 +58,43 @@ HEX_NUM       := "0x" [0-9a-fA-F]+
 "resp[4]*256+resp[5]"              // 双字节拼出长度
 ```
 
-## 2.2 ExpressionEvaluator — 递归下降求值器
+## 2.2 MiniExpression — 统一表达式引擎
+
+> **2026-10 统一**：原 `ExpressionEvaluator`（握手条件 / 会话提取）已删除。
+> 握手条件、`sessionExtractExpr` 的整数回退、`validCondition`、`derivedLength`
+> 现在共用同一个递归下降解析器与同一套优先级（§2.1）。
 
 ```cpp
-// src/Engine/include/MyProt/Engine/ExpressionEvaluator.hpp
+// src/Engine/include/MyProt/Engine/MiniExpression.hpp
 
-namespace MyProt { namespace Engine {
+namespace MyProt { namespace Engine { namespace MiniExpression {
 
-/// 表达式求值器
-/// 支持 resp[N] 字节引用, resp[A:B] 切片, 比较运算, 算术/逻辑运算
-class ExpressionEvaluator {
+class Error : public std::runtime_error { /* ... */ };
+
+/// 变量查找回调: 未找到时 found=false
+using VarLookup = std::function<uint64_t(const std::string&, bool& found)>;
+
+class Parser {
 public:
-    /// 求值条件表达式 (如 "resp[7] == 0x03")，用于 validCondition
-    Core::Expected<bool> EvaluateCondition(
-        const std::string& expr,
-        Core::ByteView response);
-
-    /// 求值长度表达式 (如 "resp[2]")，用于 dataLengthExpr
-    Core::Expected<int> EvaluateLength(
-        const std::string& expr,
-        Core::ByteView response);
-
-private:
-    // 词法: Tokenize 产出 Token 流 (Number / RespIndex / RespRange / 括号 / 运算符)
-    // 语法: 递归下降, 每优先级一个 ParseXxx 方法, 返回 int64_t (布尔非零 = true)
+    explicit Parser(const std::string& expr);
+    void Parse();                          // 语法错误抛 Error
+    uint64_t Evaluate(const VarLookup& lookup) const;
+    bool IsParsed() const;
 };
 
-}} // namespace MyProt { namespace Engine
+}}} // namespace MyProt::Engine::MiniExpression
 ```
 
-实现要点：词法分析产出 Token 流后由逐级下降的 `ParseOr → ... → ParsePrimary` 求值，优先级结构与 §2.1 EBNF 一一对应；越界索引、除零、非法 token 均返回解析错误。
+实现要点：
+
+- 优先级链与 §2.1 EBNF 一一对应：
+  `Or → And → BitOr → BitXor → BitAnd → Equality → Relational → Shift → Expr → Term → Unary → Primary`；
+- `resp[N]` 以规范名 `"resp[<index>]"` 回调 `VarLookup`（索引本身可为表达式），
+  由调用方负责越界检查——`ChannelManager` 越界即视为变量未找到；
+- `resp[A:B]` 切片不进入通用表达式，握手/会话提取路径单独处理；
+- `{name:len}` 由 `ParseLenToken` 解析，`AutoComputeProvider` 提供字节宽度表；
+- 解析/求值失败（未知变量、除零、非法 token）抛 `Error`，调用方转换为
+  `Expected` 或 `InvalidResponse` 质量码。
 
 ## 2.3 RequestBuilder — 模板展开
 
@@ -101,18 +108,29 @@ namespace MyProt { namespace Engine {
 /// 模板片段语法定义:
 ///   "0A1B"             → 十六进制字面量 (每 2 字符 = 1 字节)
 ///   "{Name:X4}"        → 变量为 4 位十六进制 (= 2 字节) 大端输出
-///   "{Name:auto:X2}"   → AutoIncrementProvider 自增计数 (Xn 即 n/2 字节)
+///   "{Name:raw}"       → 变长字节流直插 (写载荷)
+///   注: 是否走 auto 由 inputs.source=auto 声明驱动，模板不接受 `:auto:` 令牌
 class RequestBuilder {
 public:
-    /// 展开操作模板生成请求字节流
+    /// 展开操作模板生成请求字节流 (标量变量路径)
     /// @param op 操作配置 (requestTemplate 为模板片段序列)
     /// @param variables 标签变量集 ({ "StartAddress": 0, ... })
-    /// @param autoProvider 自增计数器 (供 {Name:auto:Xn} 使用)
+    /// @param varAliasMap 变量别名映射 (alias -> internal name)
+    /// @param autoProvider 声明式 auto 求值器
     /// @return 请求字节流，失败返回 BuildError
     Core::Expected<Core::Bytes> Build(
         const Core::OperationConfig& op,
         const std::unordered_map<std::string, uint32_t>& variables,
-        AutoIncrementProvider& autoProvider);
+        const std::unordered_map<std::string, std::string>& varAliasMap,
+        AutoComputeProvider& autoProvider);
+
+    /// 变长载荷路径: {Name:raw} 从 variableBytesHex 取字节流
+    Core::Expected<Core::Bytes> BuildBytes(
+        const Core::OperationConfig& op,
+        const std::unordered_map<std::string, uint32_t>& variables,
+        const std::unordered_map<std::string, std::string>& variableBytesHex,
+        const std::unordered_map<std::string, std::string>& varAliasMap,
+        AutoComputeProvider& autoProvider);
 };
 
 }} // namespace MyProt { namespace Engine
@@ -120,29 +138,27 @@ public:
 
 > **v1 边界**：构建器为单遍处理，仅支持上述三种片段。`{L:calc:Xn}` 等 calc 占位符**未实现**——模板中出现即报 `BuildError`（校验器规则 7 "使用未声明函数"，E2E 有对应断言）。长度字段由标签变量直接给出（如 Modbus TCP 用 `RegisterCount` 配合批量合并逻辑）。
 
-## 2.4 AutoIncrementProvider — 自增计数
+## 2.4 AutoComputeProvider — 声明式自动求值
 
 ```cpp
-// src/Engine/include/MyProt/Engine/AutoIncrementProvider.hpp
+// src/Engine/include/MyProt/Engine/AutoComputeProvider.hpp
 
 namespace MyProt { namespace Engine {
 
-/// 全引擎共享的原子自增计数器 (std::mutex 保护)
-/// 每个计数器名独立维护, 按格式宽度取模 (X2→mod 256, X4→mod 65536, ...)
-class AutoIncrementProvider {
+/// 由协议 JSON inputs.source=auto 声明驱动
+/// 策略: autoIncrement / frameSlice / expr / crc
+class AutoComputeProvider {
 public:
-    uint64_t Next(const std::string& name, int byteWidth);  // 取下一个, mod 2^(8*byteWidth)
-    void Reset(const std::string& name);                    // 重置指定计数器 (测试用)
-    void ResetAll();
-private:
-    std::unordered_map<std::string, uint64_t> _counters;
-    std::mutex _mutex;
+    bool DeclareJson(const std::string& autoComputeJson);
+    uint64_t Resolve(const std::string& name, int byteWidth, const BuildContext& ctx);
+    void Reset(const std::string& name);
 };
 
 }} // namespace MyProt { namespace Engine
 ```
 
 调用方（Gateway 单读 / 批量读 / 写路径）共享同一实例，保证同设备事务 ID 全链路唯一递增。
+`derivedLength` 不走本类：它在参数层由 `RequestBuilder::InjectDerivedLengthVariables` 预算后注入变量池。
 
 ## 2.5 ResponseParser — 响应解析
 
@@ -152,7 +168,7 @@ private:
 namespace MyProt { namespace Engine {
 
 /// 解析流程:
-///   1. validCondition 校验 (支持 "resp[N]==V", V 为十进制或 0x 十六进制)
+///   1. validCondition 校验 (MiniExpression 驱动，支持 resp[N] 与比较/逻辑组合)
 ///   2. dataStartIndex 定位数据区
 ///   3. registerCount×2 字节 (不足则取剩余全量) 按 finalType 转换
 ///   4. 产出 TagValue (quality=Good, timestamp=now)

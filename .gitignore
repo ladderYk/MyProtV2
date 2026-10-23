@@ -78,6 +78,7 @@ mb_probe.ps1
 .codeartsdoer/
 .trae/
 .trae-html-share-packages/
+.uitest/
 out_app.log
 err_app.log
 build.log

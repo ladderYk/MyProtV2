@@ -36,7 +36,7 @@ Open `MyProt.sln` in Visual Studio 2015 to develop. The output lands in `build/`
 scripts\ci.ps1         # compile + run all executables, enforces the CI exit-code contract
 ```
 
-- Unit tests live under `tests/` (GoogleTest, vendored in `third_party/gtest`).
+- Unit tests live under `tests/` (in-house `tests/MiniTest.hpp`, no third-party test framework).
 - End-to-end tests live in `src/Tests/E2EMain.cpp` (the `MyProt.E2E` process).
 
 ## Code style

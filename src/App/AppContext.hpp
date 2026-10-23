@@ -16,6 +16,7 @@
 #include <asio.hpp>
 
 #include "MyProt/Core/Config.hpp"
+#include "MyProt/Core/RuntimeSnapshot.hpp"
 #include "MyProt/Gateway/ProtocolGateway.hpp"
 #include "MyProt/Polling/PollingEngine.hpp"
 #include "MyProt/Polling/LatestValueStore.hpp"
@@ -41,20 +42,16 @@ struct HttpRequest {
 };
 
 /// Runtime-state aggregate - shared by production RunProduction and the E2E test isomorphic assembly.
-/// Aggregate initialization order: io, gateway, engine, startEngine, protos, devices,
-///                 tags, latest, sims, simOwners, protoStore, store
+/// Aggregate initialization order: io, gateway, engine, startEngine, snapshot, latest, sims, simOwners, store
 struct AppContext {
     asio::io_context* io;              // write-path post / engine re-assembly dispatch
     Gateway::ProtocolGateway* gateway;
     Polling::PollingEngine* engine;
     EngineStarter startEngine;         // called by ApplyRuntimeSync after re-assembly completes
-    std::shared_ptr<std::vector<Core::ProtocolConfig> > protos;    // lookup data source
-    std::shared_ptr<std::vector<Core::DeviceConfig> > devices;     // factory data source
-    std::shared_ptr<std::vector<Core::TagDefinition> > tags;       // read on the io thread by the write path
+    Core::RuntimeSnapshotHolder* snapshot;  // current config generation (protocols/devices/tags/server)
     Polling::LatestValueStore* latest;
     SimServerMap* sims;
     std::vector<std::unique_ptr<Simulation::SimulationServer> >* simOwners;
-    std::vector<Core::ProtocolConfig>* protoStore;  // storage backing referenced by SimulationServer
     Service::ConfigStore* store;                    // management-plane read/write service
 };
 

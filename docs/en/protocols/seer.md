@@ -281,7 +281,7 @@ Tag-side examples:
 |------|------|------|
 | template text-line primitive (`$"..."`, `$(Var)` substitution) | unsupported; the body must be hex-encoded | [ROADMAP](../../ROADMAP.md) *zh* (P2, pending review) |
 | response JSON → numeric decode | unsupported; the value is a hex string | same as above (can be designed together with the primitive) |
-| built-in simulator | **not applicable to SEER**: the simulator takes only the 0th protocol in the list + a register data model (see [s7-1200.md §6.2](./s7-1200.md#62-three-choices-for-the-controlled-end)) | for integration use a real device or a self-built stub |
+| built-in simulator | **not applicable to SEER**: simulators are enabled per protocol (a `simulation` section in `seer.json`), but the data model is a register array and the body needs JSON/hex packing (see [s7-1200.md §6.2](./s7-1200.md#62-three-choices-for-the-controlled-end)) | for integration use a real device or a self-built stub |
 | error-code parsing | judges only `resp[0]`, does not parse business error fields | add `validCondition` per the manual when needed |
 
 ---

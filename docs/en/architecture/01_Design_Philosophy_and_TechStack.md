@@ -47,7 +47,7 @@
 | TLS | OpenSSL | 1.1.1 line | Reserved (introduced when the TlsChannel stub / management-plane TLS is enabled); prebuilt libs shipped in-package or customer-supplied |
 | Error handling | hand-written `Expected<T>` | Core header-only | Replaces tl::expected (VS2015 compile risk) |
 | Config reload | `ConfigStore` explicit reload | Service module | No file watching introduced; triggered by PUT /api/config, POST /api/config/reload |
-| Testing | in-house E2E suite (`src/Tests/E2EMain.cpp`) + GoogleTest unit tests | MyProt.E2E standalone process / tests/ | E2E shares the RuntimeGlue assembly with production; Mocks are hand-written fakes (trompeloeil removed) |
+| Testing | in-house E2E suite (`src/Tests/E2EMain.cpp`) + in-house MiniTest unit tests | MyProt.E2E standalone process / tests/ | E2E shares the RuntimeGlue assembly with production; unit tests need no external framework (MiniTest.hpp); Mocks are hand-written fakes (trompeloeil removed) |
 | Performance testing | google-benchmark | **not introduced** | Currently unit tests only |
 
 ---

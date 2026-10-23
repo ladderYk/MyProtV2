@@ -117,10 +117,10 @@
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemDefinitionGroup>
-  <!-- Header-only 库: 头文件供 IDE 浏览; 含一个空 .cpp 翻译单元 (MyProt.Core.ForceLib.cpp)
-       让 MSBuild 产出 .lib, 供下游 7 个模块 link。删 .cpp 即断 link。 -->
+  <!-- Core 以 header-only 为主; 非内联实现 (模板文法) 编入 .lib, 供下游 7 个模块 link。 -->
   <ItemGroup>
     <ClCompile Include="src\MyProt.Core.ForceLib.cpp" />
+    <ClCompile Include="src\TemplateGrammar.cpp" />
     <ClInclude Include="include\MyProt\Core\Expected.hpp" />
     <ClInclude Include="include\MyProt\Core\ByteView.hpp" />
     <ClInclude Include="include\MyProt\Core\ByteOrder.hpp" />
@@ -129,6 +129,8 @@
     <ClInclude Include="include\MyProt\Core\Value.hpp" />
     <ClInclude Include="include\MyProt\Core\Log.hpp" />
     <ClInclude Include="include\MyProt\Core\Metrics.hpp" />
+    <ClInclude Include="include\MyProt\Core\RuntimeSnapshot.hpp" />
+    <ClInclude Include="include\MyProt\Core\TemplateGrammar.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

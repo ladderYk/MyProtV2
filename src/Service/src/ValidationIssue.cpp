@@ -93,7 +93,7 @@ struct Rule {
 /// 注: [webApi] 段消息属全局 schema 域, 不经 protocols|tags 域校验, 故**有意不建规则**
 ///   (规则表宁缺勿假: 建了也永远不会命中)。
 const Rule kRules[] = {
-    // ── 成帧类 (ADR-0012 §2 试算, FrameConsistencyCheck.cpp) ──
+    // ── 成帧类 (ADR-0012 §2 试算, TrialRenderer.cpp) ──
     { "frame.length_consistency", "protocol",
       "帧长一致性失败|短于长度槽位要求",
       "操作 ", "operations.{subject}.requestTemplate" },

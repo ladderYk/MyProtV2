@@ -65,94 +65,154 @@ std::string QueryParam(const std::string& path, const std::string& key) {
 }
 
     // ── reload 运行时联动 — 生产与 E2E 共用同一代码路径 (首次装配亦走此入口) ──
-    // 重新加载配置目录 → 全停重建仿真器 (simulation.listenPort > 0) → 清空实时快照
-    // → post 到 io 线程重装配轮询引擎 (tags/devices 变更生效)。
+    // 重新加载配置目录 → 构建新一代不可变 RuntimeSnapshot → 全停重建仿真器
+    // (simulation.listenPort > 0) → 清空实时快照 → post 到 io 线程发布快照并
+    // 重装配轮询引擎 (tags/devices 变更生效)。
     // 新配置非法时保持旧运行态并返回错误 (配合 ConfigStore.Save 的自动回滚)。
     // 线程说明: 引擎重装配投递到 io 线程与 in-flight 回调串行执行; 旧代组复活
     // 由 PollingEngine 代际号防护 (ScheduleNext/OnTimerFire 校验 generation)。
-    // 注意: SimulationServer 持有 ProtocolConfig 引用, 故新配置必须存入调用方
-    // 持有的 protoStore (函数局部 fresh 返回即销毁)。
+    // 配置副本: 全程仅一份 (RuntimeSnapshot) — 仿真器/写路径/轮询装配共享同一快照,
+    // 不再有 protos / protoStore / LoadedConfig 三份同时存活的副本。
     MyProt::Core::VoidExpected ApplyRuntimeSync(
             const std::string& configDir,
             AppContext& ctx,
             std::ostream* log) {
         asio::io_context& io = *ctx.io;
-        const std::shared_ptr<std::vector<MyProt::Core::ProtocolConfig> >&
-            protosPtr = ctx.protos;
-        const std::shared_ptr<std::vector<MyProt::Core::DeviceConfig> >&
-            devicesPtr = ctx.devices;
-        const std::shared_ptr<std::vector<MyProt::Core::TagDefinition> >&
-            tagsPtr = ctx.tags;
         MyProt::Gateway::ProtocolGateway& gateway = *ctx.gateway;
         MyProt::Polling::PollingEngine& engine = *ctx.engine;
         const EngineStarter& startEngine = ctx.startEngine;
+        MyProt::Core::RuntimeSnapshotHolder& snapshotHolder = *ctx.snapshot;
         SimServerMap& sims = *ctx.sims;
         std::vector<std::unique_ptr<MyProt::Simulation::SimulationServer> >&
             owners = *ctx.simOwners;
         MyProt::Polling::LatestValueStore& latest = *ctx.latest;
-        std::vector<MyProt::Core::ProtocolConfig>& protoStore = *ctx.protoStore;
-        const MyProt::Core::Expected<MyProt::Service::LoadedConfig> fresh =
+        MyProt::Core::Expected<MyProt::Service::LoadedConfig> fresh =
             MyProt::Service::ConfigDirectoryLoader::Load(configDir, MyProt::Core::kSupportedSchemaVersion);
         if (!fresh.has_value()) {
             return MyProt::Core::Unexpected(MyProt::Core::Error::Code::ConfigError,
                                             "重载失败: " + fresh.error().message);
         }
 
-        // 1. 全停旧仿真器 (先停再换数据, 析构顺序安全)
-        for (size_t i = 0; i < owners.size(); ++i) owners[i]->Stop();
-        owners.clear();
-        sims.clear();
+        // 1. 构建新一代快照 — 加载产物直接移入, 不再复制
+        //    注意: 此处先不停止旧仿真器/不发布新快照, 以便后续校验失败时
+        //    运行态完整保留 (ConfigStore 回滚语义)。
+        std::shared_ptr<MyProt::Core::RuntimeSnapshot> snap(
+            new MyProt::Core::RuntimeSnapshot());
+        snap->protocols = std::move(fresh.value().protocols);
+        snap->devices = std::move(fresh.value().root.devices);
+        snap->tags = std::move(fresh.value().root.tags);
+        snap->resilience = fresh.value().root.resilience;
+        snap->server = std::move(fresh.value().server);
+        const MyProt::Core::RuntimeSnapshotPtr snapshot = snap;
 
-        // 2. 新配置落入调用方持有的容器, 再据此重建仿真器
-        // simulation 段在 ServerConfig (server.json), 不在 ProtocolConfig.
-        // 多协议共享同一 ServerConfig.simulation — listenPort 即"是否启用的开关".
-        protoStore = fresh.value().protocols;
-        const MyProt::Core::ServerConfig& svr = fresh.value().server;
-        if (svr.simulation.listenPort > 0) {
-            if (protoStore.empty()) {
-                if (log)
-                    *log << "[WARN] server.json 启用仿真但无协议文件 (protocols/ 为空), 跳过" << std::endl;
-            } else {
-                // 取 0 号协议作为仿真器语法依据 (operation 名空间);
-                // server.json 的 operations map 决定行为, 协议层只贡献"名字".
-                const MyProt::Core::ProtocolConfig& p = protoStore[0];
-                std::unique_ptr<MyProt::Simulation::SimulationServer> sim(
-                    new MyProt::Simulation::SimulationServer(p, svr.simulation));
-                std::string err;
-                if (sim->Start(err)) {
-                    if (log)
-                        *log << "[OK] 仿真器 " << p.protocolName
-                             << " 已监听 tcp://127.0.0.1:" << svr.simulation.listenPort
-                             << std::endl;
-                    sims[p.protocolName] = sim.get();
-                    owners.push_back(std::move(sim));
-                } else if (log) {
-                    *log << "[WARN] 仿真器 " << p.protocolName
-                         << " 启动失败: " << err << std::endl;
-                }
+        // 2. 仿真器 — 协议级 simulation 优先: 每个启用的协议各启动一个实例,
+        //    因而"增加仿真设备"= 在对应 protocols/*.json 写 simulation.listenPort.
+        //    没有任何协议启用时, 回退 server.json 的旧单实例配置 (承载 0 号协议).
+        struct SimBinding {
+            const MyProt::Core::ProtocolConfig* proto;
+            const MyProt::Core::SimulationConfig* sim;
+        };
+        std::vector<SimBinding> simBindings;
+        for (size_t i = 0; i < snapshot->protocols.size(); ++i) {
+            if (snapshot->protocols[i].simulation.listenPort > 0) {
+                SimBinding b;
+                b.proto = &snapshot->protocols[i];
+                b.sim = &snapshot->protocols[i].simulation;
+                simBindings.push_back(b);
             }
         }
 
-        // 3. 清空实时快照 — 旧标签集数据作废, 由引擎按新一轮轮询重新积累
+        const bool globalSimEnabled =
+            snapshot->server.simulation.listenPort > 0;
+        if (!simBindings.empty()) {
+            if (globalSimEnabled && log) {
+                *log << "[WARN] 已启用协议级仿真, 忽略 server.json simulation"
+                     << " (listenPort=" << snapshot->server.simulation.listenPort
+                     << ")" << std::endl;
+            }
+        } else if (globalSimEnabled) {
+            if (snapshot->protocols.empty()) {
+                if (log)
+                    *log << "[WARN] server.json 启用仿真但无协议文件 (protocols/ 为空), 跳过" << std::endl;
+            } else {
+                // 旧单实例回退: 只能承载 0 号协议; 多协议时明确提示迁移方式.
+                if (snapshot->protocols.size() > 1 && log) {
+                    *log << "[WARN] server.json simulation 为单实例回退, 仅承载 "
+                         << snapshot->protocols[0].protocolName
+                         << "; 需要多个仿真设备请在 protocols/*.json 配置 simulation.listenPort"
+                         << std::endl;
+                }
+                SimBinding b;
+                b.proto = &snapshot->protocols[0];
+                b.sim = &snapshot->server.simulation;
+                simBindings.push_back(b);
+            }
+        }
+
+        // 端口冲突在启动前显式拒绝: 半启动的仿真组会让客户端连到错误实例.
+        // 此时旧仿真器仍在运行、旧快照仍为当前代, 失败不会破坏运行态.
+        std::map<uint16_t, std::string> portOwners;
+        for (size_t i = 0; i < simBindings.size(); ++i) {
+            const uint16_t port = simBindings[i].sim->listenPort;
+            std::map<uint16_t, std::string>::const_iterator prev =
+                portOwners.find(port);
+            if (prev != portOwners.end()) {
+                return MyProt::Core::Unexpected(
+                    MyProt::Core::Error::Code::ConfigError,
+                    "仿真端口冲突: " + prev->second + " 与 "
+                        + simBindings[i].proto->protocolName + " 均为 "
+                        + std::to_string(port));
+            }
+            portOwners[port] = simBindings[i].proto->protocolName;
+        }
+
+        // 3. 校验通过后才全停旧仿真器并发布新快照 (先停再换数据, 析构顺序安全)
+        for (size_t i = 0; i < owners.size(); ++i) owners[i]->Stop();
+        owners.clear();
+        sims.clear();
+        // 同步发布新快照: 管理面读侧 (写路径/查询) 立即看到新代配置,
+        // 不会因下面的 io.post 尚未执行而拿到上一代 tags/devices。
+        // 快照本身不可变, 后续重装配只作用于网关/引擎内部状态。
+        snapshotHolder.Set(snapshot);
+
+        // 协议以别名 shared_ptr 指向快照内部 (保活整代快照),
+        // simulation 段按值拷贝 (不再依赖 ApplyRuntimeSync 的栈上对象)。
+        for (size_t i = 0; i < simBindings.size(); ++i) {
+            const MyProt::Core::ProtocolConfig* bp = simBindings[i].proto;
+            const std::shared_ptr<const MyProt::Core::ProtocolConfig> p(snapshot, bp);
+            std::unique_ptr<MyProt::Simulation::SimulationServer> sim(
+                new MyProt::Simulation::SimulationServer(p, *simBindings[i].sim));
+            std::string err;
+            if (sim->Start(err)) {
+                if (log)
+                    *log << "[OK] 仿真器 " << bp->protocolName
+                         << " 已监听 tcp://127.0.0.1:"
+                         << simBindings[i].sim->listenPort << std::endl;
+                sims[bp->protocolName] = sim.get();
+                owners.push_back(std::move(sim));
+            } else if (log) {
+                *log << "[WARN] 仿真器 " << bp->protocolName
+                     << " 启动失败: " << err << std::endl;
+            }
+        }
+        if (log && owners.size() > 1) {
+            *log << "[OK] 共 " << owners.size() << " 个仿真器在运行" << std::endl;
+        }
+
+        // 4. 清空实时快照 — 旧标签集数据作废, 由引擎按新一轮轮询重新积累
         latest.Clear();
 
-        // 4. 引擎侧热重载 — post 到 io 线程 (与 in-flight 轮询回调串行):
-        //    停轮询 → 切换 lookup/factory 数据源 → 关通道+重建设备表 → 重启引擎。
+        // 5. 引擎侧热重载 — post 到 io 线程 (与 in-flight 轮询回调串行):
+        //    停轮询 → 关通道+重建设备表 → 重启引擎。
         //    代际号保证 Stop→Start 连续切换时旧组 in-flight 不复活。
-        const MyProt::Service::LoadedConfig cfg = fresh.value();
-        io.post([protosPtr, devicesPtr, tagsPtr, &gateway, &engine,
-                 &startEngine, cfg, log]() {
+        io.post([snapshot, &gateway, &engine, &startEngine, log]() {
             engine.Stop();
-            *protosPtr = cfg.protocols;
-            *devicesPtr = cfg.root.devices;
-            *tagsPtr = cfg.root.tags;
             gateway.Shutdown();
-            gateway.GetChannelManager().ResetDevices(cfg.root.devices);
-            startEngine(cfg.root.tags, cfg.root.devices,
-                        cfg.root.resilience);
+            gateway.GetChannelManager().ResetDevices(snapshot->devices);
+            startEngine(snapshot->tags, snapshot->devices, snapshot->resilience);
             if (log)
-                *log << "[OK] 轮询引擎已热重载 (" << cfg.root.tags.size()
-                     << " 标签/" << cfg.root.devices.size() << " 设备)"
+                *log << "[OK] 轮询引擎已热重载 (" << snapshot->tags.size()
+                     << " 标签/" << snapshot->devices.size() << " 设备)"
                      << std::endl;
         });
         return MyProt::Core::VoidExpected();

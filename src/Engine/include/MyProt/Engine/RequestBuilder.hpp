@@ -67,7 +67,7 @@ public:
     static std::string CollectAutoComputeJson(const Core::ProtocolConfig& protocol);
 
     /// Splice op-level auto (non-derivedLength) inputs into the protocol-level autoComputeJson.
-    /// Single implementation - shared by Gateway (TagReader) and Service (FrameConsistencyCheck),
+    /// Single implementation - shared by Gateway (TagReader) and Service (TrialRenderer),
     /// avoiding semantic drift between the two sides; derivedLength does not enter this section (injected by the parameter layer's InjectDerivedLengthVariables).
     static std::string MergeOpAutoComputeJson(const Core::ProtocolConfig& protocol,
                                               const Core::OperationConfig& op);

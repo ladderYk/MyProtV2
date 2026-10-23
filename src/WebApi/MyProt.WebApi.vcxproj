@@ -130,6 +130,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="include\MyProt\WebApi\WebApiServer.hpp" />
+    <ClInclude Include="include\MyProt\WebApi\RouteTable.hpp" />
     <ClInclude Include="include\MyProt\WebApi\AuthMiddleware.hpp" />
   </ItemGroup>
   <ItemGroup>

@@ -6,22 +6,24 @@
 
 ---
 
-#### 多仿真器优先级（[HandleSimApi L216-358](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L216-L358)）
+#### 多仿真器优先级（[SimApi.cpp L50-L187](file:///d:/workSpaces/c++/MyProt-master/src/App/SimApi.cpp#L50-L187)）
 
 `/api/sim/*` 的查找与转发规则：
 
-| 场景 | 路径格式 | 行为 | 代码定位 |
+| 场景 | 请求 | 行为 | 代码定位 |
 |---|---|---|---|
-| **唯一仿真器** | `/api/sim/registers/0/4` | 自动取该仿真器（`sims.begin()->second`）| [L246-250](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L246-L250) |
-| **多仿真器 + 省略 proto** | `/api/sim/registers/0/4` | **400** `{"error":"多仿真器场景必须显式 ?proto=<name>"}` | [L251-256](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L251-L256) |
-| **多仿真器 + 显式 proto** | `/api/sim/registers/sim-modbus-1/0/4` | 按 sim id 匹配 | [L257-262](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L257-L262) |
-| **proto 不存在** | — | **404** `{"error":"仿真服务器未找到: <id>"}` | [L263-269](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L263-L269) |
+| **唯一仿真器** | `/api/sim/registers?start=0&count=4` | 自动取该仿真器（`sims.begin()->second`）| [L71](file:///d:/workSpaces/c++/MyProt-master/src/App/SimApi.cpp#L71) |
+| **多仿真器 + 省略 proto** | 同上 | **400** `{"error":"存在多个仿真协议, 请以 ?proto= 指定"}` | [L67-L69](file:///d:/workSpaces/c++/MyProt-master/src/App/SimApi.cpp#L67-L69) |
+| **多仿真器 + 显式 proto** | `/api/sim/registers?proto=modbus-tcp&start=0&count=4` | 按**协议名**匹配（即 `SimServerMap` 的键，也是 `protocolName`） | [L53-L61](file:///d:/workSpaces/c++/MyProt-master/src/App/SimApi.cpp#L53-L61) |
+| **proto 不存在** | — | **404** `{"error":"无此仿真协议: <name>"}` | [L55-L59](file:///d:/workSpaces/c++/MyProt-master/src/App/SimApi.cpp#L55-L59) |
 
-> **设计取舍**：唯一仿真器时省略 proto 是"历史 v3 残留"——v4 已要求显式，但仍保留降级以避免硬错误。`?proto=` query 形式由 [`QueryParam`](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L168-L194) 解析。
+> **实例来源**：每个 `protocols/*.json` 的 `simulation.listenPort > 0` 对应一个仿真实例，因此同时启用几个协议就有几个仿真设备；`server.json` 的全局段仅在无协议级仿真时提供回退实例（[ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md)）。
+>
+> **设计取舍**：唯一仿真器时省略 proto 是"历史 v3 残留"——v4 已要求显式，但仍保留降级以避免硬错误。`?proto=` query 形式由 [`QueryParam`](file:///d:/workSpaces/c++/MyProt-master/src/App/RuntimeGlue.cpp#L49-L65) 解析。
 
 #### SSE 帧格式与 changed 优化
 
-`/api/data/stream` 推送帧（[WebApiServer::SetStreamRoute](file:///d:/workSpaces/c#/MyProt-master/src/WebApi/src/WebApiServer.cpp) + [BuildLatestJson L359-386](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L359-L386)）：
+`/api/data/stream` 推送帧（[WebApiServer::SetStreamRoute](file:///d:/workSpaces/c++/MyProt-master/src/WebApi/src/WebApiServer.cpp) + [BuildLatestJson L51-L76](file:///d:/workSpaces/c++/MyProt-master/src/App/DataApi.cpp#L51-L76)）：
 
 ```
 event: snapshot
@@ -46,22 +48,24 @@ data: {"timestamp":"2026-08-27T10:00:01.534Z","tags":[{"name":"Tank.PV","value":
 #### 断线清理时序
 
 ```
-WebApi 端                          io 线程
-  |                                  |
-  |--- SetStreamRoute 注册 timer  -->|
-  |                                  |
-  |   客户端断开 (TCP FIN)            |
-  |--- timer 析构 (栈 RAII)          |   (in-flight 推送自然停止)
-  |--- 释放 latest 引用              |   (无 latest->Get 闭包悬挂)
-  |                                  |
+WebApi 独立线程 (_io)                 App 层 provider
+  |                                   |
+  |-- HandleConnection 识别 GET <prefix>[?query]
+  |-- StreamSession (socket + steady_timer) 交给异步回调链
+  |-- HandleStream: 限流/认证 → 响应头 + 首帧
+  |-- StreamWait: timer 到期 → StreamPush → StreamWait
+  |                                   |
+  |   客户端断开 / 写失败 / provider 异常
+  |-- StreamClose: timer.cancel + socket shutdown/close
+       (session shared_ptr 随回调链结束析构, 无悬挂)
 ```
 
 **关键点**：
-- **timer 栈 RAII** 持有 `latest` 弱引用（[L386](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L386)），客户端断开时自动析构；
-- **WebApi 端不持有 LatestValueStore 的强引用**，仅弱引用或裸指针（生命周期归 PollingEngine / RuntimeGlue 所有）；
-- **推送过程中热重载**：LatestValueStore 在 `ApplyRuntimeSync` 中先建新 latest → swap → 释放旧 latest 引用 → in-flight 推送闭包持的是旧 latest 句柄，新请求自然走新 latest，**新旧无交叉**。
+- **SSE provider 由 App 层注入**（[main.cpp L359-L362](file:///d:/workSpaces/c++/MyProt-master/src/App/main.cpp#L359-L362)）——`WebApiServer` 不反向依赖 `LatestValueStore`；`SetStreamRoute` 仅保存回调，WebApi 侧只持有 `StreamSession`（socket + timer）；
+- **会话由异步回调链保活**：`StreamSession` 以 `shared_ptr` 在 `async_wait` / `async_write` 闭包间传递，客户端断开或 `Stop()` 取消立即触发 `StreamClose`，无需外部释放引用；
+- **推送过程中热重载**：`ApplyRuntimeSync` 对同一个 `LatestValueStore` 调用 `Clear()`（不换对象），`provider` 裸指针始终有效；清空后到下一轮轮询完成前可能推出 `count=0` 的空快照，属预期语义，无悬挂。
 
-#### URL 查询参数解析（[QueryParam L168-194](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L168-L194)）
+#### URL 查询参数解析（[QueryParam L49-L65](file:///d:/workSpaces/c++/MyProt-master/src/App/RuntimeGlue.cpp#L49-L65)）
 
 ```
 GET /api/data/latest?device=plc-1&token=abc
@@ -111,23 +115,38 @@ public:
 
     /// 停止服务 (线程安全, 可从其他线程调用)
     void Stop();
+
+    /// 内置路由清单 ("METHOD /pattern") — 供文档、覆盖检查与自测枚举
+    std::vector<std::string> DescribeRoutes() const;
 };
 
 }} // namespace MyProt { namespace WebApi
 ```
+
+### 路由表与统一分发（P2-3）
+
+内置管理面路由统一注册到 `RouteTable`（`include/MyProt/WebApi/RouteTable.hpp`），不再使用 if 链：
+
+- **注册**：`Add(method, pattern, handler)`，pattern 支持 `:name` 段参数（如 `/api/config/:scope/:name`）；
+- **匹配**：先按「最具体模式」选择（字面量段数最多），再在该模式内比对 method —— 保证 `GET /api/config/reload` 返回 `405`（而不是被 `:scope` 吞成 `404`）；
+- **统一前置处理**：静态资源（非 `/api`）→ 限流 → token 鉴权 → 路由表 → 扩展域 `SetExtHandler` → 404；`/health`、`/metrics` 与静态资源免认证；
+- **错误映射**：配置域统一经 `ErrorResponse`（`StatusFromError` 取码）把 `Error::Code` 映射为 HTTP 状态码与 `{"error":...}`；
+- **可枚举**：`DescribeRoutes()` 返回全部 `METHOD /pattern`，可用于生成 API 清单或覆盖检查。
+- **CORS**：不启用。生产由本服务同源托管 `webui/dist`；开发态用 Vite `server.proxy` 转发 `/api`、`/health`，无需浏览器预检。
 
 ## 7.2 端点总表
 
 | 方法 + 路径 | 功能 | 鉴权 |
 |------|------|------|
 | `GET /health` | 存活探针，返回 `{"status":"ok","authRequired":bool}`；前端据此决定是否展示登录页与「退出」 | 免认证 |
+| `GET /metrics` | Prometheus 文本指标（text/plain v0.0.4）| 免认证 |
 | `GET /*`（非 `/api` 路径）| 静态前端托管（webRoot，默认 `webui/dist`，Vue 构建产物；防路径穿越）| 免认证 |
 | `POST /api/config/reload` | 手动触发热重载 | Bearer + 限流 |
 | `GET /api/config/schema` | 字段注册表下发（UI 动态表单供数） | Bearer + 限流 |
 | `GET /api/config/{scope}` | 列出配置项名（scope 为 `protocols` \| `tags`）| Bearer + 限流 |
 | `GET /api/config/{scope}/{name}` | 读取配置原文 | Bearer + 限流 |
 | `PUT /api/config/{scope}/{name}` | 保存配置（校验→备份→原子写入→**自动热重载联动**）| Bearer + 限流 |
-| `DELETE /api/config/{scope}/{name}` | 删除配置项（仅 protocols）| Bearer + 限流 |
+| `DELETE /api/config/{scope}/{name}` | 删除配置项（仅 protocols；**不自动热重载**，需再调 `POST /api/config/reload`）| Bearer + 限流 |
 | `GET /api/config/{scope}/{name}/backups` | 列出备份标签 | Bearer + 限流 |
 | `POST /api/config/{scope}/{name}/backups/{tag}/restore` | 回滚到指定备份 | Bearer + 限流 |
 | `GET /api/sim/status` | 仿真器清单 | Bearer + 限流 |
@@ -143,7 +162,7 @@ public:
 
 ## 7.3 配置管理 /api/config/*
 
-- **保存链路（PUT）**：JSON 解析 → 字段级深度校验（ConfigDeepValidator）→ 备份现有文件 → 临时文件原子替换 → 成功后自动触发 `TriggerReload()`。
+- **保存链路（PUT）**：JSON 解析 → 深度校验（`SchemaChecker` / `SemanticChecker` / `TrialRenderer` 编排于 `ConfigDeepValidator`）→ 备份现有文件 → 临时文件原子替换 → 成功后自动触发 `TriggerReload()`。
 - **回滚**：新配置非法时 Save 直接失败且不落盘；已落盘配置可通过 backups/restore 回到任意备份标签。
 - **reload 语义**：`POST /api/config/reload` 与 PUT 成功后的自动重载共用 `ConfigStore::Reload()`——若注册了 reload handler（生产模式必注册），则联动运行时（§7.4）；未注册时为空操作并返回成功。
 
@@ -194,34 +213,34 @@ public:
 
 ```cpp
 // src/App/main.cpp → RunProduction
-store.SetReloadHandler(
-    [&configDir, &io, &sims, &simOwners, &latest, &protoStore]() {
-        return ApplyRuntimeSync(configDir, io, sims, simOwners, latest,
-                                protoStore, &std::cout);
-    });
+store.SetReloadHandler([&configDir, &ctx]() {
+    return ApplyRuntimeSync(configDir, ctx, &std::cout);
+});
 ```
 
-`ApplyRuntimeSync` 三步：
+`ApplyRuntimeSync` 步骤：
 
 1. **重载配置目录**（`ConfigDirectoryLoader::Load`）——新配置非法即返回错误，运行态保持不变；
-2. **全停重建仿真器**——对每个 `simulation.listenPort > 0` 的协议停掉旧实例并按新配置重建（注意 `ProtocolConfig` 拷入调用方持有的 `protoStore`，因 `SimulationServer` 持有元素引用）；端口迁移后旧端口立即不可连；
-3. **清空实时快照**（`LatestValueStore::Clear()`）——旧标签集数据作废，由引擎按新一轮轮询重新积累。
+2. **构建新一代快照并收集仿真实例**——加载产物直接 move 入内；逐协议取 `simulation.listenPort > 0`，无协议级配置时回退 `server.json`（承载 0 号协议）；**此阶段不停止旧实例、不发布新快照**；
+3. **端口冲突前置校验**——两个启用实例同端口即返回 `ConfigError`，旧仿真器与旧快照保持不变；校验通过后才停掉旧实例并同步发布 `ctx.snapshot`（管理面读写立即看到新配置），随后逐个启动新实例；
+4. **清空实时快照**（`LatestValueStore::Clear()`）——旧标签集数据作废，由引擎按新一轮轮询重新积累；
+5. **`io.post` 重装配**——`engine.Stop()` / `gateway.Shutdown()` / `ResetDevices()` / `startEngine()` 在 io 线程串行执行。
 
-由此形成"**UI 保存即生效**"闭环：UI 里改协议 JSON → PUT 成功 → 自动 reload → 仿真器按新端口/初值重启 → 设备侧立即感知。E2E Test 12 覆盖了端口迁移、初值生效、快照清空、旧端口关闭与坏配置保持旧态五个断言。
+由此形成"**UI 保存即生效**"闭环：UI 里改协议 JSON 的 `simulation` → PUT 成功 → 自动 reload → 对应仿真器按新端口/初值重启（增加/删除协议级仿真段即增减仿真设备）→ 设备侧立即感知。E2E Test 12 覆盖端口迁移与坏配置保持旧态；Test 16d 覆盖两协议各一实例与旧回退端口关闭。
 
 ## 7.5 仿真数据 /api/sim/* 与实时数据面 /api/data/*
 
 ```cpp
 // src/App/main.cpp → App 层注入的业务 handler (依赖倒置)
 
-// GET  /api/sim/status → 仿真器清单 { "simulators": [ { "protocol": "...", "listenPort": N, "registerCount": N } ] }
+// GET  /api/sim/status → 仿真器清单 { "simulators": [ { "protocol": "<protocolName>", "listenPort": N, "registerCount": N } ] }
 
-// GET  /api/sim/registers?proto=P&start=0&count=16   (唯一仿真器时 proto 可省)
+// GET  /api/sim/registers?proto=<protocolName>&start=0&count=16   (唯一仿真器时 proto 可省)
 // → 200 { "start": 0, "values": [v0, v1, ...] }      // 16 位寄存器整数数组
 // 越界 → 400 {"error":"地址范围越界 [0,65535]"}
 
 // POST /api/sim/registers
-// body: {"start":0, "values":[123], "protocol":"P"}   // protocol 可选, 多仿真器时指定
+// body: {"start":0, "values":[123], "protocol":"<protocolName>"}   // protocol 可选, 多仿真器时指定
 // → 200 {"ok":true}   // 写入即时对设备侧轮询可见
 
 // GET  /api/data/latest[?device=<deviceId>]           // 引擎最新值快照
@@ -280,7 +299,7 @@ WebApi 线程                    io 线程                            metrics
    |                            |- 6. WriteOnce (FC06 构造+发送)   |
    |                            |    `- echo 校验                  |
    |                            |      (悬垂防护点 #3: WriteOnce 异|
-   |                            |       步期间热重载替换 *tagsPtr)  |
+   |                            |       步期间热重载替换快照)     |
    |                            |- 7. metrics.CounterInc           |
    |                            |      (kWritesTotal / kWriteFailure|
    |                            |       sTotal + Device label)     |
@@ -289,15 +308,15 @@ WebApi 线程                    io 线程                            metrics
    `- return (status, json)     |                                  |
 ```
 
-**3 个悬垂防护点**（按值拷贝的时点）：
+**3 个悬垂防护点**（快照保活 + 按值拷贝的时点）：
 
-| 点 | 拷贝对象 | 防护目的 | 代码行 |
+| 点 | 保活对象 | 防护目的 | 代码位置 |
 |---|---|---|---|
-| #1 | `tagCopy = *tag` | GOC 异步连接期间热重载可能替换 `*tagsPtr`；裸指针 `tag` 将悬垂 | [RuntimeGlue.cpp L473](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L473) |
-| #2 | `proto`（按值拷贝）| 同上 — `*protosPtr` 异步期间可能被换 | [L456-469](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L456-L469) |
-| #3 | `tagCopy` 再次捕获到 WriteOnce 闭包 | 闭包生命周期内 `*tagsPtr` 仍可能换 | [L473/477/488](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L473) |
+| #1 | `snapshot`（捕获 `RuntimeSnapshotPtr`） | GOC/WriteOnce 异步期间热重载整代替换；shared_ptr 保活旧代向量，裸指针不会悬垂 | [WriteService.cpp](file:///d:/workSpaces/c++/MyProt-master/src/Gateway/src/WriteService.cpp) |
+| #2 | `proto`（按值拷贝 → `shared_ptr<const ProtocolConfig>`） | 写请求跨异步边界；按值持有一份协议定义 | 同上 |
+| #3 | `tagCopy` 再次捕获到 WriteOnce 闭包 | 闭包生命周期内不再依赖快照内的元素地址 | 同上 |
 
-**写路径错误码表**（[HandleWriteApi L520-553](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L520-L553) + [WriteViaGateway L432-507](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L432-L507)）：
+**写路径错误码表**（[HandleWriteApi](file:///d:/workSpaces/c++/MyProt-master/src/App/DataApi.cpp) 做 HTTP 映射 + [WriteService::Write](file:///d:/workSpaces/c++/MyProt-master/src/Gateway/src/WriteService.cpp) 产出 `Error::Code`）：
 
 | HTTP | 触发条件 | Error::Code | body 格式 |
 |---|---|---|---|
@@ -313,7 +332,7 @@ WebApi 线程                    io 线程                            metrics
 | 502 | 10s 超时（future.wait_for 失败）| `Timeout` | `{"error":"写操作等待超时"}` |
 | 503 | read-back 不一致（P1 B 销账项）| `ReadBackMismatch` | `{"error":"read-back 不一致: expected=…, got=…"}` |
 
-> **注意**：`g_running` 标志位 + io 串行保证下，**热重载与 in-flight 写不会产生数据竞争**；但 WebApi 线程被卡死时（如 io 线程 hang）会触发 502 Timeout，需配合 [08_App §8.1 步骤 9](file:///d:/workSpaces/c#/MyProt-master/docs/modules/08_App.md) 主循环检查 `IsRunning()==false` 兜底。`quality` 为 `Good / Uncertain / Bad`；`value` 按 `finalType` 输出（ByteArray 转十六进制大写字符串）；`changed` 为本周期相对上周期是否变化。
+> **注意**：`g_running` 标志位 + io 串行保证下，**热重载与 in-flight 写不会产生数据竞争**；但 WebApi 线程被卡死时（如 io 线程 hang）会触发 502 Timeout，需配合 [08_App §8.1 步骤 9](file:///d:/workSpaces/c++/MyProt-master/docs/modules/08_App.md) 主循环检查 `IsRunning()==false` 兜底。`quality` 为 `Good / Uncertain / Bad`；`value` 按 `finalType` 输出（ByteArray 转十六进制大写字符串）；`changed` 为本周期相对上周期是否变化。
 
 ## 7.5 write.readBack — 写后读回（P1 B 销账项）
 
@@ -332,11 +351,11 @@ WebApi 线程                    io 线程                            metrics
 | 读回不一致 | 写 Echo OK + 读回值与期望不等 | — | `ReadBackMismatch` → HTTP 503 |
 
 **实现位置**：
-- TagReader: [TagReader.cpp L237-L286](file:///d:/workSpaces/c#/MyProt-master/src/Gateway/src/TagReader.cpp#L237-L286)（WriteOnce read-back）+ [L342-L399](file:///d:/workSpaces/c#/MyProt-master/src/Gateway/src/TagReader.cpp#L342-L399)（WriteBytes read-back）
-- RuntimeGlue: [RuntimeGlue.cpp L588-L595](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L588-L595)（readBack 解析 + 类型校验）+ [L632](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L632)（透传）+ [L648-L651](file:///d:/workSpaces/c#/MyProt-master/src/App/RuntimeGlue.cpp#L648-L651)（HTTP 错误码映射 503）
-- 错误码: [Error.hpp L32](file:///d:/workSpaces/c#/MyProt-master/src/Core/include/MyProt/Core/Expected.hpp#L32)（`Error::Code::ReadBackMismatch`）
-- 销账: [ADR-0007 §3 P1 B 行](file:///d:/workSpaces/c#/MyProt-master/docs/adr/0007-write-path-scope.md)（⏳ → ✅ 2026-08-28）
-- E2E: [E2EMain.cpp Test 16](file:///d:/workSpaces/c#/MyProt-master/src/Tests/E2EMain.cpp)
+- TagReader: [TagReader.cpp L237-L286](file:///d:/workSpaces/c++/MyProt-master/src/Gateway/src/TagReader.cpp#L237-L286)（WriteOnce read-back）+ [L342-L399](file:///d:/workSpaces/c++/MyProt-master/src/Gateway/src/TagReader.cpp#L342-L399)（WriteBytes read-back）
+- DataApi: [DataApi.cpp L704-L711](file:///d:/workSpaces/c++/MyProt-master/src/App/DataApi.cpp#L704-L711)（readBack 解析 + 类型校验）+ [L757](file:///d:/workSpaces/c++/MyProt-master/src/App/DataApi.cpp#L757)（透传）+ [L769-L772](file:///d:/workSpaces/c++/MyProt-master/src/App/DataApi.cpp#L769-L772)（HTTP 错误码映射 503）
+- 错误码: [Error.hpp L32](file:///d:/workSpaces/c++/MyProt-master/src/Core/include/MyProt/Core/Expected.hpp#L32)（`Error::Code::ReadBackMismatch`）
+- 销账: [ADR-0007 §3 P1 B 行](file:///d:/workSpaces/c++/MyProt-master/docs/adr/0007-write-path-scope.md)（⏳ → ✅ 2026-08-28）
+- E2E: [E2EMain.cpp Test 16](file:///d:/workSpaces/c++/MyProt-master/src/Tests/E2EMain.cpp)
 
 **简化原则**：当前 read-back 复用写超时（`requestTimeoutMs`），不复用读轮询超时（`pollIntervalMs`）；不引入 device 级 readBackPolicy 配置（API 层 only，后续 KI 排期）。
 
@@ -346,18 +365,18 @@ WebApi 线程                    io 线程                            metrics
 
 ```cpp
 // src/App/main.cpp → RunProduction
-server.SetExtHandler([&sims, &latest, &io, &gateway,
-                      &protosPtr, &devicesPtr, &tagsPtr](
-        const std::string& m, const std::string& p,
-        const std::string& b) {
-    if (p.rfind("/api/data/write", 0) == 0) {
-        return HandleWriteApi(m, p, b, io, gateway,
-                              protosPtr, devicesPtr, tagsPtr);
-    }
-    if (p.rfind("/api/data", 0) == 0) {
-        return HandleDataApi(m, p, latest);
-    }
-    return HandleSimApi(m, p, b, sims);
+HttpRouter extRoutes;
+extRoutes.Add("/api/data/write",
+    [](const AppContext& c, const HttpRequest& r) { return HandleWriteApi(c, r); });
+extRoutes.Add("/api/data",
+    [](const AppContext& c, const HttpRequest& r) { return HandleDataApi(r, *c.latest); });
+extRoutes.Add("/api/sim",
+    [](const AppContext& c, const HttpRequest& r) { return HandleSimApi(r, *c.sims); });
+
+server.SetExtHandler([&ctx, &extRoutes](
+        const std::string& m, const std::string& p, const std::string& b) {
+    HttpRequest req; req.method = m; req.path = p; req.body = b;
+    return extRoutes.Dispatch(ctx, req);
 });
 
 // SSE 流式路由: WebApi 层在请求解析后、普通路由前拦截 GET <pathPrefix>[?query],
