@@ -156,6 +156,7 @@ TEST(SchemaDefaultsTest, ProtocolSectionMatchesConfigPoco) {
     const MyProt::Core::SilenceConfig silence;
     const MyProt::Core::MessageConfig message;
     const MyProt::Core::ResponseParserConfig parser;
+    const MyProt::Core::OperationConfig operation;
     const MyProt::Core::HandshakeStep step;
 
     ExpectDefault(p, "schemaVersion", std::to_string(proto.schemaVersion));
@@ -184,6 +185,7 @@ TEST(SchemaDefaultsTest, ProtocolSectionMatchesConfigPoco) {
 
     ExpectDefault(p, "operations", "responseParser", "dataStartIndex",
                   IntStr(parser.dataStartIndex));
+    ExpectDefault(p, "operations", "expectResponse", BoolStr(operation.expectResponse));
     ExpectDefault(p, "handshake", "timeoutMs", IntStr(step.timeoutMs));
 }
 

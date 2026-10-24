@@ -585,6 +585,11 @@ struct OperationConfig {
     //   运行时不依赖 (写路径按引用区分), 用于 UI 表单过滤与配置校验
     //   (标签 operation 应为 read 类, writeOperation 应为 write 类).
     std::string kind;
+    // expectResponse: 是否等待并校验应答. false = 只发 (单向发送).
+    //   发送完成即视为成功, 不读取、不成帧、不等待应答;
+    //   仅允许写类操作; 读标签引用 / readBack 组合由校验器与写路径拒绝.
+    //   设备若实际回包, 残留字节会污染同通道后续请求 (见 ADR-0018).
+    bool expectResponse;
     // inputs/outputs: 输入/输出参数分组.
     //   inputs : 操作者提供 / 运行时生成的输入 ( source=static 有 value 注入扁平变量池,
     //            无 value 即纯 UI 提示; source=auto 走 autoIncrement/frameSlice/expr/crc ).
@@ -599,6 +604,8 @@ struct OperationConfig {
     //     协议操作不再持有 timeoutMs 字段, 避免协议/设备两处超时漂移。
     // 注: 写操作复写以"操作名约定"区分(WriteSingleRegister / WriteMultipleRegisters),
     //     不新增 schema 字段, 沿用 responseParser.validCondition 做 echo 校验。
+
+    OperationConfig() : expectResponse(true) {}
 };
 
 /// ────────── 协议变量声明 ──────────

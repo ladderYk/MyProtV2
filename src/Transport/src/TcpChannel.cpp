@@ -247,6 +247,67 @@ void TcpChannel::SendReceive(const Bytes& request,
         });
 }
 
+void TcpChannel::Send(const Bytes& request,
+                      std::chrono::milliseconds timeout,
+                      SendHandler handler) {
+    if (request.empty()) {
+        LOG_ERROR("Channel", "Send 拒绝空请求帧: channel=%s", _channelId.c_str());
+        handler(Core::Unexpected(Core::Error::Code::BuildError,
+                                 "empty request frame", "channel=" + _channelId));
+        return;
+    }
+    if (!_connected.load() || !_socket->is_open()) {
+        handler(Core::Unexpected(Core::Error::Code::ConnectionClosed, "tcp not connected"));
+        return;
+    }
+
+    // 与 SendReceive 共用单在途守卫: 单向发送期间不允许多个请求叠发
+    // (socket 不支持并发写, 且叠发会与迟到的应答字节混淆).
+    if (_inFlight.exchange(true)) {
+        handler(Core::Unexpected(Core::Error::Code::Busy,
+                                 "channel busy: request in flight"));
+        return;
+    }
+    SendHandler wrapped = [this, handler](Core::Expected<void> r) {
+        _inFlight.store(false);
+        handler(std::move(r));
+    };
+
+    auto self = shared_from_this();
+    auto op = std::make_shared<TxOp>(std::move(wrapped));
+    // 请求字节由本方法持有到 write 完成 (asio::async_write 不拷贝数据).
+    auto frame = std::make_shared<Bytes>(request);
+
+    // 发送看门狗: write 长时间不完成 → 判 Timeout 并关闭套接字
+    op->watchdog = std::make_shared<asio::steady_timer>(_io);
+    op->watchdog->expires_after(timeout);
+    op->watchdog->async_wait([self, op](const asio::error_code& ec) {
+        if (!ec && !op->done) {
+            op->done = true;
+            asio::error_code ignore;
+            self->_socket->close(ignore);
+            self->_connected.store(false);   // 标记断连, 下次轮询触发重连
+            self->SetError(Core::Error::Code::Timeout, "send timeout");
+            op->handler(Core::Unexpected(Core::Error::Code::Timeout, "send timeout"));
+        }
+    });
+
+    asio::async_write(*_socket, asio::buffer(*frame),
+        [self, op, frame](const asio::error_code& ec, size_t /*bytes*/) {
+            if (op->done) return;
+            op->done = true;
+            op->watchdog->cancel();
+            if (ec) {
+                self->_connected.store(false);   // 标记断连, 下次轮询触发重连
+                self->SetError(Core::Error::Code::WriteFailed, ec.message());
+                op->handler(Core::Unexpected(Core::Error::Code::WriteFailed, ec.message()));
+                return;
+            }
+            // 写完即成功: 不启动读循环 — 本通道语义是设备不应答.
+            op->handler(Core::Expected<void>());
+        });
+}
+
 void TcpChannel::ReadChunk(const std::shared_ptr<RxOp>& op) {
     auto self = shared_from_this();
     auto chunk = std::make_shared<std::vector<uint8_t>>(4096);

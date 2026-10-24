@@ -168,6 +168,7 @@ configs/
 | `inputs` | map\<string, VariableConfig\> | ✗ | `{}` | 操作级输入覆盖：`source=static` 覆盖协议级默认值（含 `value` 才注入；无 `value` 即原 `hint` 语义）、`source=auto` 追加/覆盖协议级非 length 策略。与协议级 `inputs` 按**整条声明就近覆盖**（§3.4），schema 见 §3.2 |
 | `outputs` | map\<string, VariableConfig\> | ✗ | `{}` | 操作级派生输出（`derivedLength`）。覆盖协议级同名 `outputs`；`expr` 引用域 = 本操作 `inputs` ∪ 协议级 `inputs`，`{name:len}` 取字节长度（载荷变量 = 实际字节数，其余 = 模板渲染宽度）。同一操作域内 `inputs` 与 `outputs` 不得同名（校验 Error） |
 | `kind` | string | ✗ | `""` | 操作语义标注：`"read"` / `"write"`（可选，空 = 未标注，仅 UI 表单过滤与校验用） |
+| `expectResponse` | bool | ✗ | `true` | 是否等待并校验应答。`false` = **只发**：发出请求字节即视为成功，不读取、不成帧、不等待应答。仅允许写类操作（`kind=write` 或未标注）；读标签 `operation` 引用只发操作即校验 Error；与写端 `readBack=true` 互斥（运行时 Error）。**风险**：设备若实际回包，未被读走的应答字节会残留在通道缓冲区，污染同通道后续请求——仅用于确定不应答的场景（如 Modbus 广播），且该通道不应交替发起请求-应答操作。见 [ADR-0018](./adr/0018-one-way-send-operation.md) |
 
 > 操作名不写在结构体内，由 map 的 key 给出；加载器负责把 key 回填到运行时对象的 `name` 字段。
 
@@ -693,6 +694,7 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 
 **标签层**
 13. `name` 全局唯一；`deviceId` / `operation` / `writeOperation` / `writeBytesOperation` 引用存在；`direction ∈ {read, write}`；`readBackTag` 仅写标签（`direction=write`）可配，且须引用存在的**读标签**；`writeOperation` / `writeBytesOperation` 须引用协议中 **write 类**操作；操作 `kind` 标注时核对语义一致性（读标签 `operation` 须 read 类、写标签 `operation` 须 write 类）。
+    - 只发操作（`expectResponse=false`）：`direction=read` 标签的 `operation` 不得引用（读标签必须收到应答）；写标签引用时操作 `kind` 不得为 `read`；写请求同时带 `readBack=true` 时运行时拒绝。
 14. `scanRateMs > 0`（写标签豁免，不参与轮询）、`finalType` 在 §6 表内、`byteOrder` 在枚举内；写标签 `writeVariable` 非空。
 15. 模板占位符必须能在 `tag.variables` 中找到同名项，或属于握手 `sessionVariable` 声明集；否则 Error（把运行时 BuildError 提前到启动期）。自动计算由 `inputs` 的 `source=auto` 声明驱动（模板内不写 `:auto:`/`:calc:` 令牌，三段文法亦已移除）。写路径模板的解析域额外放行 `writeVariable` 与运行时注入量（`PDULength`/`DataLength`/`DataBits`/`DataLen`/`RegisterCount`/`ByteCount`/`StartAddress`）；`writeOperation` / `writeBytesOperation` 模板的解析域为 `variables ∪ writeVariables`。
 

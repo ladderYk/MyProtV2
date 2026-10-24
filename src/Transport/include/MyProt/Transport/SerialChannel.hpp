@@ -31,6 +31,11 @@ public:
                      std::chrono::milliseconds timeout,
                      ReceiveHandler handler) override;
 
+    /// One-way send: write the bytes and complete without arming the silence-gap read loop
+    void Send(const Bytes& request,
+              std::chrono::milliseconds timeout,
+              SendHandler handler) override;
+
     void Disconnect() override;
     bool IsConnected() const override;
     Core::Error GetLastError() const override;

@@ -301,6 +301,18 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
                        + tag.operation + " (kind=" + oit->second.kind + ") (规则12)");
         }
     }
+        // 只发操作 (expectResponse=false): 发送后不读取应答.
+    //   读标签 operation 引用只发操作 = 永远拿不到数据 (Error);
+    //   只发操作只能用于写类语义.
+    if (!oit->second.expectResponse) {
+        if (!isWriteTag) {
+            r.addError("标签 " + ctx + " operation 引用只发操作 (expectResponse=false): \""
+                       + tag.operation + "\"; 读标签必须使用请求-应答操作 (规则12)");
+        } else if (!oit->second.kind.empty() && oit->second.kind != "write") {
+            r.addError("标签 " + ctx + " operation 引用只发操作 (expectResponse=false) 但 kind="
+                       + oit->second.kind + "; 只发操作须为 write 类 (规则12)");
+        }
+    }
         // writeOperation 引用存在 + kind 一致性 (规则12)
     if (!isWriteTag && !tag.writeOperation.empty()) {
         std::unordered_map<std::string, Core::OperationConfig>::const_iterator wIt =

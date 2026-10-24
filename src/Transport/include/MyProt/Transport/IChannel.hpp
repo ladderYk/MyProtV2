@@ -23,6 +23,11 @@ using ConnectHandler = std::function<void(Core::Expected<void>)>;
 /// Request-response completion callback (invoked exactly once when a full response frame is received or on failure)
 using ReceiveHandler = std::function<void(Core::Expected<Core::Bytes>)>;
 
+/// One-way send completion callback (invoked exactly once).
+/// Success only means the request bytes were handed to the transport; it does NOT mean the
+/// device received or processed them (a device that never answers gives no confirmation).
+using SendHandler = std::function<void(Core::Expected<void>)>;
+
 /// Channel abstract base class - the unified interface for the concrete Tcp/Tls/Serial channels.
 /// One channel, one request: only one in-flight SendReceive at a time (the gateway layer serializes per device).
 class IChannel {
@@ -40,6 +45,20 @@ public:
                              std::shared_ptr<const Core::FramingConfig> framingConfig,
                              std::chrono::milliseconds timeout,
                              ReceiveHandler handler) = 0;
+
+    /// One-way send: transmit the request bytes and complete immediately - no read, no framing,
+    /// no waiting for a response. Use only when the device really does not answer (e.g. a Modbus
+    /// broadcast); if it does answer, the unread bytes stay in the channel buffer and pollute the
+    /// next request on the same channel.
+    /// Default implementation fails as NotImplemented - only channels that support this semantic override it.
+    virtual void Send(const Bytes& request,
+                      std::chrono::milliseconds timeout,
+                      SendHandler handler) {
+        (void)request;
+        (void)timeout;
+        handler(Core::Unexpected(Core::Error::Code::NotImplemented,
+                                 "one-way send not supported by this channel"));
+    }
 
     /// Disconnect and release underlying resources; pending operations complete with ConnectionClosed
     virtual void Disconnect() = 0;

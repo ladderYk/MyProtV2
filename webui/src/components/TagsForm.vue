@@ -357,6 +357,47 @@ function setWriteOperation(tag, v) {
   emitDoc()
 }
 
+// 标签方向: read = 参与轮询 (写能力由 writeOperation / writeBytesOperation 声明);
+//           write = 只写标签 (operation 即写操作模板, 不参与轮询)。
+// 注: 链路是否等待应答由操作上的 expectResponse 决定, 与方向相互独立。
+function setDirection(tag, v) {
+  if (v !== 'write') {
+    delete tag.direction
+    delete tag.readBackTag
+    if (!(tag.scanRateMs > 0)) tag.scanRateMs = 1000
+    emitDoc()
+    return
+  }
+  tag.direction = 'write'
+  // 只写标签不使用标签级写能力字段 (后端规则13: 非空仅告警并忽略)
+  delete tag.writeOperation
+  delete tag.writeBytesOperation
+  delete tag.writeVariables
+  if (!(tag.scanRateMs > 0)) tag.scanRateMs = 1000   // 字段保留但不参与轮询
+  // operation 必须是写类模板: 当前指向读类/为空时自动选第一个可用写操作
+  const dev = local.devices.find(d => d.id === tag.deviceId)
+  const kinds = (dev && opsKindByProtocol[dev.protocol]) || {}
+  const cands = writeOpCandidates(tag)
+  if (cands.length && (!tag.operation || kinds[tag.operation] === 'read')) {
+    tag.operation = cands[0]
+  }
+  syncRows(tag)
+  emitDoc()
+}
+
+/// 操作名候选: 只写标签用写类操作; 读标签用全部操作 (后端校验 kind 一致性)
+function tagOpCandidates(tag) {
+  return tag.direction === 'write' ? writeOpCandidates(tag) : opCandidates(tag)
+}
+
+/// 当前标签引用的操作是否为只发 (expectResponse=false)
+function isOneWayOp(tag) {
+  const dev = local.devices.find(d => d.id === tag.deviceId)
+  const doc = dev && protoDocs[dev.protocol]
+  const op = doc && doc.operations && doc.operations[tag.operation]
+  return !!(op && op.expectResponse === false)
+}
+
 // v1.8 增: 原始协议文档缓存 — 用于区分 hint 来源 (避免重复 fetch)
 const protoDocs = reactive({})
 
@@ -934,20 +975,36 @@ function onEditSource({ varName, layerKey }) {
                 </el-select>
               </el-form-item>
               <el-form-item>
+                <template #label>{{ t('方向') }}<FieldHelp section="tag" field="direction" /></template>
+                <el-select
+                  :model-value="curTag.direction || 'read'" style="width: 200px"
+                  @change="v => setDirection(curTag, v)"
+                >
+                  <el-option :label="t('读 (参与轮询)')" value="read" />
+                  <el-option :label="t('只写 (不轮询)')" value="write" />
+                </el-select>
+                <div class="field-hint">
+                  {{ t('只写标签的「操作名」即写模板, 不参与轮询; 写链路是否等待应答由操作上的「应答模式」决定') }}
+                </div>
+              </el-form-item>
+              <el-form-item>
                 <template #label>{{ t('操作名') }}<FieldHelp section="tag" field="operation" /></template>
                 <el-select
                   :model-value="curTag.operation" filterable allow-create default-first-option
                   :placeholder="t('选择或输入操作名')" style="width: 200px"
                   @change="v => { curTag.operation = v; emitDoc() }"
                 >
-                  <el-option v-for="o in opCandidates(curTag)" :key="o" :label="o" :value="o" />
+                  <el-option v-for="o in tagOpCandidates(curTag)" :key="o" :label="o" :value="o" />
                 </el-select>
-                <div v-if="!opCandidates(curTag).length" class="field-hint">
+                <div v-if="!tagOpCandidates(curTag).length" class="field-hint">
                   {{ t('该设备所属协议无可选操作 — 请确认设备已关联协议, 且协议里已定义 operations') }}
+                </div>
+                <div v-if="isOneWayOp(curTag)" class="field-hint warn">
+                  {{ t('该操作是只发 (expectResponse=false): 写出即成功, 不等待应答; 请确认设备确实不回包') }}
                 </div>
               </el-form-item>
               <!-- v1.7 增: 标签级写能力 — 写操作下拉 (空 = 只读) -->
-              <el-form-item>
+              <el-form-item v-if="curTag.direction !== 'write'">
                 <template #label>{{ t('写操作') }}<FieldHelp section="tag" field="writeOperation" /></template>
                 <el-select
                   :model-value="curTag.writeOperation ?? ''"
@@ -961,13 +1018,16 @@ function onEditSource({ varName, layerKey }) {
                   {{ t('非空 = 又读又写标签, 写请求用该操作模板, 写后按本标签读操作回校') }}
                 </div>
               </el-form-item>
-              <el-form-item>
+              <el-form-item v-if="curTag.direction !== 'write'">
                 <template #label>{{ t('采集周期') }}<FieldHelp section="tag" field="scanRateMs" /></template>
                 <el-input-number
                   :model-value="curTag.scanRateMs" :min="100"
                   @update:model-value="v => { curTag.scanRateMs = v; emitDoc() }"
                 />
                 <span class="unit">ms (≥100)</span>
+              </el-form-item>
+              <el-form-item v-else>
+                <div class="field-hint">{{ t('只写标签不参与轮询, 无需采集周期') }}</div>
               </el-form-item>
               <el-form-item>
                 <template #label>{{ t('数据类型') }}<FieldHelp section="tag" field="finalType" /></template>

@@ -815,4 +815,21 @@ export const EN = {
   '算术表达式': 'Arithmetic expression',
   '字节': 'bytes',
   '字节数': 'Byte count',
+  '应答模式': 'Response mode',
+  '请求-应答': 'Request-response',
+  '只发 (设备不应答)': 'Send only (device never replies)',
+  '只发仅用于写类操作; 与写后读回 (readBack) 互斥':
+    'Send-only applies to write operations only and is mutually exclusive with read-back (readBack)',
+  '请求-应答 = 发送后等待并校验响应帧; 只发 = 设备不应答, 写出即成功 (不读取/不成帧/不校验 echo); 设备若实际回包, 残留字节会污染同通道后续请求':
+    'Request-response = wait for and validate the response frame; Send-only = the device never replies, so completion means the bytes were written (no read, no framing, no echo check). If the device does reply, the unread bytes will pollute the next request on the same channel',
+  '方向': 'Direction',
+  '读 (参与轮询)': 'Read (polled)',
+  '只写 (不轮询)': 'Write only (not polled)',
+  '只写标签的「操作名」即写模板, 不参与轮询; 写链路是否等待应答由操作上的「应答模式」决定':
+    'For write-only tags the operation name is the write template and the tag is not polled; whether the write path waits for a response is decided by the operation\'s Response mode',
+  '只写标签不参与轮询, 无需采集周期': 'Write-only tags are not polled, so no scan interval is needed',
+  '该操作是只发 (expectResponse=false): 写出即成功, 不等待应答; 请确认设备确实不回包':
+    'This operation is send-only (expectResponse=false): completion means the bytes were written, no response is awaited; make sure the device really does not reply',
+  '只写标签 (不参与轮询)': 'Write-only tags (not polled)',
+  '{name} · 无实时值, 点击写入': '{name} · no live value, click to write',
 }

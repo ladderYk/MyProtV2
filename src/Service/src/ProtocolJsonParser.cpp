@@ -901,6 +901,10 @@ bool ParseOperationDoc(const json& j, Core::OperationConfig& op, std::string& er
     }
         // 操作语义标注 (可选; 空 = 未标注, "read" | "write" 由校验器核对)
     if (!OptStr(j, "kind", op.kind, err)) return false;
+        // 只发操作 (可选, 缺省 true = 请求-应答).
+    //   false = 发送后不读取也不等待应答, 仅适用于设备确实不应答的写类操作;
+    //   读标签引用与 readBack 组合由 SemanticChecker / TagReader 拒绝.
+    if (!OptBool(j, "expectResponse", op.expectResponse, err)) return false;
         // 操作级 inputs / outputs 覆盖 (操作级声明覆盖协议级同名条目).
     //   输入/输出同域同名冲突在此校验; 输出引用域 (需协议级 inputs) 由 ParseProtocolDocImpl
     //   在 operations 全量解析后统一校验.

@@ -216,6 +216,7 @@ const writeMsgKind = ref('ok')
 // 指向读标签的定义; 写弹窗按行名匹配到写标签时优先定向 (写 op /
 // TransportSize / Float 编码由写标签决定), 未匹配走 legacy 路径
 const writeTagIndex = ref({})   // 读标签名 → [写标签定义]
+const writeOnlyTags = ref([])   // 只写标签 (direction=write): 不参与轮询, 无快照行 → 独立写入入口
 const writeTagSel = ref('')     // 当前选中的写标签名 (一行可配多个写标签)
 const writeIndexReady = ref(false) // 写标签索引是否已成功加载 (失败时保留 legacy 全量写入入口)
 const tagMeta = ref({})         // 标签名 → { label, unit } (配置中的展示元数据)
@@ -236,21 +237,30 @@ async function loadWriteTagIndex() {
     const doc = JSON.parse(await getConfig('tags', names[0]))
     const idx = {}
     const meta = {}
+    const oneWay = []
     for (const t of (doc.tags || [])) {
       meta[t.name] = { label: (t.label || '').trim(), unit: (t.unit || '').trim() }
-      // v1.7 标签级写能力: writeOperation 非空 = 又读又写 (写目标即自身)
-      if (t.direction !== 'write' && t.writeOperation) {
+      if (t.direction === 'write') {
+        // 只写标签自身也登记: 不参与轮询, 快照里没有该行,
+        // 实时监控页用独立入口 (只写标签条) 直达写入抽屉
+        oneWay.push(t)
         if (!idx[t.name]) idx[t.name] = []
         idx[t.name].push(t)
+        // v1.6 兼容: 声明了 readBackTag 的只写标签同时挂到对应读标签行
+        if (t.readBackTag) {
+          if (!idx[t.readBackTag]) idx[t.readBackTag] = []
+          idx[t.readBackTag].push(t)
+        }
         continue
       }
-      // v1.6 兼容: 只写标签 (direction=write) 经 readBackTag 挂到读标签行
-      if (t.direction === 'write' && t.readBackTag) {
-        if (!idx[t.readBackTag]) idx[t.readBackTag] = []
-        idx[t.readBackTag].push(t)
+      // v1.7 标签级写能力: writeOperation 非空 = 又读又写 (写目标即自身)
+      if (t.writeOperation) {
+        if (!idx[t.name]) idx[t.name] = []
+        idx[t.name].push(t)
       }
     }
     tagMeta.value = meta
+    writeOnlyTags.value = oneWay
     writeTagIndex.value = idx
     writeIndexReady.value = true
   } catch (_) { /* 写标签索引不可用时退回 legacy 写路径 */ }
@@ -363,6 +373,17 @@ onUnmounted(() => {
         {{ streaming ? t('停止推送') : t('实时推送') }}
       </button>
       <button class="btn primary small" :disabled="busy" @click="refresh(false)">{{ t('立即刷新') }}</button>
+    </div>
+
+    <!-- 只写标签 (direction=write): 不参与轮询, 不会出现在快照表格 — 提供独立写入入口 -->
+    <div v-if="writeOnlyTags.length" class="writeonly-bar">
+      <span class="wo-title">{{ t('只写标签 (不参与轮询)') }}</span>
+      <button
+        v-for="wt in writeOnlyTags" :key="wt.name"
+        class="btn tiny"
+        :title="t('{name} · 无实时值, 点击写入', { name: wt.name })"
+        @click="openWrite({ name: wt.name, device: wt.deviceId })"
+      >{{ wt.label || wt.name }}</button>
     </div>
 
     <div class="table-wrap">
@@ -623,6 +644,25 @@ th:nth-child(2) { text-align: right; }
 .group-time { margin-left: auto; font-size: var(--mp-fs-xs); color: var(--mp-muted-2); }
 .mono { font-family: var(--mp-font-mono); }
 .dim { color: var(--mp-muted-2); }
+
+/* 只写标签条: 补充快照表格里没有行的写入入口 */
+.writeonly-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: var(--mp-sp-3);
+  background: var(--mp-surface);
+  border: 1px dashed var(--mp-border-strong);
+  border-radius: var(--mp-radius);
+  flex-shrink: 0;
+}
+.wo-title {
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-muted-2);
+  margin-right: 2px;
+}
 .live-table .ro { white-space: nowrap; }
 .name { font-weight: 600; }
 .tag-label { font-size: var(--mp-fs-base); color: var(--mp-ink); }

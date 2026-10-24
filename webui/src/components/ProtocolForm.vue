@@ -876,11 +876,23 @@ onMounted(async () => {
                 <template #label>{{ t('操作类型') }}<FieldHelp :text="t('read = 该操作模板供读标签引用; write = 可作写请求模板 (由标签的 writeOperation / writeBytesOperation 引用)')" /></template>
                 <el-select
                   :model-value="curOp.kind || 'read'" style="width: 160px"
-                  @change="v => { curOp.kind = v; emitDoc() }"
+                  @change="v => { curOp.kind = v; if (v !== 'write') delete curOp.expectResponse; emitDoc() }"
                 >
                   <el-option v-for="k in OP_KINDS" :key="k.value" :label="t(k.label)" :value="k.value" />
                 </el-select>
                 <div class="field-hint">{{ t('read = 只读标签; write = 可作写请求模板') }}</div>
+              </el-form-item>
+              <el-form-item>
+                <template #label>{{ t('应答模式') }}<FieldHelp :text="t('请求-应答 = 发送后等待并校验响应帧; 只发 = 设备不应答, 写出即成功 (不读取/不成帧/不校验 echo); 设备若实际回包, 残留字节会污染同通道后续请求')" /></template>
+                <el-select
+                  :model-value="curOp.expectResponse === false ? 'none' : 'response'" style="width: 160px"
+                  :disabled="(curOp.kind || 'read') !== 'write'"
+                  @change="v => { if (v === 'none') curOp.expectResponse = false; else delete curOp.expectResponse; emitDoc() }"
+                >
+                  <el-option :label="t('请求-应答')" value="response" />
+                  <el-option :label="t('只发 (设备不应答)')" value="none" />
+                </el-select>
+                <div class="field-hint">{{ t('只发仅用于写类操作; 与写后读回 (readBack) 互斥') }}</div>
               </el-form-item>
               <el-form-item :label="t('请求模板')" class="span2">
                 <!-- v4.7: 变量提示 — 全局(协议级)/本操作(派生) 分组, 点击插入下方模板 -->

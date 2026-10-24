@@ -132,6 +132,12 @@ struct OperationConfig {
     //   Not depended on at runtime (the write path distinguishes by reference); used for UI form filtering and config validation
     //   (a tag's operation should be a read-class one, writeOperation a write-class one).
     std::string kind;
+        // One-way send (fire-and-forget): false = after sending, do not read and do not wait for a response;
+    //   completion only means the bytes were handed to the transport. Applies to write-class operations only
+    //   (e.g. a Modbus broadcast that devices never answer). Read tags must not reference such an operation,
+    //   and read-back is mutually exclusive with it (nothing to verify). If the device does answer after all,
+    //   the unread response bytes stay in the channel buffer and pollute the next request on the same channel.
+    bool expectResponse;
         // input/output parameter grouping (inputs / outputs) - there is no single variables section in the config:
     //   inputs : inputs provided by the operator / generated at runtime ( source=static value or pure UI hint
     //            + source=auto{autoIncrement,frameSlice,expr,crc} ). Merged at the same level into
@@ -147,6 +153,8 @@ struct OperationConfig {
 
     // Note: the single request-response timeout is configured uniformly via device.requestTimeoutMs (converged 2026-08-24);
     //       protocol operations no longer hold a timeoutMs - avoiding timeout drift across protocol/device.
+
+    OperationConfig() : expectResponse(true) {}
 };
 
 // ────────── handshake steps ──────────

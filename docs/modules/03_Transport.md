@@ -31,6 +31,10 @@ using ConnectHandler = std::function<void(Core::Expected<void>)>;
 /// 请求-响应完成回调 (收到完整响应帧或失败时恰好调用一次)
 using ReceiveHandler = std::function<void(Core::Expected<Core::Bytes>)>;
 
+/// 单向发送完成回调 (恰好调用一次)。成功只表示字节已交给传输层,
+/// 不代表设备已接收/处理 (设备不应答时无从确认)。
+using SendHandler = std::function<void(Core::Expected<void>)>;
+
 /// 通道抽象基类 — Tcp/Tls/Serial 具体通道的统一接口。
 /// 单通道单请求: 同一时刻仅允许一笔在途 SendReceive (网关层按设备串行化)。
 class IChannel {
@@ -48,6 +52,18 @@ public:
                              std::shared_ptr<const Core::FramingConfig> framingConfig,
                              std::chrono::milliseconds timeout,
                              ReceiveHandler handler) = 0;
+
+    /// 单向发送 (只发): 发出 request 后立即完成 — 不读取、不成帧、不等待应答。
+    /// 仅用于设备确实不应答的场景 (如 Modbus 广播); 设备若实际回包,
+    /// 未读走的字节会残留并在同通道后续请求中造成应答错位。
+    /// 默认实现返回 NotImplemented; Tcp/Serial 已覆盖, Tls 桩未实现。
+    virtual void Send(const Bytes& request,
+                      std::chrono::milliseconds timeout,
+                      SendHandler handler) {
+        (void)request; (void)timeout;
+        handler(Core::Unexpected(Core::Error::Code::NotImplemented,
+                                 "one-way send not supported by this channel"));
+    }
 
     /// 断开并释放底层资源; 挂起操作以 ConnectionClosed 完成
     virtual void Disconnect() = 0;

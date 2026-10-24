@@ -87,6 +87,30 @@ void ResolveAutoIncrementParameters(
 
 } // namespace
 
+/// 只发写路径 (op.expectResponse=false): 单向发送, 跳过应答校验与 read-back.
+///   releaseHandler 已包裹"释放在途写位" — 此处只负责终态回调恰好一次.
+void WriteOneWay(Transport::IChannel& channel,
+                 const std::shared_ptr<Core::Bytes>& request,
+                 int requestTimeoutMs,
+                 const std::shared_ptr<const WriteBackCheck>& backCheck,
+                 const std::string& opName,
+                 const std::function<void(Core::VoidExpected)>& releaseHandler) {
+    if (backCheck) {
+        releaseHandler(Core::Unexpected(Core::Error::Code::ConfigError,
+            "只发操作 (expectResponse=false) 不可启用 readBack: 无应答可校验",
+            "op=" + opName));
+        return;
+    }
+    channel.Send(*request, std::chrono::milliseconds(requestTimeoutMs),
+        [releaseHandler](Core::Expected<void> r) {
+            if (!r.has_value()) {
+                releaseHandler(Core::VoidExpected(Core::UnexpectedType{r.error()}));
+                return;
+            }
+            releaseHandler(Core::VoidExpected());
+        });
+}
+
 /// hex 字符串 (可能含空格/制表符分隔) → 实际字节数
 /// WriteService 编码时每字节 3 字符 "XX ", 直接 (size+1)/2 会高估 50%
 std::size_t HexByteCount(const std::string& s) {
@@ -394,6 +418,13 @@ void TagReader::WriteOnce(const Core::TagDefinition& tag,
     auto writeRelease = [handler, releaseSlot](Core::VoidExpected r) {
         handler(releaseSlot(std::move(r)));
     };
+    // 只发操作 (expectResponse=false): 发送后立即完成, 不读取应答也不做 echo 校验.
+    //   readBack 与只发互斥 (无应答可校验) — 在此兜底, 防绕过配置校验的旧快照.
+    if (!op->expectResponse) {
+        WriteOneWay(channel, requestShared, requestTimeoutMs, backCheck,
+                    writeOperation, writeRelease);
+        return;
+    }
     channel.SendReceive(*requestShared, framing,
                         std::chrono::milliseconds(requestTimeoutMs),
         [this, op, framing, &channel, requestTimeoutMs,
@@ -516,6 +547,12 @@ void TagReader::WriteBytes(const Core::TagDefinition& tag,
     auto writeRelease = [handler, releaseSlot](Core::VoidExpected r) {
         handler(releaseSlot(std::move(r)));
     };
+    // 只发操作 (expectResponse=false): 同 WriteOnce — 单向发送后直接终态.
+    if (!op->expectResponse) {
+        WriteOneWay(channel, requestShared, requestTimeoutMs, backCheck,
+                    writeOperation, writeRelease);
+        return;
+    }
     channel.SendReceive(*requestShared, framing,
                         std::chrono::milliseconds(requestTimeoutMs),
         [this, op, writeRelease, requestShared, framing, &channel,

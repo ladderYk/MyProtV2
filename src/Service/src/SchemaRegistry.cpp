@@ -155,6 +155,9 @@ const Fields& SchemaRegistry::ProtocolFields() {
               "操作语义标注: read=读操作 / write=写操作; "
               "供 UI 表单过滤与标签 operation/writeOperation 一致性校验",
               {"read", "write"}),
+        Plain("expectResponse", "bool", false, "true",
+              "是否等待并校验应答; false = 只发 (单向发送, 设备不应答), 仅写类操作可用; "
+              "设备若实际回包, 未读走的应答字节会污染同通道后续请求"),
         ObjF("responseParser", false, "响应解析器", Fields{
             Plain("validCondition", "string", false, "",
                   "有效性条件表达式 e.g. resp[1]==0x03; 空 = 跳过校验"),

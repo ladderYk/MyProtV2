@@ -20,6 +20,15 @@ std::chrono::microseconds SilenceGapUs(const Core::SilenceConfig& sc) {
     return std::chrono::microseconds(sc.frameGapUs);
 }
 
+/// 单向发送操作状态 (回调链共享保活)
+struct SerialTxOp {
+    explicit SerialTxOp(SendHandler h)
+        : handler(std::move(h)), done(false) {}
+    SendHandler handler;
+    std::shared_ptr<asio::steady_timer> watchdog;
+    bool done;
+};
+
 } // namespace
 
 struct SerialChannel::OpState {
@@ -187,6 +196,62 @@ void SerialChannel::SendReceive(const Bytes& request,
             });
 
             self->ReadSome(op, port);
+        });
+}
+
+void SerialChannel::Send(const Bytes& request,
+                         std::chrono::milliseconds timeout,
+                         SendHandler handler) {
+    auto port = _port;
+    if (!_connected.load() || !port) {
+        handler(Core::Unexpected(Core::Error::Code::ConnectionClosed,
+                                 "serial not connected"));
+        return;
+    }
+    if (request.empty()) {
+        handler(Core::Unexpected(Core::Error::Code::BuildError,
+                                 "empty request frame", "channel=" + _channelId));
+        return;
+    }
+
+    auto self = shared_from_this();
+    auto op = std::make_shared<SerialTxOp>(std::move(handler));
+    // 请求字节由本方法持有到 write 完成 (asio::async_write 不拷贝数据).
+    auto frame = std::make_shared<Bytes>(request);
+
+    // 发送看门狗: write 长时间不完成 → 判 Timeout 并关闭端口中止
+    op->watchdog = std::make_shared<asio::steady_timer>(_io);
+    op->watchdog->expires_after(timeout);
+    op->watchdog->async_wait([self, op, port](const asio::error_code& ec) {
+        if (!ec && !op->done) {
+            op->done = true;
+            asio::error_code ignore;
+            port->close(ignore);
+            // 连接级故障: 复位连接标志, 否则 IsConnected() 恒 true →
+            // GetOrCreateChannel 快路径复用已关闭端口 → 该设备永久失效.
+            self->_connected.store(false);
+            self->_port.reset();
+            self->SetError(Core::Error::Code::Timeout, "serial send timeout");
+            op->handler(Core::Unexpected(Core::Error::Code::Timeout,
+                                         "serial send timeout"));
+        }
+    });
+
+    asio::async_write(*port, asio::buffer(*frame),
+        [self, op, port, frame](const asio::error_code& ec, size_t /*bytes*/) {
+            if (op->done) return;
+            op->done = true;
+            op->watchdog->cancel();
+            if (ec) {
+                self->_connected.store(false);
+                self->_port.reset();
+                self->SetError(Core::Error::Code::WriteFailed, ec.message());
+                op->handler(Core::Unexpected(Core::Error::Code::WriteFailed,
+                                             ec.message()));
+                return;
+            }
+            // 写完即成功: 不启动静默窗口/读循环 — 本通道语义是设备不应答.
+            op->handler(Core::Expected<void>());
         });
 }
 

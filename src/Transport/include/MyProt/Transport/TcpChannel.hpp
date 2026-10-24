@@ -28,6 +28,11 @@ public:
                      std::chrono::milliseconds timeout,
                      ReceiveHandler handler) override;
 
+    /// One-way send: write the bytes and complete without starting a read loop
+    void Send(const Bytes& request,
+              std::chrono::milliseconds timeout,
+              SendHandler handler) override;
+
     void Disconnect() override;
     bool IsConnected() const override;
     Core::Error GetLastError() const override;
@@ -42,6 +47,15 @@ private:
         std::shared_ptr<const Core::FramingConfig> framing;
         std::shared_ptr<asio::steady_timer> watchdog;
         size_t maxFrameSize;
+        bool done;
+    };
+
+    /// One-way send operation state (shared keep-alive across the callback chain)
+    struct TxOp {
+        explicit TxOp(SendHandler h)
+            : handler(std::move(h)), done(false) {}
+        SendHandler handler;
+        std::shared_ptr<asio::steady_timer> watchdog;
         bool done;
     };
 

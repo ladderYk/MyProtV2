@@ -383,6 +383,11 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
     InstallStopSignals();
     while (IsRunning()) {
         try {
+            // io_context 在"没有任何挂起异步操作"时会因 run_for 无工作而进入 stopped
+            // 状态 — 典型场景: 全部标签为只写 (direction=write) 或只发操作, 轮询引擎
+            // 不持有定时器. 不 restart 则 WebApi 线程 post 的写任务永不执行 →
+            // 写请求空等 10s 超时.
+            if (io.stopped()) io.restart();
             io.run_for(std::chrono::milliseconds(200));
         } catch (const std::exception& e) {
             LOG_ERROR("IoLoop", "io 循环异常: %s", e.what());
@@ -401,6 +406,7 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
             std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!serverDone.load()
                 && std::chrono::steady_clock::now() < deadline) {
+            if (io.stopped()) io.restart();
             io.run_for(std::chrono::milliseconds(20));
         }
     }

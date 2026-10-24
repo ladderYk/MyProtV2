@@ -173,6 +173,7 @@ private:
 | 请求构建 | `Engine::RequestBuilder::Build` | 模板展开（字面量/变量/auto），见 [02_Engine.md §2.3](./02_Engine.md) |
 | 字节序裁决 | `Engine::ResponseParser::ResolveByteOrder` 静态方法 | **唯一裁决点**：tag 覆盖 → 协议 dataByteOrder → 大端；单读、批量读等所有管线共用，不再各处复制三段式回退 |
 | 发送接收 | `Transport::IChannel::SendReceive` | 超时预算模型见 ADR-0004 |
+| 只发（单向） | `Transport::IChannel::Send` | 仅 `operation.expectResponse=false`；写完即成功，不读取/不成帧/不做 echo 校验，见 [ADR-0018](../adr/0018-one-way-send-operation.md) |
 | 响应解析 | `Engine::ResponseParser::Parse` / `CheckCondition` | 写路径仅 CheckCondition（echo 校验） |
 
 **写互斥（P1 C，ADR-0011 §3.1；2026-08-29 实装）**：`TagReader` 内部维护 `std::unordered_map<std::string, std::atomic<bool>> _writingInFlight`（key = `deviceId`）。`WriteOnce` / `WriteBytes` 入口 `exchange(true)` 抢位——失败立即回 `Error::Code::Busy`（HTTP 503 映射）；成功抢位后唯一出口（`writeRelease` lambda）`store(false)` 释放。**写与读不互斥**——读路径不抢位，读 + 写并发由 channel `_inFlight` 守卫。
@@ -212,6 +213,8 @@ public:
   → `TagReader::WriteOnce` / `WriteBytes` → 可选 `BuildWriteBackCheck` 读回；
 - 通过 `io.post` 回到 io 线程执行（与轮询回调串行），调用方线程不直接碰 socket；
 - 写路径指标（`myprot_write_*`）随实现下沉，计数点位于 `WriteService`。
+
+**只发操作（ADR-0018）**：`operation.expectResponse=false` 时，`TagReader::WriteOnce` / `WriteBytes` 改走 `WriteOneWay`（`IChannel::Send`）——发出请求即完成，跳过 `validCondition` echo 校验与 `RunReadBack`，仍按 per-device 写互斥释放在途位。若请求同时带 `readBack=true`，返回 `ConfigError`（无应答可校验）。成功响应 `{"ok":true}` 仅表示**已发送**，不代表设备已执行；设备若实际回包，残留字节会污染同通道后续请求（见 ADR-0018 §后果）。
 
 ## 5.4 TagGrouper 与 MergedRequest
 
