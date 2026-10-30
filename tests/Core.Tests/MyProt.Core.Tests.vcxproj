@@ -148,6 +148,7 @@
     <ClCompile Include="..\MiniTestMain.cpp" />
     <ClCompile Include="ExpectedTests.cpp" />
     <ClCompile Include="ByteViewTests.cpp" />
+    <ClCompile Include="LengthFieldMathTests.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

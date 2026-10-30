@@ -17,9 +17,56 @@ namespace MyProt { namespace Core {
 
 // ────────── framing config (discriminated union) ──────────
 
+/// How the length field itself is encoded (ADR-0021 §2.1).
+/// Fixed = the legacy 1/2/4-byte endian field;
+/// Varint = base-128, low 7 bits per byte, bit 7 = continuation (MQTT remaining length).
+enum class LengthFieldEncoding { Fixed, Varint };
+
+/// A bit slice of the frame header (ADR-0021 §2.2).
+/// bitOffset is counted from the first byte of the frame, MSB first
+/// (bit 0 = bit 7 of byte 0); bitWidth is 1..32, value is unsigned big-endian.
+struct HeaderFieldConfig {
+    std::string name;               // field name exposed through Core::Frame
+    int bitOffset;                  // bits from frame start, MSB-first
+    int bitWidth;                   // 1..32
+
+    HeaderFieldConfig() : bitOffset(0), bitWidth(0) {}
+};
+
+/// One dispatch entry: a raw header value maps to a stable frame type (ADR-0021 §2.3).
+struct DispatchCaseConfig {
+    uint64_t value;                 // value read from the dispatch field
+    uint32_t type;                  // stable Core::Frame::type (defaults to value)
+    std::string name;               // human-readable type name (Core::Frame::typeName)
+
+    DispatchCaseConfig() : value(0), type(0) {}
+};
+
+/// Dispatch a frame by one extracted header field, rejecting unknown values
+/// unless rejectUnknown=false (ADR-0021 §2.3).
+struct DispatchConfig {
+    std::string field;              // header field name; empty = no dispatch
+    bool rejectUnknown;             // true: an unmatched value is Malformed
+    std::vector<DispatchCaseConfig> cases;
+
+    DispatchConfig() : rejectUnknown(true) {}
+};
+
+/// Reinterpret a frame region as count repeated fixed-stride records (ADR-0021 §2.4).
+/// Exposed as one Bytes field; this is a payload-record primitive, not HTTP chunked.
+struct RepeatConfig {
+    std::string countField;         // header field holding the record count
+    int stride;                     // bytes per record (> 0)
+    int offset;                     // byte offset of the first record from frame start
+    std::string name;               // output Bytes field name (default "records")
+    int maxCount;                   // safety cap for the count value (> 0)
+
+    RepeatConfig() : stride(0), offset(0), name("records"), maxCount(1024) {}
+};
+
 struct LengthFieldConfig {
     int lengthFieldOffset;          // byte offset of the length field within the frame (>=0, typically 2-4)
-    int lengthFieldLength;          // length-field byte count (1/2/4)
+    int lengthFieldLength;          // length-field byte count (1/2/4); must be 0 when lengthEncoding=Varint
     bool lengthIncludesHeader;      // true: the length value includes header bytes; false: body only
     ByteOrder byteOrder;            // length-field byte order (Modbus=BE, S7=LE, ...)
     int headerLength;               // fixed header byte count (used to locate the body start)
@@ -27,11 +74,28 @@ struct LengthFieldConfig {
                                     // (used when the protocol frame length != actual data length, e.g. trailing CRC)
     int maxFrameSize;               // runtime frame-length safety cap (default 1024, guards against oversized frames)
 
+    // ── primitives added for config-driven framing (ADR-0021); all optional ──
+    LengthFieldEncoding lengthEncoding;  // Fixed (default) or Varint
+    int varintMaxBytes;                  // Varint only: 1..4 continuation bytes
+    std::vector<HeaderFieldConfig> headerFields;  // bit slices exposed on Core::Frame
+    DispatchConfig dispatch;             // optional value -> type mapping
+    RepeatConfig repeat;                 // optional repeated-record region
+
     LengthFieldConfig()
         : lengthFieldOffset(0), lengthFieldLength(0), lengthIncludesHeader(false)
         , byteOrder(ByteOrder::BigEndian), headerLength(0), lengthAdjustment(0)
-        , maxFrameSize(1024) {}
+        , maxFrameSize(1024), lengthEncoding(LengthFieldEncoding::Fixed)
+        , varintMaxBytes(4) {}
 };
+
+/// Expected value of the length slot for a rendered frame of `totalBytes`.
+/// Single source of truth for render-side checks (save-time trial render and /api/preview):
+///   includesHeader ? total - adjustment : total - headerLength - adjustment
+inline long long ExpectedLengthFieldValue(const LengthFieldConfig& lf, long long totalBytes) {
+    return lf.lengthIncludesHeader
+        ? (totalBytes - lf.lengthAdjustment)
+        : (totalBytes - lf.headerLength - lf.lengthAdjustment);
+}
 
 struct FixedConfig {
     int fixedLength;
@@ -96,7 +160,12 @@ struct SerialTransportConfig {
     SerialTransportConfig() : baudRate(9600), dataBits(8), parity(Parity::None), stopBits(StopBits::One) {}
 };
 
-enum class TransportType { Tcp, Tls, Serial };  // maps to the JSON discriminator field "type"; CAN is reserved and not modeled (the v1 validator reports a name error)
+struct UdpTransportConfig {
+    uint16_t defaultPort;         // fallback port when the device leaves connection.port == 0
+    UdpTransportConfig() : defaultPort(0) {}
+};
+
+enum class TransportType { Tcp, Tls, Serial, Udp };  // maps to the JSON discriminator field "type"; CAN is reserved and not modeled (the v1 validator reports a name error)
 
 /// Transport config - tagged struct (replaces std::variant, ADR-0010 §3);
 /// type selects the active branch; fields of an inactive branch must not be read.
@@ -105,6 +174,7 @@ struct TransportConfig {
     TcpTransportConfig tcp;          // valid when type == Tcp
     TlsTransportConfig tls;          // valid when type == Tls
     SerialTransportConfig serial;    // valid when type == Serial
+    UdpTransportConfig udp;          // valid when type == Udp (connectionless datagram, ADR-0002)
 
     TransportConfig() : type(TransportType::Tcp) {}
 };
@@ -359,6 +429,58 @@ struct WebApiConfig {
         , rateLimitRps(5), rateLimitBurst(10), webRoot("webui/dist") {}
 };
 
+// ────────── southbound push-ingest config (device-level) ──────────
+
+/// MQTT subscribe-side config: the gateway is the client and the device data arrives as PUBLISH.
+/// Mapping is either topic-driven (tagFrom=topic) or payload-driven (tagFrom=payload).
+struct MqttIngestConfig {
+    std::string host;              // broker host; empty = fall back to device.connection.host
+    uint16_t port;                 // broker port; 0 = 1883
+    std::string clientId;          // empty = "myprot-sub-<deviceId>"
+    Optional<std::string> username;
+    Optional<std::string> password;
+    int keepAliveSec;              // 0 = 60
+    bool cleanSession;             // default true
+    int qos;                       // subscribe QoS (0/1); QoS 2 is rejected in v1
+    int reconnectMinMs;            // initial reconnect backoff (default 1000)
+    int reconnectMaxMs;            // reconnect backoff cap (default 30000)
+    int maxSilenceMs;              // 0 = no silence watchdog; >0 -> affected tags turn Uncertain after this gap
+    std::string topic;             // subscription filter (+ / # supported)
+    std::string tagFrom;           // "payload" (default) | "topic"
+    int tagTopicIndex;             // tagFrom=topic: 1-based topic segment carrying the tag name
+    std::string tagField;          // tagFrom=payload: field name (default "tag")
+    std::string valueField;        // default "value"
+    std::string tsField;           // default "ts"; empty = use local receive time
+
+    MqttIngestConfig()
+        : port(0), keepAliveSec(60), cleanSession(true), qos(0)
+        , reconnectMinMs(1000), reconnectMaxMs(30000), maxSilenceMs(0)
+        , tagTopicIndex(0) {}
+};
+
+/// TCP listener for device-initiated push (the gateway is the server, devices connect in).
+/// Frames are split by Core::FramingConfig; v1 payload codec is JSON only.
+struct TcpIngestConfig {
+    std::string bindAddress;       // default 0.0.0.0
+    uint16_t port;                 // required (>0)
+    FramingConfig framing;         // inbound frame splitter
+    int maxSilenceMs;              // 0 = no silence watchdog
+    std::string tagField;          // default "tag"
+    std::string valueField;        // default "value"
+    std::string tsField;           // default "ts"
+
+    TcpIngestConfig() : port(0), maxSilenceMs(0) {}
+};
+
+/// Device-level ingest binding. Absent = the device is polled only.
+struct IngestConfig {
+    std::string type;              // "mqtt" | "tcp"
+    MqttIngestConfig mqtt;
+    TcpIngestConfig tcp;
+
+    IngestConfig() {}
+};
+
 struct DeviceConfig {
     std::string id;
     std::string protocol;
@@ -367,6 +489,7 @@ struct DeviceConfig {
     Optional<std::string> username;  // protocol-level auth credentials: injected as a template variable during handshake, masked in logs
     Optional<std::string> password;
     Optional<ResilienceConfig> resilience; // per-device resilience override; unset = use the global ConfigRoot.resilience
+    Optional<IngestConfig> ingest;         // southbound push binding (mqtt subscribe / tcp listen); unset = poll-only device
     // device-level template-variable defaults (§4): merged at load time into each tag's effective variable set, with the tag's explicit declaration taking precedence
     std::map<std::string, uint32_t> variables;
 
@@ -481,6 +604,11 @@ struct TagDefinition {
     // variables carry the full write semantics (TransportSize/Length/DBNumber/AddrLo/...),
     // and it does not participate in polling; /api/data/write routes to this tag by tag name.
     std::string direction;              // "read" (default, participates in polling) | "write" (write-only tag, does not participate in polling)
+        // -- value provenance: a tag has exactly one source (no arbitration between poll and push) --
+    // "poll" (default): acquired by PollingEngine through the protocol operation template;
+    // "push": produced by the device-level ingest adapter (MQTT subscribe / TCP listen) and written
+    //   to LatestValueStore through the single TagValueSink; push tags are excluded from polling.
+    std::string source;
     std::string writeVariable;          // template variable name the value/bytes are injected into (default "WriteValue",
                                         //   templates consume {WriteValue:X4} or {WriteValue:raw} as needed)
     std::string readBackTag;            // write tag: the read-tag name referenced by the post-write read-back check
@@ -506,7 +634,7 @@ struct TagDefinition {
     TagDefinition()
         : scanRateMs(1000), finalType("UInt16")
         , coalesce(true)
-        , direction("read"), writeVariable(kDefaultWriteValueVariable)
+        , direction("read"), source("poll"), writeVariable(kDefaultWriteValueVariable)
         , bitOffset(-1) {
         // converters have no built-in instances - a default empty chain = no conversion
     }

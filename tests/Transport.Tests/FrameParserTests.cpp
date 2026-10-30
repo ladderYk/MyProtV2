@@ -77,3 +77,51 @@ TEST(LengthFieldFrameParserTest, LittleEndianLength) {
     EXPECT_FALSE(result.value().needMoreData);
     EXPECT_EQ(result.value().frame.size(), 15u);
 }
+
+// ─── ADR-0021: varint 长度域 ───
+
+static LengthFieldConfig MakeVarintConfig() {
+    LengthFieldConfig config;
+    config.lengthFieldOffset = 1;          // byte 0 = type/flags
+    config.lengthFieldLength = 0;          // width comes from the varint itself
+    config.lengthEncoding = LengthFieldEncoding::Varint;
+    config.varintMaxBytes = 4;
+    config.lengthIncludesHeader = false;
+    config.headerLength = 0;               // header = offset + actual varint width
+    config.maxFrameSize = 1024;
+    return config;
+}
+
+TEST(LengthFieldFrameParserTest, VarintLengthFramesAndMeasures) {
+    LengthFieldFrameParser parser(MakeVarintConfig());
+
+    // 0x30 = type/flags, 0x05 = remaining length, then 5 payload bytes
+    uint8_t frame[] = {0x30, 0x05, 'h','e','l','l','o'};
+    ByteView view(frame, sizeof(frame));
+
+    auto result = parser.Parse(view, 0);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(result.value().needMoreData);
+    EXPECT_EQ(result.value().frame.size(), 7u);
+    EXPECT_EQ(result.value().consumedBytes, 7u);
+
+    // TcpChannel 的 FrameComplete 走同一个 Measure：字节不足时不能误判为完整帧
+    LengthFieldFrameParser::FrameLayout layout =
+        LengthFieldFrameParser::Measure(MakeVarintConfig(), frame, 6);
+    EXPECT_TRUE(layout.needMore);
+    EXPECT_FALSE(layout.malformed);
+
+    layout = LengthFieldFrameParser::Measure(MakeVarintConfig(), frame, sizeof(frame));
+    EXPECT_FALSE(layout.needMore);
+    EXPECT_FALSE(layout.malformed);
+    EXPECT_EQ(layout.totalBytes, 7u);
+}
+
+TEST(LengthFieldFrameParserTest, VarintLongerThanMaxBytesIsMalformed) {
+    const uint8_t frame[] = {0x30, 0x80, 0x80, 0x80, 0x80};
+    const LengthFieldFrameParser::FrameLayout layout =
+        LengthFieldFrameParser::Measure(MakeVarintConfig(), frame, sizeof(frame));
+
+    EXPECT_TRUE(layout.malformed);
+    EXPECT_FALSE(layout.needMore);
+}

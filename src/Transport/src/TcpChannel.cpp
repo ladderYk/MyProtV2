@@ -3,6 +3,7 @@
 // 注意: 工程定义 ASIO_NO_DEPRECATED, 仅用新版 API (async_resolve(host,port) / asio::post)
 
 #include "MyProt/Transport/TcpChannel.hpp"
+#include "MyProt/Transport/LengthFieldFrameParser.hpp"
 #include "MyProt/Transport/SocketKeepAlive.hpp"
 #include "MyProt/Core/Log.hpp"
 #include <asio/connect.hpp>
@@ -25,41 +26,11 @@ bool FrameComplete(const Core::Bytes& b, const Core::FramingConfig& f) {
         return b.size() >= static_cast<size_t>(f.fixed.fixedLength);
 
     case Core::FramingType::LengthField: {
-        const Core::LengthFieldConfig& lf = f.lengthField;
-        size_t need = static_cast<size_t>(lf.lengthFieldOffset + lf.lengthFieldLength);
-        if (b.size() < need) return false;
-
-        const uint8_t* p = b.data() + lf.lengthFieldOffset;
-        unsigned long long lenVal = 0;
-        bool bigEndian = (lf.byteOrder == Core::ByteOrder::BigEndian);
-        switch (lf.lengthFieldLength) {
-        case 1:
-            lenVal = p[0];
-            break;
-        case 2:
-            lenVal = bigEndian
-                ? ((static_cast<unsigned long long>(p[0]) << 8) | p[1])
-                : ((static_cast<unsigned long long>(p[1]) << 8) | p[0]);
-            break;
-        case 4:
-            lenVal = bigEndian
-                ? ((static_cast<unsigned long long>(p[0]) << 24) |
-                   (static_cast<unsigned long long>(p[1]) << 16) |
-                   (static_cast<unsigned long long>(p[2]) << 8)  | p[3])
-                : ((static_cast<unsigned long long>(p[3]) << 24) |
-                   (static_cast<unsigned long long>(p[2]) << 16) |
-                   (static_cast<unsigned long long>(p[1]) << 8)  | p[0]);
-            break;
-        default:
-            return true;   // 配置非法 → 交由上层解析阶段报错
-        }
-
-        size_t total = lf.lengthIncludesHeader
-            ? static_cast<size_t>(lenVal) + static_cast<size_t>(lf.lengthAdjustment)
-            : static_cast<size_t>(lf.headerLength) +
-              static_cast<size_t>(lenVal) +
-              static_cast<size_t>(lf.lengthAdjustment);
-        return b.size() >= total;
+        // 与仿真/入站共用同一份长度域语义（定长 / varint, ADR-0021）。
+        const LengthFieldFrameParser::FrameLayout layout =
+            LengthFieldFrameParser::Measure(f.lengthField, b.data(), b.size());
+        // 规格非法时交由上层解析阶段报错（不在此处死等）
+        return !layout.needMore;
     }
 
     case Core::FramingType::Silence:

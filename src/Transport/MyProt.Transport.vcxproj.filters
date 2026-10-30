@@ -39,6 +39,12 @@
     <ClInclude Include="include\MyProt\Transport\SerialChannel.hpp">
       <Filter>Header Files\include_MyProt_Transport</Filter>
     </ClInclude>
+    <ClInclude Include="include\MyProt\Transport\StreamFrameCodec.hpp">
+      <Filter>Header Files\include_MyProt_Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Transport\UdpChannel.hpp">
+      <Filter>Header Files\include_MyProt_Transport</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\TcpChannel.cpp">
@@ -51,6 +57,12 @@
       <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="src\LengthFieldFrameParser.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\StreamFrameCodec.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UdpChannel.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
   </ItemGroup>

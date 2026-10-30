@@ -16,56 +16,75 @@ Expected<FrameParseResult> LengthFieldFrameParser::Parse(const ByteView& data, s
         return Unexpected(Error::Code::ParseError, "Invalid start position");
     }
 
-    size_t available = data.size - startPos;
+    const size_t available = data.size - startPos;
+    FrameParseResult result;
     if (available == 0) {
-        FrameParseResult result;
         result.needMoreData = true;
         result.consumedBytes = 0;
         return result;
     }
 
-    // 检查是否有足够的头部数据来提取长度字段
-    size_t headerRequired = _config.lengthFieldOffset + _config.lengthFieldLength;
-    if (available < headerRequired) {
-        FrameParseResult result;
+    const FrameLayout layout = Measure(_config, data.data + startPos, available);
+    if (layout.malformed) {
+        return Unexpected(Error::Code::ParseError, layout.error);
+    }
+    if (layout.needMore) {
         result.needMoreData = true;
         result.consumedBytes = available;
         return result;
     }
 
-    // 提取长度值
-    ByteView headerData;
-    headerData.data = data.data + startPos;
-    headerData.size = data.size - startPos;
-    auto lengthResult = ExtractLengthValue(headerData);
-    if (!lengthResult.has_value()) {
-        const Error& err = lengthResult.error();
-        return Unexpected(err.code, err.message);
-    }
-
-    size_t lengthValue = lengthResult.value();
-    size_t totalFrameSize = CalculateTotalFrameSize(lengthValue);
-
-    // 检查帧大小是否有效
-    if (!ValidateFrameSize(totalFrameSize)) {
-        return Unexpected(Error::Code::ParseError, "Frame size exceeds maximum limit");
-    }
-
-    // 检查是否有完整的帧数据
-    if (available < totalFrameSize) {
-        FrameParseResult result;
-        result.needMoreData = true;
-        result.consumedBytes = available;
-        return result;
-    }
-
-    // 提取完整帧
-    FrameParseResult result;
-    result.frame.assign(data.data + startPos, data.data + startPos + totalFrameSize);
-    result.consumedBytes = totalFrameSize;
+    result.frame.assign(data.data + startPos,
+                        data.data + startPos + layout.totalBytes);
+    result.consumedBytes = layout.totalBytes;
     result.needMoreData = false;
-
     return result;
+}
+
+LengthFieldFrameParser::FrameLayout LengthFieldFrameParser::Measure(
+        const Core::LengthFieldConfig& config, const uint8_t* frame,
+        size_t available) {
+    FrameLayout layout;
+
+    // 检查是否有足够的数据开始读取长度域。Varint 宽度不定, 至少要 1 字节。
+    const size_t lengthWidth = config.lengthEncoding == Core::LengthFieldEncoding::Varint
+        ? 1 : static_cast<size_t>(config.lengthFieldLength);
+    const size_t headerRequired = static_cast<size_t>(config.lengthFieldOffset) + lengthWidth;
+    if (available < headerRequired) {
+        layout.needMore = true;
+        return layout;
+    }
+
+    // 提取长度值 (同时得到编码宽度: Fixed = lengthFieldLength, Varint = 实际字节数)
+    size_t lengthValue = 0;
+    size_t encodedWidth = 0;
+    std::string err;
+    const LengthStatus st = ReadLength(config, frame, available,
+                                       lengthValue, encodedWidth, err);
+    if (st == LengthStatus::NeedMore) {
+        layout.needMore = true;
+        return layout;
+    }
+    if (st == LengthStatus::Malformed) {
+        layout.malformed = true;
+        layout.error = err;
+        return layout;
+    }
+
+    const int64_t totalFrameSize = CalculateTotalFrameSize(config, lengthValue, encodedWidth);
+    if (!ValidateFrameSize(config, totalFrameSize)) {
+        layout.malformed = true;
+        layout.error = "Frame size exceeds maximum limit";
+        return layout;
+    }
+
+    if (available < static_cast<size_t>(totalFrameSize)) {
+        layout.needMore = true;
+        return layout;
+    }
+
+    layout.totalBytes = static_cast<size_t>(totalFrameSize);
+    return layout;
 }
 
 bool LengthFieldFrameParser::HasCompleteFrame(const ByteView& data) {
@@ -79,74 +98,113 @@ bool LengthFieldFrameParser::HasCompleteFrame(const ByteView& data) {
 
 // 私有方法实现
 
-Expected<size_t> LengthFieldFrameParser::ExtractLengthValue(const ByteView& headerData) {
-    if (headerData.size < _config.lengthFieldOffset + _config.lengthFieldLength) {
-        return Unexpected(Error::Code::ParseError, "Insufficient header data for length extraction");
+LengthFieldFrameParser::LengthStatus LengthFieldFrameParser::ReadLength(
+        const Core::LengthFieldConfig& config, const uint8_t* frame,
+        size_t available, size_t& value, size_t& width, std::string& err) {
+    const size_t offset = static_cast<size_t>(config.lengthFieldOffset);
+    if (available < offset + 1) {
+        err = "Insufficient header data for length extraction";
+        return LengthStatus::NeedMore;
     }
 
-    const uint8_t* lengthData = headerData.data + _config.lengthFieldOffset;
+    if (config.lengthEncoding == Core::LengthFieldEncoding::Varint) {
+        // base-128: 低 7 位有效, 最高位 = 继续标志 (ADR-0021 §2.1)
+        const size_t maxBytes = static_cast<size_t>(config.varintMaxBytes);
+        uint64_t decoded = 0;
+        for (size_t i = 0; i < maxBytes; ++i) {
+            if (offset + i >= available) {
+                err = "Incomplete varint length field";
+                return LengthStatus::NeedMore;
+            }
+            const uint8_t b = frame[offset + i];
+            decoded |= (static_cast<uint64_t>(b & 0x7F) << (7 * i));
+            if ((b & 0x80) == 0) {
+                value = static_cast<size_t>(decoded);
+                width = i + 1;
+                return LengthStatus::Complete;
+            }
+        }
+        err = "Varint length field exceeds varintMaxBytes";
+        return LengthStatus::Malformed;
+    }
 
-    switch (_config.lengthFieldLength) {
+    if (available < offset + static_cast<size_t>(config.lengthFieldLength)) {
+        err = "Insufficient header data for length extraction";
+        return LengthStatus::NeedMore;
+    }
+
+    const uint8_t* lengthData = frame + offset;
+    width = static_cast<size_t>(config.lengthFieldLength);
+    switch (config.lengthFieldLength) {
         case 1:
-            return static_cast<size_t>(lengthData[0]);
+            value = static_cast<size_t>(lengthData[0]);
+            return LengthStatus::Complete;
 
         case 2: {
-            uint16_t length;
-            if (_config.byteOrder == Core::ByteOrder::BigEndian) {
-                length = ToUInt16BigEndian(lengthData);
-            } else {
-                length = ToUInt16LittleEndian(lengthData);
-            }
-            return static_cast<size_t>(length);
+            const uint16_t length = (config.byteOrder == Core::ByteOrder::BigEndian)
+                ? ToUInt16BigEndian(lengthData) : ToUInt16LittleEndian(lengthData);
+            value = static_cast<size_t>(length);
+            return LengthStatus::Complete;
         }
 
         case 4: {
-            uint32_t length;
-            if (_config.byteOrder == Core::ByteOrder::BigEndian) {
-                length = ToUInt32BigEndian(lengthData);
-            } else {
-                length = ToUInt32LittleEndian(lengthData);
-            }
-            return static_cast<size_t>(length);
+            const uint32_t length = (config.byteOrder == Core::ByteOrder::BigEndian)
+                ? ToUInt32BigEndian(lengthData) : ToUInt32LittleEndian(lengthData);
+            value = static_cast<size_t>(length);
+            return LengthStatus::Complete;
         }
 
         default:
-            return Unexpected(Error::Code::ConfigError, "Unsupported length field length");
+            err = "Unsupported length field length";
+            return LengthStatus::Malformed;
     }
 }
 
-size_t LengthFieldFrameParser::CalculateTotalFrameSize(size_t bodyLength) const {
-    if (_config.lengthIncludesHeader) {
+int64_t LengthFieldFrameParser::CalculateTotalFrameSize(
+        const Core::LengthFieldConfig& config, size_t bodyLength,
+        size_t lengthWidth) {
+    const int64_t body = static_cast<int64_t>(bodyLength);
+    const int64_t adj = static_cast<int64_t>(config.lengthAdjustment);
+    if (config.lengthIncludesHeader) {
         // length 字段值包含帧头长度
-        return bodyLength + _config.lengthAdjustment;
-    } else {
-        // length 字段值不包含帧头长度
-        return _config.headerLength + bodyLength + _config.lengthAdjustment;
+        return body + adj;
     }
+    if (config.headerLength > 0) {
+        // length 字段值不包含帧头长度, 帧头长度由配置给出
+        return static_cast<int64_t>(config.headerLength) + body + adj;
+    }
+    if (config.lengthEncoding == Core::LengthFieldEncoding::Varint) {
+        // headerLength=0 且 Varint: 帧头 = 长度域之前的字节 + 长度域自身 (宽度运行时才知道)
+        return static_cast<int64_t>(config.lengthFieldOffset)
+             + static_cast<int64_t>(lengthWidth) + body + adj;
+    }
+    // Fixed 且 headerLength=0: 保持既有语义 (长度值即总帧长, 不叠加帧头)
+    return body + adj;
 }
 
-bool LengthFieldFrameParser::ValidateFrameSize(size_t totalSize) const {
-    return totalSize <= _config.maxFrameSize && totalSize > 0;
+bool LengthFieldFrameParser::ValidateFrameSize(const Core::LengthFieldConfig& config,
+                                               int64_t totalSize) {
+    return totalSize > 0 && totalSize <= config.maxFrameSize;
 }
 
 // 字节序转换实现
 
-uint16_t LengthFieldFrameParser::ToUInt16BigEndian(const uint8_t* data) const {
+uint16_t LengthFieldFrameParser::ToUInt16BigEndian(const uint8_t* data) {
     return (static_cast<uint16_t>(data[0]) << 8) | data[1];
 }
 
-uint16_t LengthFieldFrameParser::ToUInt16LittleEndian(const uint8_t* data) const {
+uint16_t LengthFieldFrameParser::ToUInt16LittleEndian(const uint8_t* data) {
     return data[0] | (static_cast<uint16_t>(data[1]) << 8);
 }
 
-uint32_t LengthFieldFrameParser::ToUInt32BigEndian(const uint8_t* data) const {
+uint32_t LengthFieldFrameParser::ToUInt32BigEndian(const uint8_t* data) {
     return (static_cast<uint32_t>(data[0]) << 24) | 
            (static_cast<uint32_t>(data[1]) << 16) | 
            (static_cast<uint32_t>(data[2]) << 8) | 
            data[3];
 }
 
-uint32_t LengthFieldFrameParser::ToUInt32LittleEndian(const uint8_t* data) const {
+uint32_t LengthFieldFrameParser::ToUInt32LittleEndian(const uint8_t* data) {
     return data[0] | 
            (static_cast<uint32_t>(data[1]) << 8) | 
            (static_cast<uint32_t>(data[2]) << 16) | 

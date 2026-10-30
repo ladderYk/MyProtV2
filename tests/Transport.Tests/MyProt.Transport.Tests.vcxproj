@@ -148,6 +148,8 @@
     <ClCompile Include="..\MiniTestMain.cpp" />
     <ClCompile Include="FrameParserTests.cpp" />
     <ClCompile Include="TcpChannelTests.cpp" />
+    <ClCompile Include="UdpChannelTests.cpp" />
+    <ClCompile Include="StreamFrameSpecTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Transport\MyProt.Transport.vcxproj">

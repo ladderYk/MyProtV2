@@ -119,6 +119,23 @@ using IChannelPtr = std::shared_ptr<IChannel>;
 
 详见 `Config_Schema.md §0` + `architecture/06` §十七 ✅ 16。
 
+## 3.1.3 UDP 数据报通道（UdpChannel）
+
+[src/Transport/include/MyProt/Transport/UdpChannel.hpp](../../src/Transport/include/MyProt/Transport/UdpChannel.hpp) + [src/Transport/src/UdpChannel.cpp](../../src/Transport/src/UdpChannel.cpp) — `TransportType::Udp` 的 `IChannel` 实现（ADR-0002 §7）。与 TCP 的关键差异：
+
+| 维度 | TcpChannel | UdpChannel |
+|------|-----------|-----------|
+| `Connect` | 真异步 TCP 连接 | 仅 `open` socket + 解析对端 endpoint，成功即 `_connected=true` |
+| 响应边界 | 按 `framing` 流内切帧（`Measure` / `FrameComplete`），未成帧继续 `ReadChunk` | **一数据报 = 一帧**：`async_receive_from` 收一个数据报即整段返回，不拼接 |
+| `framing` 作用 | 决定帧边界 | 仅取 `maxFrameSize` 作接收缓冲上限（退化） |
+| 超时/错误 | 关 socket + `_connected=false` → ChannelManager 重建 | 同（close 顺带丢弃迟到数据报，避免与下次应答错配） |
+| 单在途 | `_inFlight` 守卫 → 并发 `SendReceive` 返 `Busy` | 同 |
+
+- `Send`（单向/广播）：`async_send_to` 发出即完成，不读回。
+- 端点缓存键：`udp:host:port`（`ChannelManager::ComputeEndpointKey`）；设备 `port=0` 时回落协议 `transport.udp.defaultPort`。
+- 通道工厂（`App/main.cpp`）按 `TransportType::Udp` 创建 `UdpChannel`。
+- 单测：[tests/Transport.Tests/UdpChannelTests.cpp](../../tests/Transport.Tests/UdpChannelTests.cpp) 以 asio loopback 覆盖回显成帧、无应答超时、单在途 Busy。
+
 ## 3.2 IFrameParser
 
 ```cpp
@@ -154,12 +171,19 @@ using IFrameParserPtr = std::shared_ptr<IFrameParser>;
 >
 > | type | 成帧依据 | 实现位置 | v1 |
 > |------|------|------|:--:|
-> | `LengthField` | 帧头长度字段 | `LengthFieldFrameParser::Parse`；TCP 读循环内另有等价 `FrameComplete` 判定 | ✓ |
+> | `LengthField` | 帧头长度字段（定长或 varint） | `LengthFieldFrameParser`（`Parse` / `Measure`）；`TcpChannel::FrameComplete`、仿真端、`StreamFrameCodec` 共用 | ✓ |
 > | `Fixed` | 固定字节数 | **无独立 parser 类**（见 §3.3）；`TcpChannel::FrameComplete` 与 `SimulationServer` 内联按 `fixedLength` 判定 | ✓ |
 > | `Silence` | 字符间静默超时（RTU） | `SerialChannel` 读循环（`frameGapUs`）；TCP 侧退化为"首个数据块即一帧" | ✓ |
 > | `Message` | 一次 read 即一帧（CAN 8/64B） | 通道按帧收发，无流式拼装 | v1 校验器报名称错误 |
 >
-> 现状：`IFrameParser` **仅有 `LengthFieldFrameParser` 一个实现**，且只被仿真端 `SimulationServer` 的切帧路径使用；真实设备路径（`TcpChannel`）用自带的 `FrameComplete` 本地函数按 `framingConfig` 判定完整性，不经过 `IFrameParser`。
+> 现状：`IFrameParser` 有 `LengthFieldFrameParser` 一个实现，长度域语义（定长 / varint / `lengthAdjustment`）只在它内部保留一份：
+>
+> - 仿真端 `SimulationServer` 直接调 `Parse` 切帧；
+> - 轮询路径 `TcpChannel::FrameComplete` 调 `LengthFieldFrameParser::Measure`（只测帧边界、不拷贝帧）；
+> - 入站路径 `StreamFrameCodec`（`Core::IFrameCodec`）基于 `Parse` 构建 `Core::Frame` 并做位域/分派/记录区提取（
+>   [ADR-0021](../adr/0021-config-driven-framing-primitives.md)）。
+>
+> MQTT 有自己的一份 `IFrameCodec` 实现（`Northbound::MqttCodec`），不复用 `StreamFrameCodec`——但 MQTT 的 varint 语义是协议定义，不来自 framing 配置。
 
 ## 3.3 Fixed 成帧（无独立 parser）
 
@@ -180,6 +204,16 @@ namespace MyProt { namespace Transport {
 /// LengthField 帧解析器实现
 class LengthFieldFrameParser : public IFrameParser {
 public:
+    /// 帧边界测量结果（不拷贝帧）；Parse 与 TcpChannel::FrameComplete 共用
+    struct FrameLayout {
+        bool needMore;
+        bool malformed;
+        std::size_t totalBytes;
+        std::string error;
+    };
+    static FrameLayout Measure(const Core::LengthFieldConfig& config,
+                               const uint8_t* data, std::size_t available);
+
     explicit LengthFieldFrameParser(const Core::LengthFieldConfig& config);
 
     // IFrameParser 接口实现
@@ -188,27 +222,53 @@ public:
 
 private:
     Core::LengthFieldConfig _config;
+    enum class LengthStatus { Complete, NeedMore, Malformed };
 
-    Expected<size_t> ExtractLengthValue(const ByteView& headerData);
-    size_t CalculateTotalFrameSize(size_t bodyLength) const;
-    bool ValidateFrameSize(size_t totalSize) const;
+    static LengthStatus ReadLength(const Core::LengthFieldConfig& config,
+                                   const uint8_t* frame, size_t available,
+                                   size_t& value, size_t& width, std::string& err);
+    static int64_t CalculateTotalFrameSize(const Core::LengthFieldConfig& config,
+                                           size_t bodyLength, size_t lengthWidth);
+    static bool ValidateFrameSize(const Core::LengthFieldConfig& config, int64_t totalSize);
 
-    uint16_t ToUInt16BigEndian(const uint8_t* data) const;
-    uint16_t ToUInt16LittleEndian(const uint8_t* data) const;
-    uint32_t ToUInt32BigEndian(const uint8_t* data) const;
-    uint32_t ToUInt32LittleEndian(const uint8_t* data) const;
+    static uint16_t ToUInt16BigEndian(const uint8_t* data);
+    static uint16_t ToUInt16LittleEndian(const uint8_t* data);
+    static uint32_t ToUInt32BigEndian(const uint8_t* data);
+    static uint32_t ToUInt32LittleEndian(const uint8_t* data);
 };
 
 }} // namespace MyProt::Transport
 ```
 
-**切帧公式**（`CalculateTotalFrameSize`）：
+**切帧公式**（`LengthFieldFrameParser::CalculateTotalFrameSize`）：
 
 - `lengthIncludesHeader=true` → `total = lengthValue + lengthAdjustment`
-- `lengthIncludesHeader=false` → `total = headerLength + lengthValue + lengthAdjustment`
+- `lengthIncludesHeader=false` → `total = headerLength + lengthValue + lengthAdjustment`；当 `headerLength = 0` 且 `lengthFieldEncoding=Varint` 时，视作 `headerLength = lengthFieldOffset + 实际 varint 宽度`
 - `ValidateFrameSize`：`0 < total <= maxFrameSize`
-- 长度字段长度 `lengthFieldLength ∈ {1,2,4}`，字节序按 `byteOrder`（`ExtractLengthValue`）
+- 定长编码：`lengthFieldLength ∈ {1,2,4}`，字节序按 `byteOrder`（`ExtractLengthValue`）
+- `Varint`（[ADR-0021](../adr/0021-config-driven-framing-primitives.md) §2.1）：`lengthFieldLength` 必须为 0，`varintMaxBytes ∈ [1,4]`；base-128（低 7 位有效、最高位继续），宽度由编码自身给出；超过上限仍未结束即非法
 - 数据不足时返回 `FrameParseResult{ needMoreData = true }`，由调用方继续累积
+
+`Measure` 与 `Parse` 共用同一套长度域/帧长计算，但 `Measure` **不拷贝帧**：它只返回 `{needMore, malformed, totalBytes}`，供 `TcpChannel::FrameComplete` 这类"只关心够不够一帧"的热路径使用。
+
+## 3.4.1 配置驱动的帧规格（ADR-0021）
+
+`StreamFrameCodec` 是帧栈的栈底实现（`Core::IFrameCodec`），把 `LengthField` / `Fixed` 字节流变成带字段的 `Core::Frame`：
+
+| 原语 | 配置 | 行为 |
+|------|------|------|
+| varint 长度域 | `lengthFieldEncoding=Varint` + `varintMaxBytes` | 切帧；帧头宽度动态计算 |
+| 位域提取 | `headerFields[{name,bitOffset,bitWidth}]` | 从帧首 MSB 起算，写入 `Frame` 的 `UInt` 字段 |
+| 分派 | `dispatch{field,cases[],rejectUnknown}` | 命中 → `Frame::type` / `typeName`；未命中默认判非法帧 |
+| 重复记录 | `repeat{countField,stride,offset,name,maxCount}` | 帧内 `[offset, offset+count*stride)` 作为 `Bytes` 字段 |
+
+边界语义：
+
+- 所有位偏移 / 记录区偏移都相对**帧首**（含帧头），不是相对 payload。
+- `LengthField` 的 `Frame::payload` 从帧头之后开始（`headerLength`，或 `lengthFieldOffset + 长度域实际宽度`）；`Fixed` 的 payload 为整帧。
+- 规格违例统一返回 `Malformed`（入站调用方断链），不做"尽量解析"。
+- 加载期校验（`SchemaChecker`）覆盖：varint 宽度、位域范围/重名、dispatch 字段存在性与重复值、repeat 的 stride/offset/maxCount。
+- 这一层不解释字段语义，也不负责会话状态；CRC/校验和、可变长记录、HTTP chunked 均未纳入。
 
 ## 3.5 TcpChannel
 

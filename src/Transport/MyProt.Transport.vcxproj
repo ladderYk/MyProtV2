@@ -135,12 +135,16 @@
     <ClInclude Include="include\MyProt\Transport\TcpChannel.hpp" />
     <ClInclude Include="include\MyProt\Transport\TlsChannel.hpp" />
     <ClInclude Include="include\MyProt\Transport\SerialChannel.hpp" />
+    <ClInclude Include="include\MyProt\Transport\StreamFrameCodec.hpp" />
+    <ClInclude Include="include\MyProt\Transport\UdpChannel.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\TcpChannel.cpp" />
     <ClCompile Include="src\TlsChannel.cpp" />
     <ClCompile Include="src\SerialChannel.cpp" />
     <ClCompile Include="src\LengthFieldFrameParser.cpp" />
+    <ClCompile Include="src\StreamFrameCodec.cpp" />
+    <ClCompile Include="src\UdpChannel.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Core\MyProt.Core.vcxproj">
