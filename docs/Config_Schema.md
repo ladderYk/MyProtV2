@@ -10,6 +10,7 @@
 3. "可选"字段缺省时取文中给出的默认值；加载器在缺省时不得报错。
 4. 时间单位统一为毫秒（字段名以 `Ms` 结尾）。
 5. **配置代际 `schemaVersion`**（整数，裁决见 [ADR-0005](./adr/0005-config-versioning.md)）：标识配置格式的机器代际，当前 `kSupportedSchemaVersion = 2`。它与本文档修订号（v4.0 等）**解耦**——文档小步修订不改代际，仅破坏性格式变更才递增代际。`ConfigRoot` 与每个 `ProtocolConfig` 顶层均可选携带；缺省 = Warning + 假定当前代际，存在但不匹配 = 启动 Fail-Fast（见 §7 版本门禁）。
+6. **注释与 BOM**：配置文件允许 `//` 行注释与 `/* ... */` 块注释（解析前丢弃，不进入 POCO），并容忍 UTF-8 BOM；字符串字面量内的 `//`、`/*` 原样保留。`MyProt.App.exe --validate` 与 WebUI 自检使用同一策略。注意：表单模式保存会重新序列化，注释随之丢失——需长期保留注释时用 JSON 模式编辑。HTTP 请求体（`/api/*`）仍是严格 JSON。
 
 ---
 
@@ -33,8 +34,8 @@ configs/
 ├── protocols/      # 一文件一协议 (例: modbus-tcp.json)
 │                   # 顶层可选 simulation 段 — 每协议一个仿真实例
 ├── tags.json       # 设备 + 标签 + 全局韧性 + WebApi
-└── server.json     # 旧版全局仿真实例 (回退)
-                    # 可选缺失 — listenPort 默认 0 = 关闭
+└── server.json     # 旧版全局仿真实例 (回退) + 北向 MQTT (mqtt 段)
+                    # 可选缺失 — listenPort 默认 0 = 关闭, mqtt.enabled 默认 false
 ```
 
 仿真设备按协议配置：`protocols/*.json` 顶层的 `simulation` 段为该协议声明一个独立仿真实例（独立端口、独立寄存器数据区），因此同一进程内可同时运行多个仿真设备。`server.json` 的 `simulation` 段仅为旧配置兼容：只有当**没有任何协议**声明 `simulation.listenPort > 0` 时才启用，并承载 0 号协议（按文件名字典序）。详见 §2.6 / §13 与 [ADR-0017](./adr/0017-protocol-scoped-simulation-instances.md)。
@@ -126,9 +127,18 @@ configs/
 | `parity` | string | `"None"` | `None` / `Odd` / `Even` |
 | `stopBits` | string | `"One"` | `One` / `Two` |
 
+**Udp**（无连接数据报，ADR-0002）
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `type` | string | — | 固定 `"Udp"` |
+| `defaultPort` | uint16 | 0 | 设备未指定端口时的回退值（`0` = 必须由设备显式指定） |
+
+> **成帧语义**：UDP 是无连接数据报，**一个数据报 = 一帧**，不存在流内切帧。`framing` 的 `LengthField` / `Fixed` 在 UDP 下只用作**接收缓冲上限保护**（`maxFrameSize`），通道收到一个数据报即作为完整响应返回，不做跨包拼接。设备级 `connection.host` 必填、`port`（或 `defaultPort`）解析同 Tcp（规则10）。
+
 ### 2.2 framing（判别联合体，判别字段 `type`）
 
-> framing 共三分类（裁决见 [ADR-0002](./adr/0002-transport-abstraction.md)）：`LengthField` 为字节流成帧；`Silence` 为串口 RTU 静默成帧。`Fixed` 与 `Message`（CAN 预留）当前均未实装，见 [ROADMAP.md](./ROADMAP.md)。
+> framing 共四分类（裁决见 [ADR-0002](./adr/0002-transport-abstraction.md)）：`LengthField` 为字节流成帧（定长或 varint 长度域）；`Fixed` 为定长帧；`Silence` 为串口 RTU 静默成帧；`Message`（CAN 预留）当前未实装，见 [ROADMAP.md](./ROADMAP.md)。`LengthField` 的 varint / 位域 / 分派 / 重复记录原语见 [ADR-0021](./adr/0021-config-driven-framing-primitives.md)。
 
 **LengthField**
 
@@ -136,12 +146,45 @@ configs/
 |------|------|------|------|
 | `type` | string | — | 固定 `"LengthField"` |
 | `lengthFieldOffset` | int | 0 | 长度字段在帧中的字节偏移 |
-| `lengthFieldLength` | int | — | 长度字段自身字节数，取值 1 / 2 / 4 |
+| `lengthFieldLength` | int | 0 | 长度字段自身字节数：`lengthFieldEncoding=Fixed` 时取 1 / 2 / 4；`=Varint` 时必须为 0（宽度运行时决定） |
+| `lengthFieldEncoding` | string | `"Fixed"` | 长度域编码：`Fixed`（按 `byteOrder` 读 1/2/4 字节）或 `Varint`（base-128，低 7 位有效、最高位继续，**小端**，`byteOrder` 不生效） |
+| `varintMaxBytes` | int | 4 | Varint 最大字节数，取值 1~4；超出仍未结束即判非法帧 |
 | `lengthIncludesHeader` | bool | false | 长度值是否包含帧头自身 |
-| `byteOrder` | ByteOrder | `"BigEndian"` | 长度字段的字节序 |
-| `headerLength` | int | 0 | **帧头字节数**（帧首至长度字段结束）。总帧长公式：`lengthIncludesHeader = false` 时 `总帧长 = headerLength + 长度字段值 + lengthAdjustment`；`= true` 时 `总帧长 = 长度字段值 + lengthAdjustment`。**注意**：`0` 表示"长度字段前无帧头"，仅当长度字段恰在帧首时正确——如 Modbus MBAP（事务 ID 2B + 协议 ID 2B + 长度 2B = 6B 帧头，长度值为"其后字节数"）必须显式配 `6`，配 `0` 会切出短帧导致对端匹配失败 |
+| `byteOrder` | ByteOrder | `"BigEndian"` | 长度字段的字节序（仅 `Fixed` 编码生效） |
+| `headerLength` | int | 0 | **帧头字节数**（帧首至长度字段结束）。总帧长公式：`lengthIncludesHeader = false` 时 `总帧长 = headerLength + 长度字段值 + lengthAdjustment`；`= true` 时 `总帧长 = 长度字段值 + lengthAdjustment`。**注意**：`0` 表示"长度字段前无帧头"；定长编码下仅当长度字段恰在帧首时正确——如 Modbus MBAP（事务 ID 2B + 协议 ID 2B + 长度 2B = 6B 帧头，长度值为"其后字节数"）必须显式配 `6`。`Varint` 且 `headerLength=0` 时，帧头自动按 `lengthFieldOffset + 实际 varint 宽度` 计算 |
 | `lengthAdjustment` | int | 0 | `总帧长 = 解析值 + lengthAdjustment`（±修正，如含 CRC 尾） |
 | `maxFrameSize` | int | 1024 | 帧长安全上限，超出即判为非法 |
+| `headerFields` | object[] | `[]` | 位域字段表，见下 |
+| `dispatch` | object | 无 | 按位域值分派帧类型，见下 |
+| `repeat` | object | 无 | 重复记录区，见下 |
+
+> **payload 语义**：`StreamFrameCodec` 交给上层的 `Frame::payload` 是**帧头之后**的字节（`headerLength > 0` 时从 `headerLength` 起，否则从 `lengthFieldOffset + 长度域实际宽度` 起）。`Fixed` 无帧头概念，`payload` 为整帧。
+
+**`headerFields[]`（位域，ADR-0021 §2.2）**
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:--:|------|------|
+| `name` | string | ✓ | — | 暴露为 `Core::Frame` 的 `UInt` 字段名；同一 framing 内唯一 |
+| `bitOffset` | int | ✓ | 0 | 从**帧首字节最高位**起算（bit 0 = byte 0 的 bit 7），MSB-first |
+| `bitWidth` | int | ✓ | 0 | 位宽 1~32，按无符号大端解释 |
+
+**`dispatch`（分派，ADR-0021 §2.3）**
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:--:|------|------|
+| `field` | string | ✗ | `""` | 必须是已声明的 `headerFields[].name`；空 = 不分派（`Frame::type` 为 0） |
+| `rejectUnknown` | bool | ✗ | true | 未命中任何 case 时：true = 非法帧；false = `Frame::type` 取原始值、`typeName` 为空 |
+| `cases` | object[] | ✗ | `[]` | `[{value, type, name}]`；`type` 缺省 = `value`，`name` 写入 `Frame::typeName` |
+
+**`repeat`（重复记录，ADR-0021 §2.4）**
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:--:|------|------|
+| `countField` | string | ✗ | `""` | 记录条数所在的位域名（须已声明）；空 = 不提取 |
+| `stride` | int | ✗ | 0 | 每条记录字节数（> 0） |
+| `offset` | int | ✗ | 0 | 记录区起始字节偏移，相对帧首 |
+| `name` | string | ✗ | `"records"` | 输出的 `Bytes` 字段名 |
+| `maxCount` | int | ✗ | 1024 | 条数安全上限；`count > maxCount` 或记录区越过帧尾即非法帧 |
 
 **Fixed**
 
@@ -155,8 +198,8 @@ configs/
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `type` | string | — | 固定 `"Silence"` |
-| `charTimeUs` | int | 0 | 单字符时间（微秒）；0 = 按协议级波特率+数据位自动折算 |
-| `frameGapUs` | int | 0 | 帧间静默阈值（微秒）；0 = `3.5 × charTimeUs`（Modbus RTU 约定） |
+| `charTimeUs` | int | 0 | 单字符时间（微秒）；0 = 按协议级波特率+数据位折算，仅作诊断参考 |
+| `frameGapUs` | int | 0 | 帧间静默阈值（微秒）；**必须显式配置 > 0**（引擎不内置 Modbus RTU 的 3.5×charTimeUs 默认值），0 表示未配置，运行期通道拒发 |
 | `maxFrameSize` | int | 256 | 帧长安全上限，超出即判为非法 |
 
 ### 2.3 OperationConfig（operations 的 value）
@@ -178,7 +221,7 @@ configs/
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `validCondition` | string | `""` | 条件表达式（v1.28：MiniExpression 驱动，支持 `resp[N]` 字节访问、比较 `== != > < >= <=`、逻辑 `&& || !`、算术 `+ - * / % & | ^ ~`）；空 = 跳过校验。旧语法 `resp[N]==V` 为子集，向后兼容。加载期语法校验（ConfigDeepValidator）——语法错误不放行到运行时。 |
+| `validCondition` | string | `""` | 条件表达式（v1.28：MiniExpression 驱动，支持 `resp[N]` 字节访问、比较 `== != > < >= <=`、逻辑 `&& || !`、算术 `+ - * / % & | ^ ~`，以及 `hi8/lo8/hi16/lo16` 内建函数，见 §3.2.1）；空 = 跳过校验。旧语法 `resp[N]==V` 为子集，向后兼容。加载期语法校验（ConfigDeepValidator）——语法错误不放行到运行时。 |
 | `dataStartIndex` | int | 0 | 数据区起始字节偏移 |
 | `dataLengthExpr` | string | `""` | 数据区长度表达式（如 `"resp[8]"`）；空 = 取 `帧长 - dataStartIndex`。**注意**：此回退逻辑在真实采集路径与仿真路径均生效（`ResponseParser.cpp:160`），非"仿真专用"。 |
 
@@ -365,6 +408,18 @@ configs/
 
 `expr` 支持 `+ - * / % & | ^ ~ ( )` 等算术，如线圈位长度 `"{WriteValue:len} * 8"`、寄存器数 `"{WriteValue:len} / 2"`。`expr` **必填**（校验规则10）；引用域 = 同一作用域 `inputs` 已声明名 ∪ 模板 `{Name:raw}` 载荷占位符名（op 输出可引用 op.inputs ∪ protocol.inputs；`{name:len}` 与普通名均限此域，引用域校验见规则10）。寄存器数在 `expr` 中直接写 `/ 2`。
 
+**内建函数（字节/字提取）**——`expr` / `validCondition` / `dataLengthExpr` 共用同一表达式引擎，均可使用 `hi8(x)` / `lo8(x)` / `hi16(x)` / `lo16(x)`：分别取 `x` 的高 8 位 / 低 8 位 / 高 16 位 / 低 16 位，用来替代易错的 `% 256`、`/ 256 % 256` 手写算术：
+
+```jsonc
+"outputs": {
+  "StartWordHi": { "source": "auto", "strategy": "derivedLength", "expr": "hi8(StartByteAddress / 2)" },
+  "StartWordLo": { "source": "auto", "strategy": "derivedLength", "expr": "lo8(StartByteAddress / 2)" },
+  "AddrLo":      { "source": "auto", "strategy": "derivedLength", "expr": "lo8(StartByteAddress * 8)" }
+}
+```
+
+函数名在加载期按内建表校验（未知函数名报语法错误，不放行到运行时）；实参内的变量仍走引用域校验，因此加函数不会掩盖拼写错误。仅支持单参数；其余函数调用、字符串与三目运算符仍不支持。
+
 **模板结构原语（ADR-0012 §1.1）**——表达式可直接引用模板自身的结构量，消除与 `requestTemplate` 的手工常量耦合：
 
 | 原语 | 语义 | 典型用途 |
@@ -512,24 +567,37 @@ configs/
 
 ### 3.4 变量就近覆盖与继承
 
-`inputs` / `outputs` 声明可在协议级与操作级出现，同名键遵循**就近覆盖**（操作级 > 协议级），按整条 `VariableConfig` 替换；标签级的 `variables`（标量值表）在运行时进一步覆盖。合并链统一实装于 `RequestBuilder::MergeVariables`。
+`inputs` / `outputs` 声明可在协议级与操作级出现，同名键遵循**就近覆盖**（操作级 > 协议级），按整条 `VariableConfig` 替换；设备级 `devices[].variables` 给出该设备的常量取值，标签级 `variables` 再进一步覆盖。运行期合并链实装于 `RequestBuilder::MergeVariables`（协议 → 操作 → 标签）；设备层在加载期（`ProtocolJsonParser`）折入 `tag.variables`，因此运行时与标签值同域，标签显式声明仍优先。
 
-**三级作用域与优先级**：
+**四级作用域与优先级**：
 
 | 层级 | 位置 | 粒度 | 说明 |
 |------|------|------|------|
 | 协议级 | `ProtocolConfig.inputs` | 全协议默认 | `source=static` 提供默认值（合并链基准） |
 | 操作级 | `OperationConfig.inputs` | 仅该操作 | 同名键覆盖协议级整条声明 |
-| 标签级 | `TagDefinition.variables` | 运行期标量值 | 最高优先，覆盖前两级同名键 |
+| 设备级 | `DeviceConfig.variables` | 该设备的所有标签 | 同型号设备只差站号/节点号时写一次；加载期合并入 `tag.variables`，标签同名键优先 |
+| 标签级 | `TagDefinition.variables` | 运行期标量值 | 最高优先，覆盖前三级同名键 |
 
-**典型场景**（如 Modbus `UnitID` 协议级默认 1，某标签覆盖为 3；某操作内仅声明 `RegisterCount` 的 UI 提示）：
+**典型场景**（Modbus `UnitID` 协议级默认 1，该设备是 3；标签再声明自己的 `ByteCount`）：
 
 ```jsonc
 // 协议级
 "inputs": { "UnitID": { "source": "static", "value": 1 } }
 // 操作级（覆盖协议级同名，或新增）— 无 value 的 static 即 UI 提示语义
 "ReadHoldingRegisters": { "inputs": { "RegisterCount": { "source": "static", "label": "读取数量" } } }
+// 设备级（同协议、不同常量；不必复制协议文件）
+// tags.json: "devices": [{ "id": "PLC-001", "protocol": "modbus-tcp", "variables": { "UnitID": 3 } }]
+// 标签级（最高优先）
+// tags.json: "tags": [{ "name": "T1", "variables": { "StartByteAddress": 0, "ByteCount": 4 } }]
 ```
+
+**设备级变量的加载期校验**（`SemanticChecker::ValidateDeviceVariables`）：
+
+- 键必须是协议 `inputs`/`outputs`、任一操作 `inputs`/`outputs` 或握手 `sessionVariable` 中声明过的名字，否则**报错**并列出可用名（拼写错误在运行期只会表现为"改了配置却没生效"，必须提前暴露）；
+- 成帧保留名（`Frame` / `len` / `offset` / `fixed` / `__frameLen` / `__frameEnd`）**报错**；
+- 覆盖 `source=auto` 的键给**告警**：显式值优先于自动计算（引擎语义允许用它钉住取值），但通常是无意覆盖。
+
+设备级变量同样可在 `handshake[].requestTemplate` 中引用（如 `{UnitID:X2}`，须给出宽度）；同名握手会话变量优先于设备级常量。
 
 **派生长度的就近语义**：`derivedLength` 注入同样遵循操作级覆盖协议级；标签若显式提供同名变量则优先（不被派生注入覆盖）。
 
@@ -549,11 +617,12 @@ configs/
 | `id` | string | ✓ | — | 全局唯一 |
 | `protocol` | string | ✓ | — | 引用 `protocolName` |
 | `connection` | object | ✓ | — | 见下；其中 `timeoutMs` 仅为**连接建立**超时 |
+| `ingest` | object | ✗ | null | **南向推送接入**（网关接收设备主动上报）；null = 仅轮询设备。字段见 §4.1 |
 | `requestTimeoutMs` | int | ✗ | 3000 | **单次请求-应答**超时（一发一收一解析）；该设备所有操作共用，为唯一配置点（2026-08-24 收敛，见 [ADR-0004](./adr/0004-timeout-retry-budget.md) R1） |
 | `username` | string | ✗ | null | 协议级认证凭据（如 S7 CPU 密码） |
 | `password` | string | ✗ | null | 同上；日志中一律脱敏为 `***` |
 | `resilience` | object | ✗ | null | 逐设备韧性策略覆盖；null = 用全局 §11 `resilience`。字段与全局块同构（部分字段可省略，省略项回退全局值） |
-| `variables` | map&lt;string, uint32&gt; | ✗ | `{}` | **设备级模板变量缺省**。加载期合并入该设备各标签的有效变量集（同名键以标签声明优先，见 §3.2），如 `UnitID` 等设备常量只声明一次 |
+| `variables` | map&lt;string, uint32&gt; | ✗ | `{}` | **设备级模板变量缺省**。加载期合并入该设备各标签的有效变量集（标签同名键优先，见 §3.4），如 `UnitID` / `DA1` / `SA1` 等设备常量只声明一次；同协议不同设备的常量差异不必复制协议文件。键须在协议 `inputs`/`outputs`/操作 `inputs`/`outputs`/握手会话变量中声明过，否则加载期报错 |
 | `variableBytesHex` | map&lt;string, string&gt; | ✗ | `{}` | **已移除**（v1.32）：设备级变长模板变量缺省。运行时核实其声明值从不进入帧（载荷恒由写请求注入，键 = `writeVariable`），构成"声明了也不生效"的陷阱，字段已删除 |
 
 `connection` 采用扁平结构，字段按协议级 `transport` 类型取用：
@@ -569,7 +638,7 @@ configs/
 
 **共享总线通道复用**（见 [ADR-0002](./adr/0002-transport-abstraction.md) §4）：`ChannelManager` 以**物理端点**为通道缓存 key（Tcp/Tls = `host:port`、Serial = `portName`、CAN = `interface`）。同一物理端点上的多个逻辑设备（RS-485 从站、CAN 节点）共享同一 `IChannel`，串行化粒度为物理总线；逻辑设备的路由（UnitID / CAN ID）由模板变量承载。
 
-凭据如何生效：`username` / `password` 在握手阶段作为**模板变量**注入（与 `variables` 同等待遇），在 `handshake[].requestTemplate` 中以 `{password:X...}` 等形式消费。框架不做任何隐式认证动作——认证仍是协议行为，框架只负责递送。
+凭据如何生效：`username` / `password` 在握手阶段作为**模板变量**注入（与 `devices[].variables` 同域），在 `handshake[].requestTemplate` 中以 `{password:X...}` 等形式消费；设备级变量须写成带宽度的占位符（`{DA1:X2}`），同名时握手会话变量优先。框架不做任何隐式认证动作——认证仍是协议行为，框架只负责递送。
 
 ```jsonc
 // TCP 设备
@@ -584,6 +653,95 @@ configs/
   "id": "Meter-07",
   "protocol": "modbus-rtu",
   "connection": { "portName": "COM3", "timeoutMs": 1500 }
+}
+```
+
+### 4.1 ingest（南向推送接入，设备级）
+
+> **裁决来源**: [ADR-0019](./adr/0019-southbound-push-ingest.md)。设备主动上报是**事件流**，与请求-应答的 `Transport::IChannel` 语义不同，由 `Southbound::IInboundTransport` 单独承载；数据出口仍唯一——经 `TagValueSink` 写入 `LatestValueStore`。
+
+`ingest` 声明该设备的主动推送接入方式（网关为接收方）：
+
+| `type` | 网关角色 | 适配器 |
+|--------|----------|--------|
+| `"mqtt"` | MQTT 客户端（订阅 broker） | `Southbound::MqttSubscriber` |
+| `"tcp"` | TCP 服务端（等待设备连入） | `Southbound::TcpIngestServer` |
+
+设备下所有 `source=push` 的标签由本段适配器产出；`source=poll` 标签照常轮询。同一标签只能有一个来源，不做轮询/推送仲裁（§5）。
+
+**mqtt（`type="mqtt"`）**
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:--:|------|------|
+| `host` | string | ✗ | — | broker 主机；空 = 回退 `device.connection.host` |
+| `port` | uint16 | ✗ | `0` | broker 端口；`0` = 1883 |
+| `clientId` | string | ✗ | — | 空 = `myprot-sub-<deviceId>`；同一 broker 上须唯一 |
+| `username` / `password` | string | ✗ | `""` | 为空则匿名；日志脱敏 |
+| `keepAliveSec` | int | ✗ | `60` | PINGREQ 周期（秒）；`0` = 默认 60 |
+| `cleanSession` | bool | ✗ | `true` | CONNECT cleanSession 标志 |
+| `qos` | int | ✗ | `0` | 订阅 QoS：`0` / `1`（QoS2 未实现） |
+| `reconnectMinMs` / `reconnectMaxMs` | int | ✗ | `1000` / `30000` | 断线指数退避区间；重连成功后自动重新 SUBSCRIBE |
+| `maxSilenceMs` | int | ✗ | `0` | 静默看门狗：>0 时超过该时长无入站帧 → 该设备 push 标签置 `Uncertain`（仅一次）；`0` = 关闭 |
+| `topic` | string | ✓ | — | 订阅过滤器，支持 `+` / `#` |
+| `tagFrom` | string | ✗ | `payload` | `payload` = 标签名取自载荷字段；`topic` = 取自主题段 |
+| `tagTopicIndex` | int | ✗ | `0` | `tagFrom=topic` 时承载标签名的主题段序号（1-based），须 ≥ 1 |
+| `tagField` | string | ✗ | `tag` | `tagFrom=payload` 时标签名字段 |
+| `valueField` | string | ✗ | `value` | 值字段名 |
+| `tsField` | string | ✗ | `ts` | 时间戳字段名（epoch ms；小于 1e11 视为秒并 ×1000）；空 = 用本地接收时间 |
+
+**tcp（`type="tcp"`）**
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:--:|------|------|
+| `bindAddress` | string | ✗ | `0.0.0.0` | 监听地址 |
+| `port` | uint16 | ✓ | `0` | 监听端口，须 > 0 |
+| `framing` | FramingConfig | ✓ | — | 入站切帧，字段同 §2.2；运行时仅支持 `LengthField` / `Fixed`（`Silence` / `Message` 启动时经 `OnError` 拒绝） |
+| `maxSilenceMs` | int | ✗ | `0` | 静默看门狗，语义同 mqtt |
+| `tagField` | string | ✗ | `tag` | 标签名字段 |
+| `valueField` | string | ✗ | `value` | 值字段名 |
+| `tsField` | string | ✗ | `ts` | 时间戳字段名 |
+
+**载荷映射（v1 仅 JSON，单帧上限 1MB）**
+
+| 载荷形态 | 解析结果 |
+|----------|----------|
+| `{"tag":"P.Temp","value":21.5,"ts":1690000000000}` | 单条；标签名取 `tagField`，缺失时用 topic 段名（`tagFrom=topic`） |
+| `{"P.Temp":21.5,"P.Press":101.3}` | 批量映射；键即标签名（对象含 `valueField` 时改走单条模式），`tsField` 作为整帧时间戳 |
+| 标量 / 数组 | 单条；标签名只能来自 topic（`tagFrom=topic`），否则报错 |
+
+- 每条入站值必须命中该设备已声明的 `source=push` 标签；未声明的标签名丢弃并限频告警（5s 一条）
+- `finalType="Auto"` 按 JSON 原生类型推断（布尔→Bool、无符号→UInt64、有符号→Int64、小数→Double、字符串→String、数组→ByteArray）；显式声明时按 §6 转换，失败 → `Bad`
+- 值统一经 `Southbound::TagValueSink` 写入 `LatestValueStore`，质量语义遵循 [ADR-0006](./adr/0006-quality-semantics.md)
+
+```jsonc
+// tags.json: 设备段 —— MQTT 订阅，标签名取自主题第 4 段
+{
+  "id": "AGV-01",
+  "protocol": "modbus-tcp",
+  "connection": { "host": "192.168.1.20", "port": 502 },
+  "ingest": {
+    "type": "mqtt",
+    "mqtt": {
+      "host": "192.168.1.10", "port": 1883,
+      "topic": "plant/agv/+/state",
+      "tagFrom": "topic", "tagTopicIndex": 4,
+      "maxSilenceMs": 10000
+    }
+  }
+}
+// 对应标签（不声明 operation / scanRateMs）
+{ "name": "AGV-01.Battery", "deviceId": "AGV-01", "source": "push", "finalType": "Double" }
+```
+
+```jsonc
+// tags.json: 设备段 —— TCP 监听，定长 256 字节 JSON 帧
+"ingest": {
+  "type": "tcp",
+  "tcp": {
+    "port": 19000,
+    "framing": { "type": "Fixed", "fixedLength": 256 },
+    "maxSilenceMs": 15000
+  }
 }
 ```
 
@@ -609,6 +767,7 @@ configs/
 | `bitOffset` | int | ✗ | -1 | **位偏移**（0–7，语义 = `StartByteAddress` 所指字节内的位偏移）；`-1` = 未声明，越界为 Error（规则13）。仅 Bool 取位使用：声明后按 `(raw[0] >> bitOffset) & 1` 取位；未声明按整字节 `raw[0] != 0`。协议 `outputs` 的位寻址 `expr` 通过运行时注入的 `BitOffset` 引用同一值 |
 | `coalesce` | bool | ✗ | `true` | 是否参与地址邻近合并；单地址读（如 S7 `ReadVar*`）设 `false` |
 | `direction` | string | ✗ | `"read"` | `read`（参与轮询，写能力由 `writeOperation` / `writeBytesOperation` 声明）/ `write`（**只写标签**，`operation` 即写操作，不参与轮询，见下） |
+| `source` | string | ✗ | `"poll"` | **值来源（单一来源，无仲裁）**：`poll` = 轮询引擎采集；`push` = 设备 `ingest`（§4.1）适配器产出。`push` 标签不参与轮询、不得声明 `operation`、`finalType` 可省略（= `Auto`），见下 |
 | `writeVariable` | string | ✗ | `"WriteValue"` | 写值注入的模板变量名，模板以 `{writeVariable:X4}`（标量）或 `{writeVariable:raw}`（字节/浮点）消费 |
 | `readBackTag` | string | ✗ | `""` | 写标签：写后读回校验引用的**读标签名**；空时回退为按写目标自身读语义重读（仅写标签可配） |
 | `converters` | array | ✗ | `[]` | **读后换算链**（C1）：采集值→工程值，按序应用。v1 仅 `scale` 项 `{"kind":"scale","k":<num>,"b":<num>}`（`value' = value×k + b`，先乘后加），换算后值统一为 Double。仅数值型 `finalType`（整型/Float/Double）的**读标签**可配；写标签或非数值类型声明即校验错误（规则13）。典型：0.1°C/bit → `k=0.1,b=0`；4-20mA 标定 → `k=(量程上限-下限)/27648, b=下限` |
@@ -628,6 +787,13 @@ configs/
 - `POST /api/data/write` 以 `tag` 字段定向写标签名；标量按 `finalType` 编码（`Float`/`Double` → IEEE754 大端字节走 `{writeVariable:raw}`，整数族 → `{writeVariable:X?}`）。
 - `readBack=true` 时按 `readBackTag`（缺省写目标自身）对应读标签的读 op 重读，以读 op `dataStartIndex` 为数据区起点逐字节比较。
 - 运行时自动注入变量：`StartByteAddress` / `ByteCount`（跨协议字节单位，**仅此二者**为引擎契约）+ 标签 `bitOffset` 注入的 `BitOffset`。其余派生名（`StartAddress` / `RegisterCount` / `PDULength` / `DataLen` …）一律由协议 JSON 的 `outputs(derivedLength)` 自行声明；规则14 的解析域白名单**从 `protocol.outputs` 与 `op.outputs` 动态收集**，不硬插具体名。
+
+**推送标签（source=push）**：
+- 值由设备级 `ingest`（§4.1）适配器产出，**不参与轮询**（`PollingEngine::Start` 入口过滤），不声明 `operation`；`scanRateMs` 被忽略（建议不写）。
+- `finalType` 省略时自动取 `Auto`（按载荷原生类型推断）；显式声明时按 §6 转换。
+- 必须引用一个**已声明 `ingest`** 的设备；同一设备可同时存在 poll 与 push 标签（设备既有 `connection` 又有 `ingest`），但同一标签只能属于一种来源。
+- 与 `direction=write` 互斥；写标签/轮询标签的能力（`writeOperation` / converters 等）对 push 标签语义不变，但 `converters` 仅在数值型结果（含 `Auto` 推断为数值）上生效。
+- 质量与静默：适配器解析失败 → `Bad`；设备 `maxSilenceMs > 0` 且超时无帧 → 该设备全部 push 标签置 `Uncertain`（每段静默只发一次，恢复收帧后自动复位）；语义遵循 [ADR-0006](./adr/0006-quality-semantics.md)。
 
 **byteOrder 回退链**：`tag.byteOrder` → `protocol.dataByteOrder` → `BigEndian`（三者均缺省时）。
 
@@ -678,7 +844,10 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 **协议层**
 1. `protocolName` 非空且全局唯一。
 2. `transport.type` / `framing.type` 为合法判别值；各类型必填字段齐备（如 Tls 的 caFile 路径存在性仅 Warning）。
-3. LengthField：`lengthFieldLength ∈ {1,2,4}`；`lengthFieldOffset ≥ 0`；`headerLength ≥ lengthFieldOffset + lengthFieldLength`（或为 0）；`maxFrameSize > headerLength`。
+3. LengthField：`lengthFieldEncoding=Fixed` 时 `lengthFieldLength ∈ {1,2,4}`；`=Varint` 时 `lengthFieldLength == 0` 且 `varintMaxBytes ∈ [1,4]`；`lengthFieldOffset ≥ 0`；`headerLength ≥ lengthFieldOffset + 长度域宽度`（或为 0，Varint 按最少 1 字节计）；`maxFrameSize > 有效帧头长度`。ADR-0021 原语：
+   - `headerFields[]`：`name` 非空且互不重复；`bitOffset ≥ 0`；`bitWidth ∈ [1,32]` 且 `bitOffset + bitWidth ≤ maxFrameSize × 8`。
+   - `dispatch`：`field` 非空时必须已声明于 `headerFields`；`cases[].value` 不得重复；`field` 为空而 `cases` 非空 = Error。
+   - `repeat`：`countField` 非空时必须已声明于 `headerFields`；`stride > 0`、`offset ≥ 0`、`maxCount > 0`、`name` 非空；`countField` 为空而 `stride ≠ 0` = Error。
 4. Fixed：`fixedLength > 0`。
 5. Silence：`charTimeUs ≥ 0`、`frameGapUs ≥ 0`、`maxFrameSize > 0`；`charTimeUs == 0` 时协议级 `baudRate` 必须 > 0（否则无法折算字符时间）。`framing.type == "Message"` 为**名称预留**（CAN 未实装，见 [ROADMAP.md](./ROADMAP.md)）。
 6. `operations` 非空；每个操作的 `requestTemplate` 非空且逐行匹配 §3 文法；占位符格式合法。
@@ -689,11 +858,12 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 
 **设备层**
 10. `id` 非空且全局唯一；`protocol` 引用存在的协议。
-11. Tcp/Tls 设备 `connection.host` 非空；`port == 0` 时协议 `defaultPort` 必须 ≠ 0。
+11. Tcp/Tls/Udp 设备 `connection.host` 非空；`port == 0` 时协议 `defaultPort` 必须 ≠ 0。
 12. Serial 设备 `connection.portName` 或协议级 `portName` 至少一个非空。
+    - `ingest.type ∈ {mqtt, tcp}`；`type=mqtt` 时 `mqtt.topic` 非空、`qos ∈ {0,1}`、`tagFrom ∈ {payload, topic}` 且 `tagFrom=topic` 时 `tagTopicIndex ≥ 1`、`reconnectMinMs > 0`、`reconnectMaxMs ≥ reconnectMinMs`、`maxSilenceMs ≥ 0`；`type=tcp` 时 `tcp.port > 0`、`tcp.maxSilenceMs ≥ 0`、`tcp.framing` 按 §2.2 校验（运行时仅支持 `LengthField` / `Fixed`）。
 
 **标签层**
-13. `name` 全局唯一；`deviceId` / `operation` / `writeOperation` / `writeBytesOperation` 引用存在；`direction ∈ {read, write}`；`readBackTag` 仅写标签（`direction=write`）可配，且须引用存在的**读标签**；`writeOperation` / `writeBytesOperation` 须引用协议中 **write 类**操作；操作 `kind` 标注时核对语义一致性（读标签 `operation` 须 read 类、写标签 `operation` 须 write 类）。
+13. `name` 全局唯一；`deviceId` / `operation` / `writeOperation` / `writeBytesOperation` 引用存在；`direction ∈ {read, write}`；`source ∈ {poll, push}`；push 标签不得声明 `operation`、不得 `direction=write`，且其设备必须已声明 `ingest`；`readBackTag` 仅写标签（`direction=write`）可配，且须引用存在的**读标签**；`writeOperation` / `writeBytesOperation` 须引用协议中 **write 类**操作；操作 `kind` 标注时核对语义一致性（读标签 `operation` 须 read 类、写标签 `operation` 须 write 类）。
     - 只发操作（`expectResponse=false`）：`direction=read` 标签的 `operation` 不得引用（读标签必须收到应答）；写标签引用时操作 `kind` 不得为 `read`；写请求同时带 `readBack=true` 时运行时拒绝。
 14. `scanRateMs > 0`（写标签豁免，不参与轮询）、`finalType` 在 §6 表内、`byteOrder` 在枚举内；写标签 `writeVariable` 非空。
 15. 模板占位符必须能在 `tag.variables` 中找到同名项，或属于握手 `sessionVariable` 声明集；否则 Error（把运行时 BuildError 提前到启动期）。自动计算由 `inputs` 的 `source=auto` 声明驱动（模板内不写 `:auto:`/`:calc:` 令牌，三段文法亦已移除）。写路径模板的解析域额外放行 `writeVariable` 与运行时注入量（`PDULength`/`DataLength`/`DataBits`/`DataLen`/`RegisterCount`/`ByteCount`/`StartAddress`）；`writeOperation` / `writeBytesOperation` 模板的解析域为 `variables ∪ writeVariables`。
@@ -733,6 +903,7 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 **握手凭据**
 
 - `DeviceConfig.username` / `password` 作为握手模板 `{Username}` / `{Password}` 的取值来源，不作独立传输层字段。
+- `handshake[].requestTemplate` 还可用 `{Name:...}` 引用会话变量与 `devices[].variables`（后者须声明宽度，如 `{DA1:X2}`）；同名查找顺序为 Username/Password → 会话变量 → 设备级变量。
 
 > **配置代际**（[ADR-0005](./adr/0005-config-versioning.md)）：当前 `kSupportedSchemaVersion = 2`，即本文档 §2 字段集（`inputs`/`outputs` 分组 + `derivedLength` 派生长度）。破坏性格式变更使代际递增，并提供自动迁移工具。
 
@@ -930,6 +1101,82 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 - 每个仿真实例绑定一份 `ProtocolConfig`：`SimulationServer` 从协议对象取语法知识（operations / framing / transport），从 `simulation` 取数据行为（listenPort / registerCount / initialValues / operations）
 - 多实例即"多仿真设备"：`SimServerMap` 以协议名为键，`/api/sim/*` 用 `?proto=<protocolName>` 选择实例（见 [modules/07](./modules/07_WebApi.md)）
 - 同一协议需要多个数据区/从站时当前模型不支持（一个协议一个实例），需另行评审
+
+---
+
+## 14. 北向 MQTT 发布 (MqttConfig)
+
+> `server.json` 顶层 `mqtt` 段（可选，缺省 `enabled=false`）。把 `LatestValueStore` 的最新值按固定节奏发布到 MQTT broker。**本模块只发布不订阅**；设备主动上报的 MQTT **订阅**由南向 `device.ingest` 承载（§4.1 / [modules/12_Southbound](./modules/12_Southbound.md)），两者可使用同一 broker 但使用不同的 clientId。
+
+### 14.1 字段
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:--:|------|------|
+| `enabled` | bool | ✗ | `false` | `false` = 不创建客户端；此时其余字段允许预留且不做范围校验 |
+| `broker` | string | ✗ | — | 简写 `"host"` / `"host:port"` / `"tcp://host:port"` / `"mqtt://host:port"`；与 `host`/`port` 二选一 |
+| `host` | string | ✓* | `127.0.0.1` | broker 主机名 / IPv4；需 IPv6 字面量时用 `host`+`port` 两字段 |
+| `port` | int | ✓* | `1883` | broker TCP 端口，1~65535 |
+| `clientId` | string | ✓ | `myprot-gw` | 同一 broker 上须唯一 |
+| `username` / `password` | string | ✗ | `""` | 为空则不设置 CONNECT 的对应标志位（匿名） |
+| `keepAliveSec` | int | ✗ | `60` | PINGREQ 间隔，0~3600；`0` = 关闭心跳 |
+| `topicPrefix` | string | ✓ | `myprot` | 数据 topic 前缀，见 §14.2；尾部 `/` 会被去掉 |
+| `publishMode` | string | ✗ | `changed` | `changed` = 仅值/质量变化时发；`all` = 每个周期全量发 |
+| `publishIntervalMs` | int | ✗ | `1000` | 发布周期，100~3600000 |
+| `qos` | int | ✗ | `0` | `0` 或 `1`（QoS2 未实现） |
+| `retain` | bool | ✗ | `false` | 数据消息的 retain 标志（状态话题固定 retain=true） |
+
+`✓*` = 可用 `broker` 简写替代。
+
+### 14.2 Topic 与 Payload
+
+| Topic | 内容 |
+|-------|------|
+| `<topicPrefix>/<deviceId>/<tagName>` | 标签最新值（`/`、`+`、`#` 在层级名中替换为 `_`） |
+| `<topicPrefix>/status` | 网关在线状态：连接成功后发布 `{"status":"online",...}`（retain），CONNECT 携带遗嘱 `{"status":"offline"}` |
+
+数据 payload 为单行 JSON：
+
+```json
+{"device":"PLC-001","tag":"Coil0","type":"bool","value":true,"quality":"Good","ts":1690000000000,"requestId":12,"changed":true}
+```
+
+- `type` ∈ `bool|uint16|int16|uint32|int32|uint64|int64|float|double|string|bytes|empty`；`bytes` 的 `value` 为小写十六进制字符串
+- `quality` ∈ `Good|Uncertain|Bad`；采集失败时为 `Bad`，此时 `type` 一般为 `empty`、`value` 为 `null`；解析部分失败时可能仍带该帧解析出的值，消费方应以 `quality` 为准
+- `ts` = 采集时间戳（epoch ms）；`requestId` = 端到端关联号 ([ADR-0009](./adr/0009-correlation-tracing.md))
+
+### 14.3 运行语义
+
+1. 发布器独占一个 io_context 线程，与轮询/管理面隔离；`enabled=false` 时零线程、零连接
+2. 断线后指数退避重连（1s → 2s → … → 30s）；重连成功清空变化缓存并全量补发一次
+3. `changed` 模式的比较键 = 类型 + 值 + 质量，**不含时间戳**；断线期间不发布，恢复后补发最新值
+4. 发送队列上限 4096 帧，broker 不消费时丢新帧并限频告警，避免内存无界增长
+5. 热重载：`server.json` 改动后调 `POST /api/config/reload`（或任一配置保存触发的重载），与轮询装配同一入口 `ApplyRuntimeSync`；配置未变不重连。注意管理面不支持直接写 `server.json`（`ConfigStore` 仅覆盖 protocols/tags）
+
+### 14.4 校验
+
+仅在 `enabled=true` 时执行：`host` 非空、`port ∈ [1,65535]`、`clientId` 非空、`keepAliveSec ∈ [0,3600]`、`topicPrefix` 非空且不含 `#`/`+`、`publishMode ∈ {changed,all}`、`publishIntervalMs ∈ [100,3600000]`、`qos ∈ {0,1}`；违反即 `ConfigError` Fail-Fast。
+
+### 14.5 示例
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "simulation": { "listenPort": 0 },
+  "mqtt": {
+    "enabled": true,
+    "broker": "mqtt://192.168.1.10:1883",
+    "clientId": "myprot-gw-01",
+    "username": "gateway",
+    "password": "******",
+    "keepAliveSec": 60,
+    "topicPrefix": "plant1/myprot",
+    "publishMode": "changed",
+    "publishIntervalMs": 1000,
+    "qos": 1,
+    "retain": false
+  }
+}
+```
 
 ---
 

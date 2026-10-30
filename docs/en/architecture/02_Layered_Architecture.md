@@ -103,12 +103,14 @@
 
 | Rule | Description |
 |------|-------------|
-| `Core` static lib (header-only, ForceLib to force symbols) | Hand-written `Expected<T>` / `Optional<T>` / `ByteView` + Config POCO (tagged struct) + `TemplateGrammar` (single template-grammar implementation) / `RuntimeSnapshot` (runtime config snapshot) + `Log` / `Metrics` facades; C++11/VS2015 (`tl::expected` / `std::optional` / `std::span` are forbidden) |
+| `Core` static lib (header-only, ForceLib to force symbols) | Hand-written `Expected<T>` / `Optional<T>` / `ByteView` + Config POCO (tagged struct) + `TemplateGrammar` (single template-grammar implementation) / `RuntimeSnapshot` (runtime config snapshot) / `FrameCodec` (generic frame interface, [ADR-0020](../../adr/0020-frame-layer-vs-session.md)) + `Log` / `Metrics` facades; C++11/VS2015 (`tl::expected` / `std::optional` / `std::span` are forbidden) |
 | `Engine` depends only on `Core` | Pure concrete-class toolkit (RequestBuilder / ResponseParser / MiniExpression / AutoComputeProvider); no orchestrator, no interface layer; pipeline assembly lives in the Gateway layer's `TagReader` |
 | `Transport` depends on `Core` + asio | Independent of business logic; `TlsChannel` is a stub (OpenSSL reserved, see [ROADMAP.md](../../ROADMAP.md)) |
-| `Service` depends on `Core` + `Engine` + nlohmann/json | Config plane (load / validate / store) + `SessionContext` (session / circuit breaker) + `DeviceLifecycle`; validation is split into `ProtocolJsonParser` / `SchemaChecker` / `SemanticChecker` / `TrialRenderer`, with `ConfigDeepValidator.cpp` orchestrating only; `TrialRenderer` / `validCondition` validation reuses Engine's RequestBuilder / AutoComputeProvider / MiniExpression directly (one grammar at load time and runtime; the dependency direction is kept and constrained by [ADR-0015](../adr/0015-service-engine-dependency-direction.md) *zh*) |
+| `Service` depends on `Core` + `Engine` + nlohmann/json | Config plane (load / validate / store) + `SessionContext` (session / circuit breaker) + `DeviceLifecycle`; validation is split into `ProtocolJsonParser` / `SchemaChecker` / `SemanticChecker` / `TrialRenderer`, with `ConfigDeepValidator.cpp` orchestrating only; `TrialRenderer` / `validCondition` validation reuses Engine's RequestBuilder / AutoComputeProvider / MiniExpression directly (one grammar at load time and runtime; the dependency direction is kept and constrained by [ADR-0015](../../adr/0015-service-engine-dependency-direction.md) *zh*) |
 | `Gateway` depends on `Core` + `Engine` + `Transport` | Orchestration layer; `ChannelManager` endpoint-shared bus (ADR-0002), per-device write mutex (ADR-0011 P1 C); `WriteService` owns the full scalar/variable-length write chain (optional read-back); App performs HTTP adaptation only |
 | `Polling` depends on `Core` + `Engine` + `Gateway` | Poll scheduling + `LatestValueStore` live snapshot; no standalone DataDispatcher (retracted) |
+| `Northbound` depends on `Core` + `Polling` | Northbound MQTT publishing; three internals: `MqttCodec` (`IFrameCodec` implementation, frame layer) / `MqttSession` (session state machine, no I/O) / `MqttClient` (socket + timers + send queue), [ADR-0020](../../adr/0020-frame-layer-vs-session.md) |
+| `Southbound` depends on `Core` + `Transport` + `Northbound` + `Polling` | Inbound event stream: MQTT subscription reuses `MqttClient`, TCP ingest uses `StreamFrameCodec` (`LengthField`/`Fixed` implementation of `IFrameCodec`); `IInboundTransport` is separate from `IChannel` ([ADR-0019](../../adr/0019-southbound-push-ingest.md)); writes `LatestValueStore` only through `TagValueSink`, never depends on Engine/Gateway/WebApi |
 | `WebApi` depends on `Core` + `Service` (ConfigStore) | In-house HTTP/1.1 (cpp-httplib not adopted); built-in management routes are registered in `RouteTable` (method + pattern + `:param`), business routes are still injected by the App layer via `SetExtHandler` + `HttpRouter` |
 | `Simulation` depends on `Core` + `Engine` + `Transport` | Standalone TCP **black-box simulation** (its own io_context dedicated worker thread), does not go through `IChannel`; template matching reuses the Engine grammar |
 | `App` depends on all of the above | Composition root: main.cpp wires directly + RuntimeGlue shared glue (production and E2E are isomorphic) |
@@ -122,9 +124,9 @@ MyProt/                                   # repo root
 ├── MyProt.sln                            # VS2015 solution (main artifact, PlatformToolset v140)
 ├── README.md
 ├── docs/                                 # this documentation set (index: docs/README.md)
-│   ├── adr/                              # ADR-0001~0015 architecture decision records
+│   ├── adr/                              # ADR-0001~0020 architecture decision records
 │   ├── architecture/                      # architecture series (6 docs)
-│   ├── modules/                           # module detailed design series (10 docs)
+│   ├── modules/                           # module detailed design series (12 docs)
 │   ├── protocols/                         # protocol tutorials (config↔byte mapping)
 │   ├── ROADMAP.md                         # not-yet-implemented extension candidates
 │   └── Config_Schema.md                   # single source of truth for the config contract
@@ -137,7 +139,9 @@ MyProt/                                   # repo root
 │   │   │   ├── Optional.hpp             # hand-written Optional<T> (union storage, ADR-0010 §3)
 │   │   │   ├── ByteView.hpp             # lightweight byte view (replaces std::span)
 │   │   │   ├── ByteOrder.hpp            # four-order assembly
+│   │   │   ├── FrameCodec.hpp           # generic frame interface (Frame / FrameField / IFrameCodec, ADR-0020)
 │   │   │   ├── Config.hpp               # Config POCO (tagged-struct discriminated union)
+│   │   │   ├── MqttConfig.hpp           # MQTT client/subscriber config POCO (northbound + southbound)
 │   │   │   ├── Value.hpp                # TypedValue / TagValue / QualityCode
 │   │   │   ├── Log.hpp                  # LOG_* facade (stdout + file rotation)
 │   │   │   ├── Metrics.hpp              # counter/gauge internal facade
@@ -164,12 +168,13 @@ MyProt/                                   # repo root
 │   │   │   ├── IChannel.hpp             # callback-style channel interface (endpoint generalization, ADR-0002)
 │   │   │   ├── IFrameParser.hpp
 │   │   │   ├── LengthFieldFrameParser.hpp
+│   │   │   ├── StreamFrameCodec.hpp     # bottom-of-stack IFrameCodec (LengthField/Fixed → fields + payload, ADR-0020/0021)
 │   │   │   ├── TcpChannel.hpp           # TCP channel
 │   │   │   ├── SerialChannel.hpp
 │   │   │   ├── TlsChannel.hpp           # stub (not implemented, see ROADMAP.md)
 │   │   │   ├── NativeSocket.hpp         # cross-platform socket wrapper
 │   │   │   └── SocketKeepAlive.hpp      # OS-level keepalive
-│   │   └── src/                          # LengthFieldFrameParser / TcpChannel /
+│   │   └── src/                          # LengthFieldFrameParser / StreamFrameCodec / TcpChannel /
 │   │                                     #   SerialChannel / TlsChannel .cpp
 │   │
 │   ├── Service/
@@ -223,6 +228,26 @@ MyProt/                                   # repo root
 │   │   │   └── SimulationDataStore.hpp   # register data store
 │   │   └── src/                          # same-name .cpp × 4
 │   │
+│   ├── Northbound/                       # northbound MQTT publishing
+│   │   ├── MyProt.Northbound.vcxproj
+│   │   ├── include/MyProt/Northbound/
+│   │   │   ├── MqttCodec.hpp            # MQTT 3.1.1 wire codec (implements IFrameCodec, incl. SUBSCRIBE)
+│   │   │   ├── MqttSession.hpp          # session state machine: subscriptions / packet ids / packet semantics (no I/O)
+│   │   │   ├── MqttClient.hpp           # asio transport (heartbeat / reconnect / send queue)
+│   │   │   └── MqttPublisher.hpp        # snapshot → change filter → topic/payload
+│   │   └── src/                          # same-name .cpp × 4
+│   │
+│   ├── Southbound/                       # southbound ingest (device-initiated push)
+│   │   ├── MyProt.Southbound.vcxproj
+│   │   ├── include/MyProt/Southbound/
+│   │   │   ├── IInboundTransport.hpp    # inbound event-stream interface (ADR-0019)
+│   │   │   ├── MqttSubscriber.hpp       # subscription adapter (reuses MqttClient)
+│   │   │   ├── TcpIngestServer.hpp      # TCP listener adapter (acceptor + IFrameCodec framing)
+│   │   │   ├── PayloadMapper.hpp        # topic/JSON → (tag, value)
+│   │   │   ├── TagValueSink.hpp         # single write entry (quality/conversion/change baseline)
+│   │   │   └── SouthboundManager.hpp    # orchestration + silence watchdog + hot reload
+│   │   └── src/                          # same-name .cpp × 5
+│   │
 │   ├── Tests/
 │   │   └── E2EMain.cpp                   # in-house E2E suite (MyProt.E2E standalone process)
 │   │
@@ -233,7 +258,7 @@ MyProt/                                   # repo root
 │       ├── AppContext.hpp                # runtime state aggregation (the fix for the 13-arg function problem)
 │       └── HttpRouter.hpp                # ext route table (header-only, prefix match)
 │
-├── tests/                                # in-house MiniTest unit tests (Core/Engine/Service/Transport)
+├── tests/                                # in-house MiniTest unit tests (Core/Engine/Service/Transport/Northbound/Southbound)
 ├── third_party/                          # vendoring (asio etc.; version source: third_party/README.md)
 ├── scripts/                              # setup / build helper scripts
 ├── configs/                              # protocols/*.json + tags.json

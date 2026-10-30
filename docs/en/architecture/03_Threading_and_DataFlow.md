@@ -34,6 +34,20 @@
 |  own thread +       | |  v1: no dedicated log thread   |
 |  io.post bridge     | |                                |
 +---------------------+ +--------------------------------+
+
++---------------------+ +--------------------------------+
+| Northbound publish  | |  Southbound ingest thread      |
+| MqttPublisher owns  | |  SouthboundManager owns        |
+| its io_context      | |  its io_context (sub/listen/   |
+| (publish/heartbeat) | |  watchdog)                     |
++---------------------+ +--------------------------------+
+
++---------------------+ +--------------------------------+
+| MQTT probe thread   | |  Simulation TCP thread         |
+| MqttProbeHub owns   | |  SimulationServer owns         |
+| its io_context      | |  its io_context (accept/serve) |
+| (subscribe/heartbeat)| |                                |
++---------------------+ +--------------------------------+
 ```
 
 ### 5.2 Thread responsibilities
@@ -42,6 +56,10 @@
 |---------|------|------|----------|
 | io_context (single instance) | 1 — main-thread `io.run_for(200ms)` loop | executes all asio async handler chains; protocol parsing, socket I/O, poll-timer callbacks | zero blocking (asio async only; no coroutine suspension) |
 | WebApi | 1 | HTTP request/response (in-house HTTP/1.1 `WebApiServer`); the write path is posted to io_context via `io.post` | independent of the io thread pool; no blocking inside callbacks |
+| Northbound publish | 0~1 | `MqttPublisher` owns its `io_context`: connect/publish/heartbeat/reconnect/snapshot timers; zero threads when `enabled=false` | zero blocking (fully async) |
+| Southbound ingest | 0~1 | `SouthboundManager` owns its `io_context`: MQTT subscribe, TCP accept/read, 500 ms silence watchdog; zero threads when no tag has `source=push` | zero blocking; `Stop` joins from the calling thread |
+| MQTT probe (`MqttProbeHub`) | 1 | the management-plane observation sessions own an `io_context`: connects to the broker on behalf of the browser, subscribes per session, buffers events, emits status heartbeats and reaps idle sessions; created at startup and never shares a connection with the northbound publisher | zero blocking (fully async); destruction runs `StopAll` + `io.stop()` then `join` |
+| Simulation TCP (`SimulationServer`) | 0~1 | the simulator owns an `io_context`: accept, protocol-specific replies, read-back values; zero threads when no `simulation` block is enabled | zero blocking; `Stop` then `join` |
 | ConsoleLogger (in-house) | 0~1 | writes stdout/file; synchronous initially, no async logger in the v1 scope | synchronous, unconstrained |
 
 ### 5.3 Concurrency-safety strategy
@@ -56,6 +74,9 @@
 | `RetryPolicy` runtime update | read-heavy, write-light | `std::mutex` (each holder guards itself; replaces `std::shared_mutex`) |
 | WebApi → engine interaction | `io.post` into io_context | the WebApi worker thread only posts (AppContext aggregation + HandleWriteApi); it never touches engine state directly across threads |
 | TagReader → SessionContext | via `ChannelManager::GetSession(deviceId)` | SessionContext lives in a separate `_sessions` map, guarded by `std::mutex` |
+| Southbound binding table / watchdog | single-thread ownership | adapter callbacks, `Bindings` and `lastFrameMs` are touched only on that io thread; `Apply`/`Stop` calls `io.stop()` before `join`, and only then clears adapters and the sink baseline ([ADR-0019](../../adr/0019-southbound-push-ingest.md) *zh*) |
+| MQTT probe sessions / event cache | owns its io_context + `std::mutex` | session state is only mutated on the hub thread; the HTTP thread hands work over via asio posts and drains the event queue under the mutex |
+| Simulation store / plans | single-thread ownership | only the simulator's own thread touches `_store` / `_plans`; hot reload stops and joins the server before replacing the protocol snapshot |
 
 > **Throughput strategy** ([ADR-0001](../../adr/0001-device-concurrency-vs-throughput.md) *zh*): within a device, strict serialization is not relaxed; effective throughput is raised via TagGrouper/MergeRequest request coalescing; `maxConcurrentRequests` is fixed at 1 in v1.
 

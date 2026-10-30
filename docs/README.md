@@ -25,8 +25,15 @@
 | Modbus TCP | [configs/protocols/modbus-tcp.json](../configs/protocols/modbus-tcp.json) | [modbus-tcp.md](./protocols/modbus-tcp.md)（[EN](./en/protocols/modbus-tcp.md)） | ✅ 已支持 |
 | Siemens S7-1200 | [configs/protocols/s7-1200.json](../configs/protocols/s7-1200.json) | [s7-1200.md](./protocols/s7-1200.md)（[EN](./en/protocols/s7-1200.md)） | ✅ 已支持（仅 Read/Write Var）|
 | 仙工智能 SEER AGV | [configs/protocols/seer.json](../configs/protocols/seer.json) | [seer.md](./protocols/seer.md)（[EN](./en/protocols/seer.md)） | ✅ 已支持（JSON 正文需 hex 编码）|
+| Omron FINS/TCP | [configs/protocols/omron-fins-tcp.json](../configs/protocols/omron-fins-tcp.json) | [omron-fins-tcp.md](./protocols/omron-fins-tcp.md)（[EN](./en/protocols/omron-fins-tcp.md)） | ✅ 已支持（WR 区字读）|
+| Mitsubishi MC 3E | [configs/protocols/mitsubishi-mc-3e.json](../configs/protocols/mitsubishi-mc-3e.json) | [mitsubishi-mc-3e.md](./protocols/mitsubishi-mc-3e.md)（[EN](./en/protocols/mitsubishi-mc-3e.md)） | ✅ 已支持（D 区字读）|
+| Beckhoff TwinCAT ADS/AMS | [configs/protocols/twincat-ads.json](../configs/protocols/twincat-ads.json) | [twincat-ads.md](./protocols/twincat-ads.md)（[EN](./en/protocols/twincat-ads.md)） | ✅ 已支持（ADS Read；⚠️ NetId/IndexGroup 需现场确认）|
 
 新增协议：见 [protocols/README.md §如何新增一个协议](./protocols/README.md#如何新增一个协议指引)。
+
+5 分钟上手：`MyProt.App.exe --proto-init lengthfield` 生成最小可加载骨架，见 [protocols/README.md §5 分钟最小协议](./protocols/README.md#5-分钟最小协议--proto-init)。
+
+改完配置先校验：`MyProt.App.exe --validate configs`（与网关启动同一套校验器，逐条带 JSON Pointer），见 [protocols/README.md §写完先校验](./protocols/README.md#写完先校验--validate)。
 
 ### 架构设计系列（`architecture/`）
 
@@ -53,6 +60,8 @@
 | 08 | [App 模块](./modules/08_App.md) | main.cpp 生产入口（RunProduction 直接装配）、RuntimeGlue 共享胶水层（ApplyRuntimeSync 单一汇聚点）、MyProt.E2E 独立测试进程 |
 | 09 | [初始化时序](./modules/09_Initialization.md) | 完整启动时序、传输层初始化、单次轮询周期 |
 | 10 | [Simulation 模块](./modules/10_Simulation.md) | 配置驱动 SimulationServer、TemplateMatcher 模板匹配、WebApi /api/sim/* 操控端点 |
+| 11 | [Northbound 模块](./modules/11_Northbound.md) | 北向 MQTT 发布：MQTT 3.1.1 子集编解码、asio 客户端（心跳/重连）、快照发布与变化过滤 |
+| 12 | [Southbound 模块](./modules/12_Southbound.md) | 南向入站：MQTT 订阅 / TCP 监听、topic+JSON 映射、`TagValueSink` 单一写入口、静默看门狗 |
 
 ### 契约与架构决策
 
@@ -76,6 +85,10 @@
 | [ADR-0015 Service 对 Engine 的依赖方向](./adr/0015-service-engine-dependency-direction.md) | 保留 `Service → Engine`（加载期校验复用 MiniExpression / RequestBuilder / AutoComputeProvider），约束为无状态校验原语并规定复审触发条件 |
 | [ADR-0016 P2 边界收敛](./adr/0016-p2-boundary-consolidation.md) | 校验拆分（Parser/Schema/Semantic/TrialRenderer）、写路径下沉 `Gateway::WriteService`、WebApi 统一 `RouteTable`（§2.4 单协议限制已被 ADR-0017 取代） |
 | [ADR-0017 协议级仿真实例](./adr/0017-protocol-scoped-simulation-instances.md) | 仿真实例改挂 `ProtocolConfig.simulation`：每个协议可各启用一个仿真设备（端口须互异）；`server.json.simulation` 降为旧配置回退；热重载端口冲突前置拒绝 |
+| [ADR-0018 只发操作](./adr/0018-one-way-send-operation.md) | 写操作 `expectResponse=false`：发完即成功、不读应答；读标签引用与 `readBack=true` 均被拒 |
+| [ADR-0019 南向推送接入](./adr/0019-southbound-push-ingest.md) | 设备主动上报（MQTT 订阅 / TCP 监听）新增 `IInboundTransport`（不复用 `IChannel`）；`device.ingest` + 标签 `source=poll|push` 单一来源；`TagValueSink` 唯一写入口；静默 → `Uncertain` |
+| [ADR-0020 帧层与会话层分离](./adr/0020-frame-layer-vs-session.md) | `Core::Frame` + `IFrameCodec`（无状态帧层）/ `MqttSession`（协议状态机）/ `MqttClient`（IO）三段切分；`StreamFrameCodec` 统一 TCP 切帧；P1 待补 varint/bits/dispatch/repeat；管理面 HTTP 不接入 |
+| [ADR-0021 配置驱动的帧规格原语](./adr/0021-config-driven-framing-primitives.md) | 补齐 varint 长度域、`headerFields` 位域、`dispatch` 分派、`repeat` 记录区四个原语；`LengthField` 的 payload 改为帧头之后；长度域语义只在 `LengthFieldFrameParser` 保留一份（轮询/仿真/入站共用） |
 
 > ⚠️ 若 `modules/` 中的 POCO/示例与 [配置 Schema 定稿](./Config_Schema.md) 冲突时，以 Schema 定稿为准。
 
@@ -103,12 +116,17 @@
   → 05_Observability_Config_Build.md
   → 06_Extension_and_Simulation.md
   → 10_Simulation.md
+  → 11_Northbound.md
+  → 12_Southbound.md
 
 协议配置上手:
   → protocols/README.md     // 通用教学指引
   → protocols/modbus-tcp.md // Modbus TCP 配置↔字节对照
   → protocols/s7-1200.md    // Siemens S7-1200 配置↔字节对照
   → protocols/seer.md       // 仙工 SEER AGV 配置↔字节对照
+  → protocols/omron-fins-tcp.md // Omron FINS/TCP 配置↔字节对照
+  → protocols/mitsubishi-mc-3e.md // Mitsubishi MC 3E 配置↔字节对照
+  → protocols/twincat-ads.md    // Beckhoff ADS/AMS 配置↔字节对照
 
 扩展查询:
   → ROADMAP.md              // 未实装扩展候选

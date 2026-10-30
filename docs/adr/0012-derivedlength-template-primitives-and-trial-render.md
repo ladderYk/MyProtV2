@@ -128,6 +128,8 @@ expected = lengthIncludesHeader ? (total − adjustment)
 其中 total = 渲染帧实际字节数
 ```
 
+该期望值算法在渲染侧只有一个实现：`Core::ExpectedLengthFieldValue`（`src/Core/include/MyProt/Core/Config.hpp`），保存期 `TrialRenderer` 与 `/api/preview` 共用；`ValidateDerivedLengthOffsets` 的静态自检保留独立推导，两者互为交叉验证。
+
 6. **结论**：
    - 槽位实际值 ≠ expected → **error**（"模板固定段与派生长度/成帧配置不一致"——同时捕获魔数过期与 framing 误配两类错误）；
    - 某派生 expr 求值失败（语法错 / 引用未知变量 / 引用未知原语）→ **error**（封堵静默 0 值路径）；

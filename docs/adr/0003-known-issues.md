@@ -22,12 +22,14 @@
 | 编号 | 问题 | 严重级 | 状态 |
 |:--:|------|:--:|:--:|
 | [KI-04](#ki-04) | 设备生命周期：`Disabled` 触发条件与累积策略未定 | 高 | **开放** |
-| [无响应写](#无响应写) | 单向 RTU 写（发完即成功）无表达方式 | 高 | **开放** |
 | [KI-13](#ki-13) | 表达式优先级已对齐 C，但缺测试用例 | 语义 | 待补测试 |
 
 > 已销账（2026-09-16，编号留空不复用）：
 > - ~~写互斥~~ — per-device 显式写互斥已实装（`TagReader` `_writingInFlight` per-device atomic，写与写互斥且不依赖 io 线程模型；per-bus strand 有意撤回），见 [ADR-0011](./0011-p1cd-write-mutex-and-per-bus-strand.md) §3.1/§3.2。
 > - ~~变长 read-back~~ — 读回已改为调用方以读操作构建（`WriteBackCheck` 携带独立读 op + 期望字节，`RunReadBack` 逐字节比较；变长写读回经 E2E Test 20f 闭环回归），见 [modules/05_Gateway.md](../modules/05_Gateway.md)。
+>
+> 已销账（2026-10-24）：
+> - ~~无响应写（单向 RTU）~~ — 操作级 `expectResponse=false` 已交付（`IChannel::Send` + `TagReader::WriteOneWay`）：发完即成功，不读取/不成帧/不做 echo 校验；读标签引用与 `readBack=true` 分别在语义校验期与运行时拒绝，见 [ADR-0018](./0018-one-way-send-operation.md)。
 
 ---
 
@@ -55,7 +57,7 @@
 - **位置**：写路径（`POST /api/data/write` → `TagReader::WriteOnce` / `WriteBytes`）。
 - **问题**：当前**所有**写操作都要求应答并做 echo 校验（`responseParser.validCondition`）。部分单向 RTU 写协议发完即完成、无从站应答，现有契约无法表达——配上 `validCondition` 必失败，不配则语义不明。
 - **严重级**：`高`
-- **状态**：**开放**（写路径形态见 [ADR-0007](./0007-write-path-scope.md)）
+- **状态**：**已销账 2026-10-24** — 操作级 `expectResponse=false`（只发）已实装：`IChannel::Send` 发出即成功，`TagReader::WriteOneWay` 跳过应答校验与 read-back；读标签引用在校验期报 Error，`readBack=true` 在运行时报 `ConfigError`。见 [ADR-0018](./0018-one-way-send-operation.md)。残留风险：设备若实际回包，未被读走的字节会污染同通道后续请求，已在 Schema 与 ADR 中标注。
 
 ---
 

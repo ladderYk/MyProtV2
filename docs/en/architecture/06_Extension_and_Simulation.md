@@ -82,7 +82,7 @@ There is no `IProtocolRepository` repository abstraction — protocols / devices
 | `SimulationDataStore` | the register data substrate for `/api/sim` register reads/writes |
 
 - **Assembly**: the App layer's `ApplyRuntimeSync` scans every protocol with `simulation.listenPort > 0` and creates one independent simulator per protocol (the same entry for first startup and hot reload); port conflicts are rejected before stopping the old instances
-- **Multiple devices**: adding a simulated device means writing a `simulation` section in the target `protocols/*.json` (distinct ports) — no extra process or config directory; `server.json.simulation` is a legacy fallback only ([ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md) *zh*)
+- **Multiple devices**: adding a simulated device means writing a `simulation` section in the target `protocols/*.json` (distinct ports) — no extra process or config directory; `server.json.simulation` is a legacy fallback only ([ADR-0017](../../adr/0017-protocol-scoped-simulation-instances.md) *zh*)
 - **Control**: WebApi `/api/sim/*` (status listing / registers read GET write POST), handlers in `App/RuntimeGlue`
 - **Value**: E2E full-chain (real TCP → ChannelManager → polling → parse) verified without hardware
 

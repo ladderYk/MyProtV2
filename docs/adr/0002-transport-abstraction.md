@@ -44,9 +44,10 @@
 
 ## 决策
 
-### 1. 范围：TCP + 串口/RTU；CAN 设计预留（未实装）
+### 1. 范围：TCP + 串口/RTU + UDP 数据报；CAN 设计预留（未实装）
 
 - v1 交付 `TcpChannel`、`TlsChannel`、`SerialChannel`。三者对引擎层呈现统一的"发字节 / 收字节"接口。
+- UDP 数据报通道（`UdpChannel`）作为后续追加纳入统一 `IChannel` 抽象（见 §7），引擎层同样零改动。
 - CAN 在本 ADR 中完成**接口级设计预留**（framing 分类、寻址模型、共享总线通道、ISO-TP 子层位置全部定好），**不写实现、不进 v1 验收**。
 
 ### 2. `Connect` 泛化为端点抽象
@@ -127,6 +128,22 @@ virtual void Connect(
 - `architecture/03_Threading_and_DataFlow.md` §5.3「同一设备请求串行」一行改写：删除 per-bus strand 措辞，加 P1 D 撤回脚注；
 - `modules/03_Transport.md`：删除 `IChannel` 实现中对 `_strand.post` 的引用（v1 实现改裸 post）；
 - 验收压测脚本：per-bus 串行化的延迟指标替换为"io_context 隐式保证"的延迟指标（基线 ~52ms @ 1000 tag/10 device）。
+
+## 7. 数据报传输扩展（UDP · 2026-10-27 追加）
+
+工业侧存在"一个数据报即一帧"的请求-应答设备（Modbus UDP、各类私有 UDP 采集器）。本 ADR 将 UDP 纳入传输抽象：`TransportType::Udp` + `UdpChannel`，与 `TcpChannel` 一样是 `IChannel` 的实现，**引擎层零改动**。
+
+**语义裁决（与流式传输的三处不同）**：
+
+- **无连接**：`Connect` 不建立真连接，只做"打开 socket + 解析对端 endpoint"，成功即 `IsConnected()==true`。端点缓存仍按物理端点 `udp:host:port` 复用（承 §4）。
+- **一数据报 = 一帧**：`SendReceive` 发出一个数据报、`async_receive_from` 收到**一个**数据报即作为完整响应返回。`framing` 的 `LengthField` / `Fixed` 在 UDP 下**不做流内切帧**，只用作接收缓冲上限保护（`maxFrameSize`）——这是对 §3 framing 四分类在数据报介质上的退化说明。
+- **超时/错误即弃**：与 TCP 对称，`SendReceive` 超时或收发错误时关闭 socket 并清 `_connected`，由 `ChannelManager` 下一轮重建通道——close 顺带丢弃任何迟到的旧数据报，避免与下一次请求的应答错配（承"帧完整性是底线"）。单通道单在途请求守卫不变。
+
+**被否决**：把 UDP 套进流式 `LengthField` 拼接逻辑（"收够 totalBytes 才算完整"）——数据报边界即帧边界，按流拼接会因单个丢失/乱序数据报而死等或误判，违背 UDP 语义。
+
+**影响**：`Config_Schema.md` §2.1 增 `Udp` 传输与成帧退化说明；`modules/03_Transport.md` 增 `UdpChannel` 小节；`ChannelManager::ComputeEndpointKey`/端口解析、`App` 通道工厂按 `TransportType::Udp` 分派。
+
+**复核触发**：HTTP / MQTT 作为**南向数据通道**（REST 轮询设备、MQTT 拉取）不属于"字节流/数据报传输"，无法套 `IChannel` 的 `SendReceive` 字节语义——届时另立 ADR 在应用集成层定义，不在本传输抽象内扩张。
 
 ## CAN 预留状态
 

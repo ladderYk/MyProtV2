@@ -16,6 +16,7 @@
 3. An "optional" field omitted from config takes the default given in the text; the loader must not error on omission.
 4. Time units are milliseconds throughout (field names end in `Ms`).
 5. **Config generation `schemaVersion`** (integer, adjudicated in [ADR-0005](../adr/0005-config-versioning.md) *zh*): identifies the machine generation of the config format; currently `kSupportedSchemaVersion = 2`. It is **decoupled** from this document's revision number (v4.0, etc.) — minor doc revisions do not bump the generation; only breaking format changes do. Both `ConfigRoot` and every `ProtocolConfig` top level may optionally carry it; absent = Warning + assume the current generation; present but mismatched = startup Fail-Fast (see §7 version gate).
+6. **Comments and BOM**: config files may contain `//` line comments and `/* ... */` block comments (dropped before parsing; they never reach the POCO) and may start with a UTF-8 BOM; `//` or `/*` inside a string literal is preserved verbatim. `MyProt.App.exe --validate` and the WebUI self-check use the same policy. Note: saving from the form mode re-serializes the document and drops comments — use the JSON mode to keep them. HTTP request bodies (`/api/*`) remain strict JSON.
 
 ---
 
@@ -171,9 +172,18 @@ file is not implemented — do not configure it.
 | `parity` | string | `"None"` | `None` / `Odd` / `Even` |
 | `stopBits` | string | `"One"` | `One` / `Two` |
 
+**Udp** (connectionless datagram, ADR-0002)
+
+| Field | Type | Default | Description |
+|------|------|------|------|
+| `type` | string | — | Fixed `"Udp"` |
+| `defaultPort` | uint16 | 0 | Fallback port when the device leaves `port` unset (`0` = the device must specify it) |
+
+> **Framing semantics**: UDP is connectionless, so **one datagram = one frame** and there is no in-stream framing. Under UDP the `framing` `LengthField` / `Fixed` fields act only as a **receive-buffer cap** (`maxFrameSize`); the channel returns one datagram as the whole response without cross-packet reassembly. Device-level `connection.host` is required and `port` (or `defaultPort`) resolves like Tcp (rule 10).
+
 ### 2.2 framing (discriminated union, discriminator `type`)
 
-> framing has three categories (adjudicated in [ADR-0002](../adr/0002-transport-abstraction.md) *zh*): `LengthField` frames a byte stream; `Silence` is serial-RTU silence framing. `Fixed` and `Message` (CAN reserved) are both un-implemented; see [ROADMAP.md](../ROADMAP.md) *zh*.
+> framing has four categories (adjudicated in [ADR-0002](../adr/0002-transport-abstraction.md) *zh*): `LengthField` frames a byte stream (fixed-width or varint length field); `Fixed` is fixed-length framing; `Silence` is serial-RTU silence framing; `Message` (CAN reserved) is not implemented yet, see [ROADMAP.md](../ROADMAP.md) *zh*. The varint / bit-field / dispatch / repeat primitives are specified in [ADR-0021](../adr/0021-config-driven-framing-primitives.md) *zh*.
 
 **LengthField**
 
@@ -181,12 +191,45 @@ file is not implemented — do not configure it.
 |------|------|------|------|
 | `type` | string | — | Fixed `"LengthField"` |
 | `lengthFieldOffset` | int | 0 | Byte offset of the length field within the frame |
-| `lengthFieldLength` | int | — | The length field's own byte count; one of 1 / 2 / 4 |
+| `lengthFieldLength` | int | 0 | The length field's own byte count: 1 / 2 / 4 when `lengthFieldEncoding=Fixed`; must be 0 when `=Varint` (width is decided at runtime) |
+| `lengthFieldEncoding` | string | `"Fixed"` | Length-field encoding: `Fixed` (1/2/4 bytes per `byteOrder`) or `Varint` (base-128, low 7 bits per byte, bit 7 = continuation, **little-endian**; `byteOrder` does not apply) |
+| `varintMaxBytes` | int | 4 | Maximum varint width, 1~4; a longer continuation run is a malformed frame |
 | `lengthIncludesHeader` | bool | false | Whether the length value includes the header itself |
-| `byteOrder` | ByteOrder | `"BigEndian"` | Byte order of the length field |
-| `headerLength` | int | 0 | **Header byte count** (frame start through end of the length field). Total-frame-length formula: when `lengthIncludesHeader = false`, `total = headerLength + lengthFieldValue + lengthAdjustment`; when `= true`, `total = lengthFieldValue + lengthAdjustment`. **Note**: `0` means "no header before the length field" and is correct only when the length field is exactly at the frame start — e.g. Modbus MBAP (transaction ID 2B + protocol ID 2B + length 2B = 6B header, the length value is "bytes after it") must explicitly set `6`; setting `0` cuts a short frame and breaks peer matching |
+| `byteOrder` | ByteOrder | `"BigEndian"` | Byte order of the length field (only for `Fixed` encoding) |
+| `headerLength` | int | 0 | **Header byte count** (frame start through end of the length field). Total-frame-length formula: when `lengthIncludesHeader = false`, `total = headerLength + lengthFieldValue + lengthAdjustment`; when `= true`, `total = lengthFieldValue + lengthAdjustment`. **Note**: `0` means "no header before the length field" and is correct only when the length field is exactly at the frame start — e.g. Modbus MBAP (transaction ID 2B + protocol ID 2B + length 2B = 6B header, the length value is "bytes after it") must explicitly set `6`. With `Varint` and `headerLength=0`, the header is derived as `lengthFieldOffset + actual varint width` |
 | `lengthAdjustment` | int | 0 | `total = parsedValue + lengthAdjustment` (± correction, e.g. when a CRC tail is included) |
 | `maxFrameSize` | int | 1024 | Frame-length safety ceiling; anything larger is deemed invalid |
+| `headerFields` | object[] | `[]` | Bit-field list, see below |
+| `dispatch` | object | none | Header value to frame type mapping, see below |
+| `repeat` | object | none | Repeated-record region, see below |
+
+> **payload semantics**: the `Frame::payload` handed up by `StreamFrameCodec` contains only the bytes **after the frame header** (from `headerLength`, or from `lengthFieldOffset + actual length width` when `headerLength=0`). `Fixed` has no header concept and the payload is the whole frame.
+
+**`headerFields[]` (bit fields, ADR-0021 §2.2)**
+
+| Field | Type | Required | Default | Description |
+|------|------|:--:|------|------|
+| `name` | string | ✓ | — | `UInt` field name on `Core::Frame`; unique within one framing |
+| `bitOffset` | int | ✓ | 0 | Bits from the **MSB of the first frame byte** (bit 0 = bit 7 of byte 0), MSB-first |
+| `bitWidth` | int | ✓ | 0 | 1~32 bits, interpreted as unsigned big-endian |
+
+**`dispatch` (ADR-0021 §2.3)**
+
+| Field | Type | Required | Default | Description |
+|------|------|:--:|------|------|
+| `field` | string | ✗ | `""` | Must be a declared `headerFields[].name`; empty = no dispatch (`Frame::type` stays 0) |
+| `rejectUnknown` | bool | ✗ | true | On an unmatched value: true = malformed frame; false = `Frame::type` keeps the raw value and `typeName` stays empty |
+| `cases` | object[] | ✗ | `[]` | `[{value, type, name}]`; `type` defaults to `value`, `name` becomes `Frame::typeName` |
+
+**`repeat` (ADR-0021 §2.4)**
+
+| Field | Type | Required | Default | Description |
+|------|------|:--:|------|------|
+| `countField` | string | ✗ | `""` | Name of the bit field holding the record count; empty = no extraction |
+| `stride` | int | ✗ | 0 | Bytes per record (> 0) |
+| `offset` | int | ✗ | 0 | Start of the record region, relative to the frame start |
+| `name` | string | ✗ | `"records"` | Output `Bytes` field name |
+| `maxCount` | int | ✗ | 1024 | Safety cap on the count; exceeding it or overrunning the frame is malformed |
 
 **Fixed**
 
@@ -200,8 +243,8 @@ file is not implemented — do not configure it.
 | Field | Type | Default | Description |
 |------|------|------|------|
 | `type` | string | — | Fixed `"Silence"` |
-| `charTimeUs` | int | 0 | Single-character time (microseconds); 0 = auto-derive from the protocol-level baud rate + data bits |
-| `frameGapUs` | int | 0 | Inter-frame silence threshold (microseconds); 0 = `3.5 × charTimeUs` (Modbus RTU convention) |
+| `charTimeUs` | int | 0 | Single-character time (microseconds); 0 = derived from the protocol-level baud rate + data bits, diagnostic reference only |
+| `frameGapUs` | int | 0 | Inter-frame silence threshold (microseconds); **must be configured explicitly > 0** (the engine does not bake in the Modbus RTU 3.5×charTimeUs default); 0 means unconfigured and the channel refuses to send |
 | `maxFrameSize` | int | 256 | Frame-length safety ceiling; anything larger is deemed invalid |
 
 ### 2.3 OperationConfig (value of operations)
@@ -223,7 +266,7 @@ file is not implemented — do not configure it.
 
 | Field | Type | Default | Description |
 |------|------|------|------|
-| `validCondition` | string | `""` | Expression (grammar in modules/02 §2.1 *zh*); empty = skip validation. **Note**: the engine supports only the `resp[N]==V` single-condition form (e.g. `resp[7]==0x03`); multi-condition (`&&`/`||`/`!=`, etc.) **fails silently** — the validator does not check it at load time, so the tag is AlwBad with no error message. Recommend adding a syntax check in ConfigDeepValidator in future. |
+| `validCondition` | string | `""` | Condition expression (v1.28: MiniExpression — `resp[N]` byte access, comparisons `== != > < >= <=`, logical `&& || !`, arithmetic `+ - * / % & | ^ ~`, plus the `hi8/lo8/hi16/lo16` builtins, see §3.2.1); empty = skip validation. The legacy `resp[N]==V` form is a subset and stays compatible. Syntax-checked at load time (ConfigDeepValidator) — syntax errors never reach runtime. |
 | `dataStartIndex` | int | 0 | Start byte offset of the data region |
 | `dataLengthExpr` | string | `""` | Data-region length expression (e.g. `"resp[8]"`); empty = take `frameLen - dataStartIndex`. **Note**: this fallback applies on both the real acquisition path and the simulation path (`ResponseParser.cpp:160`), not "simulation-only". |
 
@@ -445,6 +488,18 @@ only consume their results via `{name:Xn}`:
 
 `expr` supports `+ - * / % & | ^ ~ ( )` arithmetic, e.g. a coil bit length `"{WriteValue:len} * 8"`, a register count `"{WriteValue:len} / 2"`. `expr` is **required** (validation rule 10); the reference domain = the same-scope `inputs` declared names ∪ template `{Name:raw}` payload placeholder names (an op output may reference op.inputs ∪ protocol.inputs; `{name:len}` and plain names are both limited to this domain; reference-domain validation in rule 10). A register count is written directly as `/ 2` in `expr`.
 
+**Builtin functions (byte/word extraction)** — `expr` / `validCondition` / `dataLengthExpr` share one expression engine and may all use `hi8(x)` / `lo8(x)` / `hi16(x)` / `lo16(x)`: the high/low byte and high/low 16 bits of `x`, replacing the error-prone `% 256` / `/ 256 % 256` hand-written arithmetic:
+
+```jsonc
+"outputs": {
+  "StartWordHi": { "source": "auto", "strategy": "derivedLength", "expr": "hi8(StartByteAddress / 2)" },
+  "StartWordLo": { "source": "auto", "strategy": "derivedLength", "expr": "lo8(StartByteAddress / 2)" },
+  "AddrLo":      { "source": "auto", "strategy": "derivedLength", "expr": "lo8(StartByteAddress * 8)" }
+}
+```
+
+Function names are checked against the builtin table at load time (an unknown name is a syntax error, never reaching runtime); variables inside the argument still go through reference-domain validation, so adding a function cannot hide a typo. Single argument only; other calls, strings and the ternary operator remain unsupported.
+
 **Template structural primitives (ADR-0012 §1.1)** — expressions can reference the template's own structural quantities directly, removing the hand-maintained coupling with `requestTemplate` constants:
 
 | Primitive | Semantics | Typical use |
@@ -592,24 +647,37 @@ Mixing is legal. An empty / absent `enum` array → keeps the el-input-number fo
 
 ### 3.4 Variable nearest-wins override & inheritance
 
-`inputs` / `outputs` declarations may appear at the protocol and operation levels; same-named keys follow **nearest-wins** (operation > protocol), replaced whole by `VariableConfig`; the tag-level `variables` (a scalar value table) further override at runtime. The merge chain is implemented uniformly in `RequestBuilder::MergeVariables`.
+`inputs` / `outputs` declarations may appear at the protocol and operation levels; same-named keys follow **nearest-wins** (operation > protocol), replaced whole by `VariableConfig`. The device-level `devices[].variables` supplies per-device constants for those same keys, and the tag-level `variables` (a scalar value table) overrides even further. The runtime merge chain lives in `RequestBuilder::MergeVariables` (protocol → operation → tag); the device layer is folded into `tag.variables` at load time (`ProtocolJsonParser`), so at runtime it shares the tag's domain and an explicit tag value still wins.
 
-**Three-level scopes and priorities**:
+**Four-level scopes and priorities**:
 
 | Level | Location | Granularity | Description |
 |------|------|------|------|
 | Protocol | `ProtocolConfig.inputs` | all-protocol default | `source=static` provides the default (baseline of the merge chain) |
 | Operation | `OperationConfig.inputs` | this op only | same-named key overrides the whole protocol-level declaration |
-| Tag | `TagDefinition.variables` | runtime scalar value | highest priority, overrides the first two levels' same-named keys |
+| Device | `DeviceConfig.variables` | all tags of this device | write once when identical hardware differs only by station/node id; folded into `tag.variables` at load time, an explicit tag key wins |
+| Tag | `TagDefinition.variables` | runtime scalar value | highest priority, overrides the first three levels' same-named keys |
 
-**Typical scenario** (e.g. Modbus `UnitID` defaults to 1 at protocol level, a tag overrides it to 3; an operation declares only the `RegisterCount` UI hint):
+**Typical scenario** (e.g. Modbus `UnitID` defaults to 1 at protocol level, this device is 3; the tag declares its own `ByteCount`):
 
 ```jsonc
 // protocol level
 "inputs": { "UnitID": { "source": "static", "value": 1 } }
 // operation level (overrides the protocol same-name, or adds) — a static without value is the UI-hint semantics
 "ReadHoldingRegisters": { "inputs": { "RegisterCount": { "source": "static", "label": "Read count" } } }
+// device level (same protocol, different constants; no need to copy the protocol file)
+// tags.json: "devices": [{ "id": "PLC-001", "protocol": "modbus-tcp", "variables": { "UnitID": 3 } }]
+// tag level (highest priority)
+// tags.json: "tags": [{ "name": "T1", "variables": { "StartByteAddress": 0, "ByteCount": 4 } }]
 ```
+
+**Load-time validation of device-level variables** (`SemanticChecker::ValidateDeviceVariables`):
+
+- A key must be a name declared in the protocol `inputs`/`outputs`, any operation `inputs`/`outputs`, or a handshake `sessionVariable`; otherwise it is an **error** and the usable names are listed (a typo would otherwise only show up at runtime as "changed the config, nothing happened", so it must be surfaced early).
+- Framing reserved names (`Frame` / `len` / `offset` / `fixed` / `__frameLen` / `__frameEnd`) are an **error**.
+- Overriding a `source=auto` key produces a **warning**: an explicit value wins over auto computation (the engine semantics intentionally allow pinning a value), but it is usually an accidental override.
+
+Device-level variables may also be referenced from `handshake[].requestTemplate` (e.g. `{UnitID:X2}`, a width is required); a same-named handshake session variable wins over the device-level constant.
 
 **Derived-length nearest semantics**: `derivedLength` injection also follows operation-over-protocol override; a tag that explicitly provides a same-named variable wins (not overwritten by derived injection).
 
@@ -633,7 +701,7 @@ Mixing is legal. An empty / absent `enum` array → keeps the el-input-number fo
 | `username` | string | ✗ | null | Protocol-level auth credential (e.g. the S7 CPU password) |
 | `password` | string | ✗ | null | Same as above; always masked as `***` in logs |
 | `resilience` | object | ✗ | null | Per-device resilience override; null = use the global §11 `resilience`. Fields are isomorphic to the global block (fields may be omitted; omitted items fall back to the global value) |
-| `variables` | map&lt;string, uint32&gt; | ✗ | `{}` | **Device-level template-variable defaults**. Merged at load time into each of the device's tags' effective variable set (the tag's own declaration wins on same-named keys, see §3.2), so device constants like `UnitID` are declared once |
+| `variables` | map&lt;string, uint32&gt; | ✗ | `{}` | **Device-level template-variable defaults**. Merged at load time into each of the device's tags' effective variable set (the tag's own declaration wins on same-named keys, see §3.4), so device constants such as `UnitID` / `DA1` / `SA1` are declared once; identical hardware with different constants needs no copied protocol file. A key must be declared in the protocol `inputs`/`outputs`, an operation `inputs`/`outputs`, or a handshake session variable, otherwise it is a load-time error |
 | `variableBytesHex` | map&lt;string, string&gt; | ✗ | `{}` | **Removed** (v1.32): device-level variable-length template-variable defaults. Runtime verification showed its declared value never entered the frame (the payload is always injected by the write request, keyed by `writeVariable`), making it a "declared but ineffective" trap; the field was deleted |
 
 `connection` is a flat structure; fields are taken per the protocol-level `transport` type:
@@ -649,7 +717,7 @@ Mixing is legal. An empty / absent `enum` array → keeps the el-input-number fo
 
 **Shared-bus channel reuse** (see [ADR-0002](../adr/0002-transport-abstraction.md) *zh* §4): `ChannelManager` keys its channel cache by the **physical endpoint** (Tcp/Tls = `host:port`, Serial = `portName`, CAN = `interface`). Multiple logical devices on one physical endpoint (RS-485 slaves, CAN nodes) share the same `IChannel`; serialization granularity is the physical bus; logical-device routing (UnitID / CAN ID) is carried by template variables.
 
-How credentials take effect: `username` / `password` are injected during the handshake as **template variables** (same footing as `variables`) and consumed in `handshake[].requestTemplate` as `{password:X...}` etc. The framework performs no implicit auth action — authentication remains a protocol behavior; the framework only delivers.
+How credentials take effect: `username` / `password` are injected during the handshake as **template variables** (same domain as `devices[].variables`) and consumed in `handshake[].requestTemplate` as `{password:X...}` etc. Device-level variables must be written as width-carrying placeholders in handshake templates (`{DA1:X2}`); a same-named handshake session variable wins. The framework performs no implicit auth action — authentication remains a protocol behavior; the framework only delivers.
 
 ```jsonc
 // TCP device
@@ -756,7 +824,10 @@ Validate collects **all** errors then returns them at once (no early exit); Warn
 **Protocol layer**
 1. `protocolName` is non-empty and globally unique.
 2. `transport.type` / `framing.type` are valid discriminators; each type's required fields are present (e.g. for Tls, the existence of the caFile path is only a Warning).
-3. LengthField: `lengthFieldLength ∈ {1,2,4}`; `lengthFieldOffset ≥ 0`; `headerLength ≥ lengthFieldOffset + lengthFieldLength` (or 0); `maxFrameSize > headerLength`.
+3. LengthField: with `lengthFieldEncoding=Fixed`, `lengthFieldLength ∈ {1,2,4}`; with `=Varint`, `lengthFieldLength == 0` and `varintMaxBytes ∈ [1,4]`; `lengthFieldOffset ≥ 0`; `headerLength ≥ lengthFieldOffset + length-field width` (or 0; Varint counts at least 1 byte); `maxFrameSize > effective header length`. ADR-0021 primitives:
+   - `headerFields[]`: `name` non-empty and unique; `bitOffset ≥ 0`; `bitWidth ∈ [1,32]` and `bitOffset + bitWidth ≤ maxFrameSize × 8`.
+   - `dispatch`: a non-empty `field` must be declared in `headerFields`; `cases[].value` must not repeat; empty `field` with non-empty `cases` is an Error.
+   - `repeat`: a non-empty `countField` must be declared in `headerFields`; `stride > 0`, `offset ≥ 0`, `maxCount > 0`, `name` non-empty; empty `countField` with `stride ≠ 0` is an Error.
 4. Fixed: `fixedLength > 0`.
 5. Silence: `charTimeUs ≥ 0`, `frameGapUs ≥ 0`, `maxFrameSize > 0`; when `charTimeUs == 0` the protocol-level `baudRate` must be > 0 (else the character time cannot be derived). `framing.type == "Message"` is a **name reservation** (CAN un-implemented, see [ROADMAP.md](../ROADMAP.md) *zh*).
 6. `operations` is non-empty; each op's `requestTemplate` is non-empty and each line matches the §3 grammar; placeholder formats are valid.
@@ -767,7 +838,7 @@ Validate collects **all** errors then returns them at once (no early exit); Warn
 
 **Device layer**
 10. `id` is non-empty and globally unique; `protocol` references an existing protocol.
-11. A Tcp/Tls device's `connection.host` is non-empty; when `port == 0` the protocol `defaultPort` must be ≠ 0.
+11. A Tcp/Tls/Udp device's `connection.host` is non-empty; when `port == 0` the protocol `defaultPort` must be ≠ 0.
 12. A Serial device's `connection.portName` or the protocol-level `portName` — at least one is non-empty.
 
 **Tag layer**
@@ -811,6 +882,7 @@ Validate collects **all** errors then returns them at once (no early exit); Warn
 **Handshake credentials**
 
 - `DeviceConfig.username` / `password` are the value source for the handshake template's `{Username}` / `{Password}`, not standalone transport-layer fields.
+- `handshake[].requestTemplate` may also reference session variables and `devices[].variables` via `{Name:...}` (the latter must declare a width, e.g. `{DA1:X2}`); same-name lookup order is Username/Password → session variable → device-level variable.
 
 > **Config generation** ([ADR-0005](../adr/0005-config-versioning.md) *zh*): currently `kSupportedSchemaVersion = 2`, i.e. this document's §2 field set (`inputs`/`outputs` grouping + `derivedLength` derived lengths). A breaking format change bumps the generation and provides an automatic migration tool.
 

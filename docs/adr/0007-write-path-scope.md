@@ -80,7 +80,7 @@
 
 `POST /api/data/write` body 可带 `"readBack": true`（默认 false）：写应答 echo 校验通过后立即对同地址发起读，不一致回调 `Error::Code::ReadBackMismatch` → HTTP 503。详见 [modules/07_WebApi.md §7.5](../modules/07_WebApi.md)。
 
-**无响应写（单向 RTU）** 尚未设计，见 [ROADMAP.md](../ROADMAP.md)。
+**无响应写（单向 RTU）** 已由 [ADR-0018](./0018-one-way-send-operation.md) 交付：操作级 `expectResponse=false` 发完即成功，不读应答（读标签引用与 `readBack=true` 被拒）。
 
 ## `{Name:raw}` 变长字节渲染
 
@@ -202,7 +202,7 @@ POST /api/data/write  body: {"tag":"PLC-001.SetPoint","value":123}
 
 ## 复核触发条件
 
-- 写路径剩余未做项（无响应写、显式并发写互斥、变长 read-back 读操作模板）见 [ADR-0003 未决问题登记](./0003-known-issues.md)。
+- 写路径剩余未做项（显式并发写互斥、变长 read-back 读操作模板）见 [ADR-0003 未决问题登记](./0003-known-issues.md)；无响应写已由 [ADR-0018](./0018-one-way-send-operation.md) 关闭。
 
 ---
 
