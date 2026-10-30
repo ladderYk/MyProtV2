@@ -14,15 +14,18 @@
 //   (this config shares the version number with protocols, not an independent generation)
 #pragma once
 
+#include "MyProt/Core/MqttConfig.hpp"
 #include "MyProt/Core/SimulationConfig.hpp"
 #include "MyProt/Core/Config.hpp"   // kSupportedSchemaVersion
 
 namespace MyProt {
 namespace Core {
 
-// Global server-side config. Currently only simulation; extensible to alertSink / webhook / oem.
+// Global server-side config. Simulation plus optional northbound sinks
+// (mqtt is implemented; alertSink / webhook remain reserved).
 struct ServerConfig {
     SimulationConfig simulation;        // legacy global simulator (fallback when no protocol-scoped simulation is enabled)
+    MqttConfig mqtt;                    // northbound MQTT publisher (disabled by default)
     int schemaVersion;                  // config generation number (ADR-0005); must equal kSupportedSchemaVersion
 
     ServerConfig() : schemaVersion(kSupportedSchemaVersion) {}
