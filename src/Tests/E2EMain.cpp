@@ -1386,8 +1386,13 @@ int RunE2E() {
 
         // 8i: 设备级 variables 缺省 → 模板变量可解析 (Config_Schema 变量继承)
         {
-            // 协议变体: UnitId 字节改为 {UnitID:X2} 占位符, 强制依赖设备级变量
-            const std::string protoUnit = Patch(kValidProto, "\"01\"", "\"{UnitID:X2}\"");
+            // 协议变体: UnitId 字节改为 {UnitID:X2} 占位符, 强制依赖设备级变量;
+            // 设备级键须先在协议中声明 (P1 SemanticChecker::ValidateDeviceVariables)
+            std::string protoUnit = Patch(kValidProto, "\"01\"", "\"{UnitID:X2}\"");
+            protoUnit = Patch(protoUnit.c_str(),
+                "\"inputs\":{",
+                "\"inputs\":{\"UnitID\":{\"source\":\"static\",\"value\":1},"
+                "\"ProtocolID\":{\"source\":\"static\",\"value\":0},");
             const char* kRoot =
                 "{\"schemaVersion\":2,"
                 "\"devices\":[{\"id\":\"plc1\",\"protocol\":\"ModbusTCP\","
@@ -1398,7 +1403,7 @@ int RunE2E() {
                 "\"variables\":{\"StartAddress\":0,\"RegisterCount\":2}}]}";
             std::vector<std::string> protos(1, protoUnit);
             auto res = ConfigValidator::validateConfigRootJson(kRoot, protos, 2);
-            Check("11-11: 写回读校验不匹配时报错",
+            Check("11-11: 设备级 variables 已声明 → 校验通过",
                   res.has_value() && res.value().errors.empty());
         }
 
@@ -2409,6 +2414,193 @@ int RunE2E() {
         std::cout << std::endl;
     }
 
+    // ── (HTTP) /api/preview: 试渲染预览 (协议 + 操作 + 变量 → 请求字节) ──
+    std::cout << "--- Test 13d: /api/preview ---" << std::endl;
+    {
+        MyProt::Service::ConfigStoreOptions pOpts;
+        pOpts.configDir = "configs";
+        MyProt::Service::ConfigStore pStore(pOpts);
+
+        MyProt::Core::WebApiConfig pCfg;
+        pCfg.bindAddress = "127.0.0.1:18087";
+        pCfg.requireAuth = false;
+        // 本用例连发十余次请求: 放宽令牌桶, 避免 429 把断言变成假失败
+        pCfg.rateLimitRps = 200;
+        pCfg.rateLimitBurst = 200;
+        MyProt::WebApi::WebApiServer pApi(pCfg, pStore);
+        pApi.SetExtHandler([&pStore](const std::string& m, const std::string& p,
+                                     const std::string& b) {
+            HttpRequest req;
+            req.method = m;
+            req.path = p;
+            req.body = b;
+            // 与 main.cpp 同序: 子路径先于 /api/preview (后者前缀会吞掉它)
+            if (p.compare(0, 21, "/api/preview/response") == 0) {
+                return HandleResponsePreviewApi(pStore, req);
+            }
+            return HandlePreviewApi(pStore, req);
+        });
+        std::thread pThread([&pApi]() { pApi.Start(); });
+
+        asio::io_context pIo;
+        SyncTcpClient pClient(pIo);
+        auto PReq = [&pClient](const std::string& req) -> std::string {
+            if (!pClient.Connect("127.0.0.1", 18087)) return std::string();
+            const std::vector<uint8_t> raw = pClient.SendReceiveAll(
+                std::vector<uint8_t>(req.begin(), req.end()));
+            pClient.Close();
+            return std::string(raw.begin(), raw.end());
+        };
+        auto PPost = [&PReq](const std::string& path, const std::string& body) -> std::string {
+            const std::string req = "POST " + path + " HTTP/1.1\r\nHost: t\r\n"
+                "Content-Type: application/json\r\nContent-Length: "
+                + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+            return PReq(req);
+        };
+
+        // 候选协议 (与 Service 层单测同构: 10B 帧, 长度槽位 = 总长 - 4)
+        nlohmann::json proto;
+        proto["schemaVersion"] = 2;
+        proto["protocolName"] = "e2e-preview";
+        proto["transport"]["type"] = "Tcp";
+        proto["transport"]["defaultPort"] = 9000;
+        proto["framing"]["type"] = "LengthField";
+        proto["framing"]["lengthFieldOffset"] = 2;
+        proto["framing"]["lengthFieldLength"] = 2;
+        proto["framing"]["lengthIncludesHeader"] = false;
+        proto["framing"]["byteOrder"] = "BigEndian";
+        proto["framing"]["headerLength"] = 4;
+        proto["framing"]["maxFrameSize"] = 256;
+        proto["inputs"]["UnitID"]["source"] = "static";
+        proto["inputs"]["UnitID"]["value"] = 1;
+        proto["operations"]["Read"]["kind"] = "read";
+        proto["operations"]["Read"]["requestTemplate"] = nlohmann::json::array(
+            {"AA BB", "{Len:X4}", "{UnitID:X4}", "{AddrHi:X4}", "{AddrLo:X4}"});
+        proto["operations"]["Read"]["inputs"]["AddrHi"]["source"] = "static";
+        proto["operations"]["Read"]["inputs"]["AddrHi"]["value"] = 0;
+        proto["operations"]["Read"]["inputs"]["AddrLo"]["source"] = "static";
+        proto["operations"]["Read"]["inputs"]["AddrLo"]["value"] = 100;
+        proto["operations"]["Read"]["outputs"]["Len"]["source"] = "auto";
+        proto["operations"]["Read"]["outputs"]["Len"]["strategy"] = "derivedLength";
+        proto["operations"]["Read"]["outputs"]["Len"]["expr"] = "{Frame:fixed} - 4";
+        proto["operations"]["Read"]["responseParser"]["validCondition"] = "resp[0] == 0";
+        proto["operations"]["Read"]["responseParser"]["dataStartIndex"] = 1;
+        proto["operations"]["Read"]["responseParser"]["dataLengthExpr"] = "";
+        proto["handshake"] = nlohmann::json::array();
+
+        nlohmann::json body;
+        body["operation"] = "Read";
+        body["variables"]["UnitID"] = 7;
+        body["protocol"] = proto;          // 对象形态的候选协议
+
+        std::string pResp;
+        for (int i = 0; i < 20 && pResp.empty(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            pResp = PPost("/api/preview?scope=protocols", body.dump());
+        }
+        Check("POST 候选协议(对象) + 覆盖变量 → 200 + ok:true + 正确帧字节",
+              pResp.find("200") != std::string::npos &&
+              pResp.find("\"ok\":true") != std::string::npos &&
+              pResp.find("AA BB 00 06 00 07 00 00 00 64") != std::string::npos &&
+              pResp.find("\"lengthField\"") != std::string::npos);
+
+        // 注释文本形态的候选协议: 与无注释版本渲染结果一致
+        body["protocol"] = "// 头部注释\n" + proto.dump(2);
+        body["variables"] = nlohmann::json::object();
+        const std::string pCommented = PPost("/api/preview?scope=protocols", body.dump());
+        Check("POST 候选协议(带注释文本) → 200 + 同一帧字节",
+              pCommented.find("\"ok\":true") != std::string::npos &&
+              pCommented.find("AA BB 00 06 00 01 00 00 00 64") != std::string::npos);
+
+        // 帧长槽位不一致: 200 + ok:false + 可读原因
+        nlohmann::json bad = proto;
+        bad["operations"]["Read"]["outputs"]["Len"]["expr"] = "{Frame:fixed} - 3";
+        body["protocol"] = bad;
+        const std::string pBad = PPost("/api/preview?scope=protocols", body.dump());
+        Check("POST 帧长不一致 → 200 + ok:false + 帧长一致性原因",
+              pBad.find("200") != std::string::npos &&
+              pBad.find("\"ok\":false") != std::string::npos &&
+              pBad.find("帧长一致性") != std::string::npos);
+
+        // 参数校验
+        const std::string pBadScope = PReq(
+            "GET /api/preview?scope=tags&name=tags HTTP/1.1\r\n"
+            "Host: t\r\nConnection: close\r\n\r\n");
+        Check("scope 非 protocols → 400", pBadScope.find("400") != std::string::npos);
+        const std::string pNoName = PReq(
+            "GET /api/preview?scope=protocols HTTP/1.1\r\n"
+            "Host: t\r\nConnection: close\r\n\r\n");
+        Check("缺 name (且无候选协议) → 400", pNoName.find("400") != std::string::npos);
+        const std::string pBadBody = PPost("/api/preview?scope=protocols", "{ not json");
+        Check("POST 请求体非法 JSON → 400", pBadBody.find("400") != std::string::npos);
+
+        // 磁盘协议 (发布配置): 只列出操作清单, 不渲染
+        const std::string pDisk = PReq(
+            "GET /api/preview?scope=protocols&name=modbus-tcp HTTP/1.1\r\n"
+            "Host: t\r\nConnection: close\r\n\r\n");
+        Check("GET 磁盘协议 → 200 + operations 清单 (或文件缺失时 404)",
+              (pDisk.find("200") != std::string::npos &&
+               pDisk.find("\"operations\":[") != std::string::npos) ||
+              pDisk.find("404") != std::string::npos);
+
+        // ── (HTTP) /api/preview/response: 响应字节 → 值 (试渲染的反向) ──
+        std::cout << "--- Test 13e: /api/preview/response ---" << std::endl;
+        nlohmann::json rbody;
+        rbody["protocol"] = proto;
+        rbody["operation"] = "Read";
+        rbody["hex"] = "00 00 2A 00";      // dataStartIndex=1 → "00 2A 00"; byteCount=2 → "00 2A"
+        rbody["finalType"] = "UInt16";
+        rbody["byteCount"] = 2;
+        const std::string rOk = PPost("/api/preview/response?scope=protocols", rbody.dump());
+        Check("POST 响应解析 → 200 + ok:true + 值 42 + 条件满足",
+              rOk.find("200") != std::string::npos &&
+              rOk.find("\"ok\":true") != std::string::npos &&
+              rOk.find("\"text\":\"42\"") != std::string::npos &&
+              rOk.find("\"rawHex\":\"00 2A\"") != std::string::npos &&
+              rOk.find("\"dataStartIndex\":1") != std::string::npos &&
+              rOk.find("\"condition\":{\"checked\":true,\"expr\":\"resp[0] == 0\",\"ok\":true}") !=
+                  std::string::npos);
+
+        // 标签级换算链 (v5 C1): 42 -> ×2 +1 = 85, 并回报换算前值
+        nlohmann::json conv;
+        conv["kind"] = "scale";
+        conv["k"] = 2.0;
+        conv["b"] = 1.0;
+        nlohmann::json rConv = rbody;
+        rConv["converters"] = nlohmann::json::array();
+        rConv["converters"].push_back(conv);
+        const std::string rConvResp =
+            PPost("/api/preview/response?scope=protocols", rConv.dump());
+        Check("POST 响应解析 + 标签换算链 → 85 且回报换算前值 42",
+              rConvResp.find("\"text\":\"85\"") != std::string::npos &&
+              rConvResp.find("\"text\":\"42\"") != std::string::npos &&
+              rConvResp.find("\"valueBeforeConversion\":") != std::string::npos);
+
+        // validCondition 不满足: 200 + ok:false + 原因可读 (不给看似正常的值)
+        nlohmann::json rCond = rbody;
+        rCond["hex"] = "01 00 2A";
+        const std::string rBadCond = PPost("/api/preview/response?scope=protocols", rCond.dump());
+        Check("POST 响应解析 validCondition 不满足 → 200 + ok:false + 条件原因",
+              rBadCond.find("200") != std::string::npos &&
+              rBadCond.find("\"ok\":false") != std::string::npos &&
+              rBadCond.find("validCondition") != std::string::npos &&
+              rBadCond.find("\"value\":null") != std::string::npos);
+
+        // 路由不被 /api/preview 吞掉: 缺 hex 的报错只存在于响应解析 handler
+        nlohmann::json rNoHex;
+        rNoHex["protocol"] = proto;
+        rNoHex["operation"] = "Read";
+        const std::string rNoHexResp =
+            PPost("/api/preview/response?scope=protocols", rNoHex.dump());
+        Check("POST 响应解析缺 hex → 400 + 缺少 hex 响应字节",
+              rNoHexResp.find("400") != std::string::npos &&
+              rNoHexResp.find("缺少 hex 响应字节") != std::string::npos);
+
+        pApi.Stop();
+        pThread.join();
+        std::cout << std::endl;
+    }
+
     // ── reload 联动测试 (ApplyRuntimeSync: 引擎快照重建 + 仿真器重启) ──
     std::cout << "--- Test 16: Reload Runtime Sync ---" << std::endl;
     {
@@ -2554,7 +2746,8 @@ int RunE2E() {
         AppContext rCtx = {
             &rio, &rgw, &rengine, rStart,
             &rSnapshotHolder,
-            &latest, &sims, &owners, &rStore
+            &latest, &sims, &owners, &rStore,
+            nullptr   // mqtt: E2E 不启用北向发布
         };
 
         // 12a: 首次装配 (引擎启动 + 引擎线程 post) → 与生产同一入口
@@ -2832,7 +3025,8 @@ int RunE2E() {
         AppContext wCtx = {
             &wio, &wgw, &wengine, wStart,
             &wSnapshotHolder,
-            &latest, &sims, &owners, &store
+            &latest, &sims, &owners, &store,
+            nullptr   // mqtt: E2E 不启用北向发布
         };
         Check("17-1: 冷启动 ApplyRuntimeSync 成功",
               ApplyRuntimeSync(kDir, wCtx, nullptr).has_value());
@@ -3182,7 +3376,8 @@ int RunE2E() {
         AppContext vCtx = {
             &vio, &vgw, &vengine, vStart,
             &vSnapshotHolder,
-            &vLatest, &vSims, &vOwners, &vStore
+            &vLatest, &vSims, &vOwners, &vStore,
+            nullptr   // mqtt: E2E 不启用北向发布
         };
         Check("19-1: ApplyRuntimeSync 成功",
               ApplyRuntimeSync(kDir15, vCtx, nullptr).has_value());
@@ -3419,7 +3614,8 @@ int RunE2E() {
         AppContext t16Ctx = {
             &vio, &vgw, &vengine, vStart,
             &vSnapshotHolder,
-            &vLatest, &vSims, &vOwners, &vStore
+            &vLatest, &vSims, &vOwners, &vStore,
+            nullptr   // mqtt: E2E 不启用北向发布
         };
         // Test 16 需要一个 R.W16 标签 + PLC-RB 设备 (与 PLC-V 隔离).
         // 走 ApplyRuntimeSync 不可 (会冲突 R.W15); 用 ConfigStore 局部 PUT
@@ -3552,6 +3748,13 @@ int RunE2E() {
                 tag.finalType = "UInt16";
                 tag.variables["StartByteAddress"] = 100;   // 字地址 50 = 0x0032
                 tag.variables["ByteCount"] = 2;            // 1 字
+                {   // P1: 模拟 ProtocolJsonParser 把 devices[].variables 折入标签
+                    // (map::insert 不覆盖, 即标签同名键优先), 验证设备级常量真的进帧
+                    std::unordered_map<std::string, uint32_t> deviceVars;
+                    deviceVars["DA1"] = 21;               // 目标节点号
+                    deviceVars["SA1"] = 2;                // 源节点号
+                    tag.variables.insert(deviceVars.begin(), deviceVars.end());
+                }
 
                 MyProt::Engine::AutoComputeProvider autoProvider;
                 MyProt::Engine::RequestBuilder builder;
@@ -3588,6 +3791,8 @@ int RunE2E() {
                     Check("22-5: FINS 区代码 B300 (WR)", f[28] == 0xB3 && f[29] == 0x00);
                     Check("22-6: FINS 地址/字数 00 32 / 00 01",
                           f[30] == 0x00 && f[31] == 0x32 && f[32] == 0x00 && f[33] == 0x01);
+                    Check("22-6b: 设备级变量覆盖进入 FINS 帧 (DA1=21@20, SA1=2@23)",
+                          f[20] == 21 && f[23] == 2);
                 }
             }
         }
