@@ -19,7 +19,7 @@ echo "[ci-linux] build"
 cmake --build "$BUILD_DIR" -j"$(nproc 2>/dev/null || echo 4)"
 
 BIN="$ROOT/bin/$BUILD_TYPE"
-for t in Core Engine Service Transport; do
+for t in Core Engine Service Transport Northbound Southbound; do
     echo "[ci-linux] unit: $t"
     "$BIN/MyProt.$t.Tests"
 done

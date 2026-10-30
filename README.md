@@ -131,7 +131,7 @@ sudo apt install g++-aarch64-linux-gnu
 ```
 
 Artifacts: `dist-aarch64/` and
-`build-linux-aarch64-package/package/MyProt-2.0-Linux-aarch64.tar.gz`.
+`build-linux-aarch64-package/package/MyProt-2.1.0-rc.1-Linux-aarch64.tar.gz`.
 
 Statically linked by default, so the target glibc version does not matter.
 For a dynamic build:
@@ -150,7 +150,7 @@ sudo apt install g++-arm-linux-gnueabihf
 ```
 
 Artifacts: `dist-armv7/` and
-`build-linux-armv7-package/package/MyProt-2.0-Linux-armv7l.tar.gz`.
+`build-linux-armv7-package/package/MyProt-2.1.0-rc.1-Linux-armv7l.tar.gz`.
 
 Statically linked by default (~3.2 MB), runs directly on Debian 11/12,
 Raspberry Pi OS and other armv7 systems.

@@ -19,10 +19,10 @@
     "ByteCount": { "source": "static", "value": 2, "label": "数据字节跨度", "unit": "字节" },
     "GCT": { "source": "static", "value": 2, "label": "网关数 0x02" },
     "DNA": { "source": "static", "value": 0, "label": "目标网络号 0x00 (本网)" },
-    "DA1": { "source": "static", "value": 20, "label": "目标节点号 0x14 (PLC 默认, 按设备改)" },
+    "DA1": { "source": "static", "value": 20, "label": "目标节点号 0x14 (缺省值; 多台设备用 devices[].variables 覆盖, 如 DA1 = 21)" },
     "DA2": { "source": "static", "value": 0, "label": "目标单元号 0x00 (CPU)" },
     "SNA": { "source": "static", "value": 0, "label": "源网络号 0x00" },
-    "SA1": { "source": "static", "value": 1, "label": "源节点号 0x01 (上位机, 按设备改)" },
+    "SA1": { "source": "static", "value": 1, "label": "源节点号 0x01 (缺省值; 按设备用 devices[].variables 覆盖, 如 SA1 = 2)" },
     "SA2": { "source": "static", "value": 0, "label": "源单元号 0x00" },
     "SID": { "source": "auto", "strategy": "autoIncrement", "params": { "seed": 0 }, "label": "服务标识 0x00-0xFF 循环" },
     "MemKind": { "source": "static", "value": 179, "label": "内存区代码 0xB3 (WR 区, 副码 00)" }
@@ -48,14 +48,14 @@
       "inputs": {},
       "outputs": {
         "Len": { "source": "auto", "strategy": "derivedLength", "expr": "{Frame:fixed} - 8", "label": "TCP 长度 = 帧长 - 8 (command 域起至帧尾: 4B command + 4B error + FINS 帧)" },
-        "StartWordHi": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress / 2 / 256 % 256", "label": "起始字地址高字节" },
-        "StartWordLo": { "source": "auto", "strategy": "derivedLength", "expr": "StartByteAddress / 2 % 256", "label": "起始字地址低字节" },
-        "WordCntHi": { "source": "auto", "strategy": "derivedLength", "expr": "ByteCount / 2 / 256 % 256", "label": "字数高字节" },
-        "WordCntLo": { "source": "auto", "strategy": "derivedLength", "expr": "ByteCount / 2 % 256", "label": "字数低字节" }
+        "StartWordHi": { "source": "auto", "strategy": "derivedLength", "expr": "hi8(StartByteAddress / 2)", "label": "起始字地址高字节" },
+        "StartWordLo": { "source": "auto", "strategy": "derivedLength", "expr": "lo8(StartByteAddress / 2)", "label": "起始字地址低字节" },
+        "WordCntHi": { "source": "auto", "strategy": "derivedLength", "expr": "hi8(ByteCount / 2)", "label": "字数高字节" },
+        "WordCntLo": { "source": "auto", "strategy": "derivedLength", "expr": "lo8(ByteCount / 2)", "label": "字数低字节" }
       },
       "responseParser": {
-        "validCondition": "resp[26] == 0",
-        "dataStartIndex": 28,
+        "validCondition": "resp[28] == 0 && resp[29] == 0",
+        "dataStartIndex": 30,
         "dataLengthExpr": ""
       }
     }

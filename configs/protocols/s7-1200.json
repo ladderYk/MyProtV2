@@ -76,14 +76,14 @@
     "AddrLo": {
       "source": "auto",
       "strategy": "derivedLength",
-      "expr": "(StartByteAddress * 8) % 256",
+      "expr": "lo8(StartByteAddress * 8)",
       "label": "S7 地址低字节",
       "unit": "S7 地址 = 字节地址<<3"
     },
     "AddrMid": {
       "source": "auto",
       "strategy": "derivedLength",
-      "expr": "((StartByteAddress * 8) / 256) % 256",
+      "expr": "hi8(StartByteAddress * 8)",
       "label": "S7 地址中字节"
     },
     "AddrHi": {
@@ -289,14 +289,14 @@
         "AddrLo": {
           "source": "auto",
           "strategy": "derivedLength",
-          "expr": "(StartByteAddress * 8 + BitOffset) % 256",
+          "expr": "lo8(StartByteAddress * 8 + BitOffset)",
           "label": "S7 地址低字节",
           "unit": "位寻址 = 字节地址<<3 + 位偏移"
         },
         "AddrMid": {
           "source": "auto",
           "strategy": "derivedLength",
-          "expr": "((StartByteAddress * 8 + BitOffset) / 256) % 256",
+          "expr": "hi8(StartByteAddress * 8 + BitOffset)",
           "label": "S7 地址中字节"
         },
         "AddrHi": {
@@ -359,14 +359,14 @@
         "AddrLo": {
           "source": "auto",
           "strategy": "derivedLength",
-          "expr": "(StartByteAddress * 8) % 256",
+          "expr": "lo8(StartByteAddress * 8)",
           "label": "S7 地址低字节",
           "unit": "S7 地址 = 字节地址<<3"
         },
         "AddrMid": {
           "source": "auto",
           "strategy": "derivedLength",
-          "expr": "((StartByteAddress * 8) / 256) % 256",
+          "expr": "hi8(StartByteAddress * 8)",
           "label": "S7 地址中字节"
         },
         "AddrHi": {
@@ -443,14 +443,14 @@
         "AddrLo": {
           "source": "auto",
           "strategy": "derivedLength",
-          "expr": "(StartByteAddress * 8) % 256",
+          "expr": "lo8(StartByteAddress * 8)",
           "label": "S7 地址低字节",
           "unit": "S7 地址 = 字节地址<<3"
         },
         "AddrMid": {
           "source": "auto",
           "strategy": "derivedLength",
-          "expr": "((StartByteAddress * 8) / 256) % 256",
+          "expr": "hi8(StartByteAddress * 8)",
           "label": "S7 地址中字节"
         },
         "AddrHi": {
@@ -527,14 +527,14 @@
         "AddrLo": {
           "source": "auto",
           "strategy": "derivedLength",
-          "expr": "(StartByteAddress * 8) % 256",
+          "expr": "lo8(StartByteAddress * 8)",
           "label": "S7 地址低字节",
           "unit": "S7 地址 = 字节地址<<3"
         },
         "AddrMid": {
           "source": "auto",
           "strategy": "derivedLength",
-          "expr": "((StartByteAddress * 8) / 256) % 256",
+          "expr": "hi8(StartByteAddress * 8)",
           "label": "S7 地址中字节"
         },
         "AddrHi": {

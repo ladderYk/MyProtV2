@@ -498,7 +498,7 @@ true
     Write-Head "SHELL"
     Check-Js "topbar rendered (>= 40px)" 'document.querySelector(".topbar").getBoundingClientRect().height >= 40'
     Check-Js "topbar height is 56px" 'Math.round(document.querySelector(".topbar").getBoundingClientRect().height) === 56'
-    Check-Js "nav has 5 items" 'document.querySelectorAll(".nav-item").length === 5'
+    Check-Js "nav has 6 items" 'document.querySelectorAll(".nav-item").length === 6'
     Check-Js "overview is the default view" 'document.querySelectorAll(".nav-item")[0].classList.contains("active") && !!document.querySelector(".overview")'
     Check-Js "brand rendered" 'document.querySelector(".brand-name") && document.querySelector(".brand-name").innerText.trim() === "MyProt"'
     Check-Js "status chip shows device/tag counters" '/\d+\s*\/\s*\d+/.test(document.querySelector(".tb-status") ? document.querySelector(".tb-status").innerText : "")'
@@ -530,7 +530,7 @@ true
 
     # =======================================================================
     Write-Head "PROTOCOLS"
-    Invoke-Js 'window.__smoke.nav(3); true' | Out-Null
+    Invoke-Js 'window.__smoke.nav(4); true' | Out-Null
     Check-Wait "protocol workbench opens" '!!document.querySelector(".cfg-list") && document.querySelectorAll(".cfg-items li").length > 0 && !!document.querySelector(".toolbar")' 25
     Check-Js "protocol list is populated" 'document.querySelectorAll(".cfg-items li").length >= 5'
     Check-Wait "first protocol is selected" '!!document.querySelector(".cfg-items li.active")' 15
@@ -575,14 +575,14 @@ true
     Invoke-Js 'window.__confirmNative = window.confirm; window.confirm = function () { return false; }; true' | Out-Null
     Invoke-Js 'window.__smoke.nav(0); true' | Out-Null
     Start-Sleep -Milliseconds 500
-    Check-Js "guard keeps you on the page when cancelled" '!!document.querySelector(".workbench") && document.querySelectorAll(".nav-item")[3].classList.contains("active")'
+    Check-Js "guard keeps you on the page when cancelled" '!!document.querySelector(".workbench") && document.querySelectorAll(".nav-item")[4].classList.contains("active")'
     Invoke-Js 'window.confirm = window.__confirmNative; window.confirm = function () { return true; }; true' | Out-Null
     Invoke-Js 'window.__smoke.nav(0); true' | Out-Null
     Check-Wait "guard lets you leave when confirmed" '!!document.querySelector(".overview")' 12
 
     # =======================================================================
     Write-Head "TAGS"
-    Invoke-Js 'window.__smoke.nav(4); true' | Out-Null
+    Invoke-Js 'window.__smoke.nav(5); true' | Out-Null
     Check-Wait "tags workbench opens" '!!document.querySelector(".tform")' 20
     Check-Wait "device tree is populated" 'document.querySelectorAll(".dt-dev").length >= 1' 15
     Check-Js "device tree matches the overview table" ('document.querySelectorAll(".dt-dev").length === ' + $overviewDevices)

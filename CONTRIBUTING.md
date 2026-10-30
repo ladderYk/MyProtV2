@@ -45,8 +45,8 @@ scripts\ci.ps1         # 编译 + 运行全部可执行，强制 CI 退出码契
 
 ### 新增一个协议（无需写代码）
 
-1. 新建 `configs/protocols/<你的协议>.json`，描述 transport、framing、请求模板与响应解析（字节级对照见 [docs/protocols/](docs/protocols/)）。
-2. 在 `configs/tags.json` 中引用它。
+1. `MyProt.App.exe --proto-init lengthfield` 生成最小骨架（另有 `fixed` / `serial`），再按手册替换字节布局；字段说明与 5 分钟流程见 [docs/protocols/README.md](docs/protocols/README.md)。
+2. 在 `configs/tags.json` 中引用它；同型号设备只差站号/节点号时写 `devices[].variables`，不必复制协议文件。
 3. 重启即生效，无需重新编译。
 
 ## 许可

@@ -2,7 +2,7 @@
 #
 # What it does:
 #   1. Build Release x64 via scripts\build.bat (reuses the same MSBuild discovery)
-#   2. Run every executable test (4 unit test exes + MyProt.E2E)
+#   2. Run every executable test (6 unit test exes + MyProt.E2E)
 #   3. Run the headless WebUI smoke test (scripts\webui-smoke.ps1)
 #   4. Print a summary table and exit with the number of failed steps
 #
@@ -123,7 +123,9 @@ $unitTests = @(
     "MyProt.Core.Tests",
     "MyProt.Engine.Tests",
     "MyProt.Transport.Tests",
-    "MyProt.Service.Tests"
+    "MyProt.Service.Tests",
+    "MyProt.Northbound.Tests",
+    "MyProt.Southbound.Tests"
 )
 foreach ($t in $unitTests) {
     Invoke-Exe -Name $t -Path (Join-Path $binDir ("tests\{0}.exe" -f $t)) -TimeoutSec $UnitTimeoutSec

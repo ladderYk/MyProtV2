@@ -3,5 +3,19 @@
   "simulation": {
     "listenPort": 0
   },
+  "mqtt": {
+    "_comment": "北向 MQTT 发布（默认关闭）。topic = <topicPrefix>/<device>/<tag>，另发 <topicPrefix>/status 在线状态；字段与校验见 docs/Config_Schema.md §14。",
+    "enabled": false,
+    "broker": "mqtt://127.0.0.1:1883",
+    "clientId": "myprot-gw",
+    "username": "",
+    "password": "",
+    "keepAliveSec": 60,
+    "topicPrefix": "myprot",
+    "publishMode": "changed",
+    "publishIntervalMs": 1000,
+    "qos": 0,
+    "retain": false
+  },
   "schemaVersion": 2
 }

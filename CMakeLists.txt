@@ -10,7 +10,12 @@
 # 约束: C++11 (ADR-0010), 不使用 C++14/17 特性。
 
 cmake_minimum_required(VERSION 3.13)
-project(MyProt VERSION 2.0 LANGUAGES CXX)
+project(MyProt VERSION 2.1.0 LANGUAGES CXX)
+
+# 发布版本: 预发布加后缀 (如 "-rc.1"), 正式版留空。
+# project() 的 VERSION 只接受纯数字, 带后缀的完整版本只用于包名与发布元数据。
+set(MYPROT_VERSION_SUFFIX "-rc.1")
+set(MYPROT_VERSION "${PROJECT_VERSION}${MYPROT_VERSION_SUFFIX}")
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,6 +43,8 @@ target_include_directories(myprot_build_flags INTERFACE
     ${MYPROT_ROOT}/src/Service/include
     ${MYPROT_ROOT}/src/Simulation/include
     ${MYPROT_ROOT}/src/WebApi/include
+    ${MYPROT_ROOT}/src/Northbound/include
+    ${MYPROT_ROOT}/src/Southbound/include
     ${MYPROT_THIRD_PARTY}/asio/include
     ${MYPROT_THIRD_PARTY}
 )
@@ -70,8 +77,10 @@ target_link_libraries(myprot_engine PUBLIC myprot_core)
 add_library(myprot_transport STATIC
     src/Transport/src/LengthFieldFrameParser.cpp
     src/Transport/src/SerialChannel.cpp
+    src/Transport/src/StreamFrameCodec.cpp
     src/Transport/src/TcpChannel.cpp
     src/Transport/src/TlsChannel.cpp
+    src/Transport/src/UdpChannel.cpp
 )
 target_link_libraries(myprot_transport PUBLIC myprot_core)
 
@@ -95,9 +104,12 @@ add_library(myprot_service STATIC
     src/Service/src/ConfigDirectoryLoader.cpp
     src/Service/src/ConfigStore.cpp
     src/Service/src/ProtocolJsonParser.cpp
+    src/Service/src/ProtoTemplate.cpp
     src/Service/src/SchemaChecker.cpp
     src/Service/src/SemanticChecker.cpp
     src/Service/src/TrialRenderer.cpp
+    src/Service/src/TrialPreview.cpp
+    src/Service/src/ResponsePreview.cpp
     src/Service/src/SchemaRegistry.cpp
     src/Service/src/SessionContext.cpp
     src/Service/src/ValidationIssue.cpp
@@ -118,6 +130,27 @@ add_library(myprot_webapi STATIC
 )
 target_link_libraries(myprot_webapi PUBLIC myprot_core myprot_service)
 
+# 北向 MQTT 发布 — 自研 3.1.1 子集 (不引入外部 mqtt 依赖)
+add_library(myprot_northbound STATIC
+    src/Northbound/src/MqttCodec.cpp
+    src/Northbound/src/MqttSession.cpp
+    src/Northbound/src/MqttClient.cpp
+    src/Northbound/src/MqttPublisher.cpp
+    src/Northbound/src/MqttProbeHub.cpp
+)
+target_link_libraries(myprot_northbound PUBLIC myprot_core myprot_polling)
+
+# 南向入站 — MQTT 订阅 / TCP 监听 (设备主动推送), 与轮询事务链路并列
+add_library(myprot_southbound STATIC
+    src/Southbound/src/MqttSubscriber.cpp
+    src/Southbound/src/PayloadMapper.cpp
+    src/Southbound/src/SouthboundManager.cpp
+    src/Southbound/src/TagValueSink.cpp
+    src/Southbound/src/TcpIngestServer.cpp
+)
+target_link_libraries(myprot_southbound PUBLIC
+    myprot_core myprot_transport myprot_northbound myprot_polling)
+
 # ── 生产入口 ──
 add_executable(MyProt.App
     src/App/main.cpp
@@ -127,10 +160,14 @@ add_executable(MyProt.App
     src/App/RuntimeGlue.cpp
     src/App/SimApi.cpp
     src/App/ValidateApi.cpp
+    src/App/PreviewApi.cpp
+    src/App/ValidateCli.cpp
+    src/App/MqttProbeApi.cpp
 )
 target_link_libraries(MyProt.App PRIVATE
     myprot_core myprot_engine myprot_transport myprot_gateway
-    myprot_polling myprot_service myprot_simulation myprot_webapi
+    myprot_polling myprot_service myprot_simulation myprot_webapi myprot_northbound
+    myprot_southbound
 )
 if(UNIX AND NOT APPLE)
     # Linux backtrace_symbols 需要导出符号表才能显示函数名
@@ -148,6 +185,7 @@ if(MYPROT_BUILD_TESTS)
     add_executable(MyProt.Core.Tests
         tests/Core.Tests/ByteViewTests.cpp
         tests/Core.Tests/ExpectedTests.cpp
+        tests/Core.Tests/LengthFieldMathTests.cpp
     )
     target_link_libraries(MyProt.Core.Tests PRIVATE myprot_test_main myprot_core)
 
@@ -161,15 +199,40 @@ if(MYPROT_BUILD_TESTS)
     add_executable(MyProt.Service.Tests
         tests/Service.Tests/SchemaDefaultsTests.cpp
         tests/Service.Tests/ValidationIssueTests.cpp
+        tests/Service.Tests/FramingSpecTests.cpp
+        tests/Service.Tests/ProtoTemplateTests.cpp
+        tests/Service.Tests/DerivedExprTests.cpp
+        tests/Service.Tests/ConfigCommentTests.cpp
+        tests/Service.Tests/TrialPreviewTests.cpp
+        tests/Service.Tests/ResponsePreviewTests.cpp
     )
     target_link_libraries(MyProt.Service.Tests PRIVATE myprot_test_main myprot_service)
 
     add_executable(MyProt.Transport.Tests
         tests/Transport.Tests/FrameParserTests.cpp
         tests/Transport.Tests/TcpChannelTests.cpp
+        tests/Transport.Tests/UdpChannelTests.cpp
+        tests/Transport.Tests/StreamFrameSpecTests.cpp
     )
     target_link_libraries(MyProt.Transport.Tests PRIVATE
         myprot_test_main myprot_transport myprot_engine)
+
+    add_executable(MyProt.Northbound.Tests
+        tests/Northbound.Tests/MqttCodecTests.cpp
+        tests/Northbound.Tests/MqttSessionTests.cpp
+        tests/Northbound.Tests/MqttLoopbackTests.cpp
+        tests/Northbound.Tests/MqttProbeTests.cpp
+    )
+    target_link_libraries(MyProt.Northbound.Tests PRIVATE
+        myprot_test_main myprot_northbound)
+
+    add_executable(MyProt.Southbound.Tests
+        tests/Southbound.Tests/IngestLoopbackTests.cpp
+        tests/Southbound.Tests/PayloadMapperTests.cpp
+        tests/Southbound.Tests/TagValueSinkTests.cpp
+    )
+    target_link_libraries(MyProt.Southbound.Tests PRIVATE
+        myprot_test_main myprot_southbound myprot_northbound myprot_polling)
 
     add_executable(MyProt.E2E
         src/Tests/E2EMain.cpp
@@ -179,10 +242,12 @@ if(MYPROT_BUILD_TESTS)
         src/App/RuntimeGlue.cpp
         src/App/SimApi.cpp
         src/App/ValidateApi.cpp
+        src/App/PreviewApi.cpp
     )
     target_link_libraries(MyProt.E2E PRIVATE
         myprot_core myprot_engine myprot_transport myprot_gateway
-        myprot_polling myprot_service myprot_simulation myprot_webapi
+        myprot_polling myprot_service myprot_simulation myprot_webapi myprot_northbound
+        myprot_southbound
     )
     if(UNIX AND NOT APPLE)
         target_link_options(MyProt.E2E PRIVATE -rdynamic)
@@ -192,6 +257,8 @@ if(MYPROT_BUILD_TESTS)
     add_test(NAME Engine.Tests   COMMAND MyProt.Engine.Tests)
     add_test(NAME Service.Tests  COMMAND MyProt.Service.Tests)
     add_test(NAME Transport.Tests COMMAND MyProt.Transport.Tests)
+    add_test(NAME Northbound.Tests COMMAND MyProt.Northbound.Tests)
+    add_test(NAME Southbound.Tests COMMAND MyProt.Southbound.Tests)
     add_test(NAME E2E             COMMAND MyProt.E2E)
     # E2E 以相对路径读写 configs*_test, 与 VS 的 $(ProjectDir) 工作目录保持一致
     set_tests_properties(E2E PROPERTIES WORKING_DIRECTORY ${MYPROT_ROOT})
@@ -208,7 +275,8 @@ set_target_properties(MyProt.App PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${MYPROT_BIN_DIR})
 if(MYPROT_BUILD_TESTS)
     set_target_properties(MyProt.Core.Tests MyProt.Engine.Tests MyProt.Service.Tests
-                          MyProt.Transport.Tests MyProt.E2E PROPERTIES
+                          MyProt.Transport.Tests MyProt.Northbound.Tests MyProt.Southbound.Tests
+                          MyProt.E2E PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${MYPROT_BIN_DIR})
 endif()
 
@@ -231,7 +299,8 @@ endif()
 set(CPACK_PACKAGE_NAME "MyProt")
 set(CPACK_PACKAGE_VENDOR "MyProt")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "MyProt V2 protocol gateway")
-set(CPACK_PACKAGE_FILE_NAME "MyProt-${PROJECT_VERSION}-Linux-${CMAKE_SYSTEM_PROCESSOR}")
+set(CPACK_PACKAGE_VERSION "${MYPROT_VERSION}")
+set(CPACK_PACKAGE_FILE_NAME "MyProt-${MYPROT_VERSION}-Linux-${CMAKE_SYSTEM_PROCESSOR}")
 set(CPACK_PACKAGE_DIRECTORY ${CMAKE_BINARY_DIR}/package)
 set(CPACK_GENERATOR "TGZ")
 include(CPack)

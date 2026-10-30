@@ -30,6 +30,14 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MyProt.Engine.Tests", "test
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MyProt.Service.Tests", "tests\Service.Tests\MyProt.Service.Tests.vcxproj", "{C0DE0004-9999-4000-8000-0000000000C4}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MyProt.Northbound", "src\Northbound\MyProt.Northbound.vcxproj", "{A1B2C3D4-CCCC-4000-8000-00000000000C}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MyProt.Northbound.Tests", "tests\Northbound.Tests\MyProt.Northbound.Tests.vcxproj", "{A1B2C3D4-DDDD-4000-8000-00000000000D}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MyProt.Southbound", "src\Southbound\MyProt.Southbound.vcxproj", "{A1B2C3D4-EEEE-4000-8000-00000000000E}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MyProt.Southbound.Tests", "tests\Southbound.Tests\MyProt.Southbound.Tests.vcxproj", "{A1B2C3D4-FFFF-4000-8000-00000000000F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -150,6 +158,38 @@ Global
 		{C0DE0004-9999-4000-8000-0000000000C4}.Release|Win32.Build.0 = Release|Win32
 		{C0DE0004-9999-4000-8000-0000000000C4}.Release|x64.ActiveCfg = Release|x64
 		{C0DE0004-9999-4000-8000-0000000000C4}.Release|x64.Build.0 = Release|x64
+		{A1B2C3D4-CCCC-4000-8000-00000000000C}.Debug|Win32.ActiveCfg = Debug|Win32
+		{A1B2C3D4-CCCC-4000-8000-00000000000C}.Debug|Win32.Build.0 = Debug|Win32
+		{A1B2C3D4-CCCC-4000-8000-00000000000C}.Debug|x64.ActiveCfg = Debug|x64
+		{A1B2C3D4-CCCC-4000-8000-00000000000C}.Debug|x64.Build.0 = Debug|x64
+		{A1B2C3D4-CCCC-4000-8000-00000000000C}.Release|Win32.ActiveCfg = Release|Win32
+		{A1B2C3D4-CCCC-4000-8000-00000000000C}.Release|Win32.Build.0 = Release|Win32
+		{A1B2C3D4-CCCC-4000-8000-00000000000C}.Release|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-CCCC-4000-8000-00000000000C}.Release|x64.Build.0 = Release|x64
+		{A1B2C3D4-DDDD-4000-8000-00000000000D}.Debug|Win32.ActiveCfg = Debug|Win32
+		{A1B2C3D4-DDDD-4000-8000-00000000000D}.Debug|Win32.Build.0 = Debug|Win32
+		{A1B2C3D4-DDDD-4000-8000-00000000000D}.Debug|x64.ActiveCfg = Debug|x64
+		{A1B2C3D4-DDDD-4000-8000-00000000000D}.Debug|x64.Build.0 = Debug|x64
+		{A1B2C3D4-DDDD-4000-8000-00000000000D}.Release|Win32.ActiveCfg = Release|Win32
+		{A1B2C3D4-DDDD-4000-8000-00000000000D}.Release|Win32.Build.0 = Release|Win32
+		{A1B2C3D4-DDDD-4000-8000-00000000000D}.Release|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-DDDD-4000-8000-00000000000D}.Release|x64.Build.0 = Release|x64
+		{A1B2C3D4-EEEE-4000-8000-00000000000E}.Debug|Win32.ActiveCfg = Debug|Win32
+		{A1B2C3D4-EEEE-4000-8000-00000000000E}.Debug|Win32.Build.0 = Debug|Win32
+		{A1B2C3D4-EEEE-4000-8000-00000000000E}.Debug|x64.ActiveCfg = Debug|x64
+		{A1B2C3D4-EEEE-4000-8000-00000000000E}.Debug|x64.Build.0 = Debug|x64
+		{A1B2C3D4-EEEE-4000-8000-00000000000E}.Release|Win32.ActiveCfg = Release|Win32
+		{A1B2C3D4-EEEE-4000-8000-00000000000E}.Release|Win32.Build.0 = Release|Win32
+		{A1B2C3D4-EEEE-4000-8000-00000000000E}.Release|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-EEEE-4000-8000-00000000000E}.Release|x64.Build.0 = Release|x64
+		{A1B2C3D4-FFFF-4000-8000-00000000000F}.Debug|Win32.ActiveCfg = Debug|Win32
+		{A1B2C3D4-FFFF-4000-8000-00000000000F}.Debug|Win32.Build.0 = Debug|Win32
+		{A1B2C3D4-FFFF-4000-8000-00000000000F}.Debug|x64.ActiveCfg = Debug|x64
+		{A1B2C3D4-FFFF-4000-8000-00000000000F}.Debug|x64.Build.0 = Debug|x64
+		{A1B2C3D4-FFFF-4000-8000-00000000000F}.Release|Win32.ActiveCfg = Release|Win32
+		{A1B2C3D4-FFFF-4000-8000-00000000000F}.Release|Win32.Build.0 = Release|Win32
+		{A1B2C3D4-FFFF-4000-8000-00000000000F}.Release|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-FFFF-4000-8000-00000000000F}.Release|x64.Build.0 = Release|x64
 EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
