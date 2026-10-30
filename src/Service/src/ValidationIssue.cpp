@@ -13,6 +13,7 @@
 #include "MyProt/Service/ValidationIssue.hpp"
 
 #include <cstring>
+#include <vector>
 
 namespace MyProt { namespace Service {
 
@@ -84,6 +85,45 @@ struct Rule {
     const char* fieldPattern;
 };
 
+/// RFC 6901 令牌转义: '~' -> "~0", '/' -> "~1"
+std::string EscapePointerToken(const std::string& token) {
+    std::string out;
+    out.reserve(token.size() + 4);
+    for (std::size_t i = 0; i < token.size(); ++i) {
+        const char c = token[i];
+        if (c == '~') out += "~0";
+        else if (c == '/') out += "~1";
+        else out.push_back(c);
+    }
+    return out;
+}
+
+/// fieldPattern → JSON Pointer。
+/// 逐 token 展开而不是对展开后的点分串再 split: {subject} 作为**单个** token 插入,
+/// 因此标签名里的 '.' (如 PLC-001.Temperature) 不会被误拆成多级。
+std::string PointerFrom(const char* pattern, const std::string& subject) {
+    if (!pattern || pattern[0] == '\0') return std::string();
+    const std::string pat(pattern);
+    std::string pointer;
+    std::size_t pos = 0;
+    while (pos <= pat.size()) {
+        const std::size_t dot = pat.find('.', pos);
+        const std::string token = pat.substr(
+            pos, dot == std::string::npos ? std::string::npos : dot - pos);
+        if (token == "{subject}") {
+            if (subject.empty()) return std::string();   // 主体未知 → 不给出错误的定位
+            pointer += "/";
+            pointer += EscapePointerToken(subject);
+        } else if (!token.empty()) {
+            pointer += "/";
+            pointer += EscapePointerToken(token);
+        }
+        if (dot == std::string::npos) break;
+        pos = dot + 1;
+    }
+    return pointer;
+}
+
 /// 规则表 — 顺序敏感 (具体规则在前)。
 /// 第一批 (保存被拒的主因): 帧长一致性 / 派生长度 expr / 派生长度偏移自检 /
 ///   设备→协议 / 标签→设备 / 标签→操作 / 模板文法 / 版本门禁 / 名称重复
@@ -94,13 +134,15 @@ struct Rule {
 ///   (规则表宁缺勿假: 建了也永远不会命中)。
 const Rule kRules[] = {
     // ── 成帧类 (ADR-0012 §2 试算, TrialRenderer.cpp) ──
-    { "frame.length_consistency", "protocol",
+    // scope="": 跨文件校验时这些消息可能随 tags 域一起返回 (试渲染发生在协议集上),
+    //   限定 protocol 会让它们退化为 unclassified 并丢掉 pointer。
+    { "frame.length_consistency", "",
       "帧长一致性失败|短于长度槽位要求",
       "操作 ", "operations.{subject}.requestTemplate" },
-    { "frame.derived_expr", "protocol",
+    { "frame.derived_expr", "",
       "expr 求值失败|试渲染失败",
       "操作 ", "operations.{subject}.outputs" },
-    { "frame.length_offset", "protocol",
+    { "frame.length_offset", "",
       "偏移自检失败",
       "操作 ", "operations.{subject}.outputs" },
 
@@ -174,6 +216,14 @@ const Rule kRules[] = {
     { "tag.direction", "tags",
       "direction 取值非法",
       "标签 ", "tags.{subject}.direction" },
+
+    // ── 第三批: P1 设备级变量 / 标签变量类 (定位到具体 variables 表) ──
+    { "device.variables", "tags",
+      "variables 使用了保留名|variables 含未声明变量|显式值将覆盖自动计算",
+      "设备 ", "devices.{subject}.variables" },
+    { "tag.variables", "tags",
+      "writeVariables|标签变量",
+      "标签 ", "tags.{subject}.variables" },
 };
 
 } // namespace
@@ -202,6 +252,7 @@ std::vector<ValidationIssue> ClassifyValidationItems(
             issue.ruleId = rule.id;
             issue.subject = SubjectFrom(issue.message, rule.subjectWords);
             issue.field = FieldFrom(rule.fieldPattern, issue.subject);
+            issue.pointer = PointerFrom(rule.fieldPattern, issue.subject);
             break;
         }
 

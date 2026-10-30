@@ -44,6 +44,18 @@ std::pair<int, std::string> HandleWriteApi(const AppContext& ctx,
 std::pair<int, std::string> HandleValidateApi(const Service::ConfigStore& store,
                                               const HttpRequest& req);
 
+/// GET/POST /api/preview?scope=protocols&name= trial render of one operation (read-only, no reload).
+/// Renders through the same RequestBuilder pipeline as the gateway; returns hex/ascii + length-slot check.
+/// Implementation see PreviewApi.cpp.
+std::pair<int, std::string> HandlePreviewApi(const Service::ConfigStore& store,
+                                             const HttpRequest& req);
+
+/// GET/POST /api/preview/response?scope=protocols&name= response parse preview (read-only, no reload).
+/// Feeds device bytes through Engine::ResponseParser; returns the value / quality / condition result.
+/// Implementation see PreviewApi.cpp.
+std::pair<int, std::string> HandleResponsePreviewApi(const Service::ConfigStore& store,
+                                                     const HttpRequest& req);
+
 // ── reload runtime linkage - the sole code path for first-time assembly and hot reload ──
 // Reload the config directory -> fully stop and rebuild simulators -> clear real-time snapshots -> post to the io thread
 // to re-assemble the engine. On invalid new config, keep the old running state and return an error (pairs with ConfigStore auto-rollback).

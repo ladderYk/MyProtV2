@@ -18,6 +18,24 @@
     <ClCompile Include="ValidationIssueTests.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="FramingSpecTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ProtoTemplateTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DerivedExprTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ConfigCommentTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="TrialPreviewTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ResponsePreviewTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\Service\src\SchemaRegistry.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>

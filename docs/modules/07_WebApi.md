@@ -65,6 +65,27 @@ WebApi 独立线程 (_io)                 App 层 provider
 - **会话由异步回调链保活**：`StreamSession` 以 `shared_ptr` 在 `async_wait` / `async_write` 闭包间传递，客户端断开或 `Stop()` 取消立即触发 `StreamClose`，无需外部释放引用；
 - **推送过程中热重载**：`ApplyRuntimeSync` 对同一个 `LatestValueStore` 调用 `Clear()`（不换对象），`provider` 裸指针始终有效；清空后到下一轮轮询完成前可能推出 `count=0` 的空快照，属预期语义，无悬挂。
 
+#### 第二条事件流：`/api/mqtt/stream`（事件批量拉取）
+
+`SetStreamRoute` 只能挂**一个**前缀，已被 `/api/data/stream` 占用；管理面 MQTT 测试面板需要第二条独立事件流，故新增 [`SetEventStreamRoute(prefix, intervalMs, provider)`](file:///d:/workSpaces/c++/MyProt-master/src/WebApi/src/WebApiServer.cpp)：
+
+- `StreamSession` 自带 `intervalMs` 与 `provider`，两条流各自决定推送周期与数据来源，互不影响；
+- `HandleConnection` 先匹配事件流前缀、再匹配数据流前缀，命中即走 `HandleStream`；
+- 事件流 provider 返回**空串表示本轮无内容**，服务端跳过写帧（不发空 `data:`）。
+
+帧格式（provider = `BuildMqttProbeStream`，每 200 ms 取一次 `MqttProbeHub::Poll(sid)`）：
+
+```
+data: {"state":"online","connected":true,"received":12,"dropped":0,"lastError":"",
+       "events":[{"type":"message","topic":"myprot/dev/temp","payload":"{\"v\":21}",
+                  "encoding":"utf8","qos":0,"retain":false,"ts":1756...,"bytes":9,"truncated":false}]}
+```
+
+- `state`：`connecting` | `online` | `error`；**会话已被回收/不存在时 provider 返回 `{"state":"closed",...}`**，前端据此关闭 EventSource 并提示重新开始；
+- `events[]`：`type=status`（连接状态变更）或 `type=message`（订阅到的消息）；
+- 载荷非法 UTF-8 或超过 8 KB 时 `encoding="hex"`，超限还带 `truncated=true`；
+- 无事件且未到心跳间隔（5 s）时返回空串，服务端不写帧。
+
 #### URL 查询参数解析（[QueryParam L49-L65](file:///d:/workSpaces/c++/MyProt-master/src/App/RuntimeGlue.cpp#L49-L65)）
 
 ```
@@ -157,8 +178,17 @@ public:
 | `POST /api/data/write` | 单寄存器写（FC06 全链路：构建→发送→echo 校验→可选 read-back）| Bearer + 限流 |
 | `GET /api/validate?scope=&name=` | 只读校验**磁盘现有内容**，返回结构化问题清单 | Bearer + 限流 |
 | `POST /api/validate?scope=&name=` | 只读校验**请求体候选内容**（不落盘），返回结构化问题清单 | Bearer + 限流 |
+| `GET /api/preview?scope=protocols&name=[&operation=]` | 试渲染**磁盘现有协议**：给出操作清单或一帧请求字节（只读） | Bearer + 限流 |
+| `POST /api/preview?scope=protocols&name=` | 试渲染**请求体候选协议**（不落盘），返回请求字节与长度槽位核对 | Bearer + 限流 |
+| `GET /api/preview/response?scope=protocols&name=&operation=&hex=` | 用**磁盘现有协议**解析给定响应字节（只读） | Bearer + 限流 |
+| `POST /api/preview/response?scope=protocols&name=` | 用**请求体候选协议**解析响应字节（不落盘） | Bearer + 限流 |
+| `POST /api/mqtt/probe` | 建立 MQTT 观测会话（网关代连 broker 并订阅）；200 `{"sid","stream"}` / 400 / 429 | Bearer + 限流 |
+| `GET /api/mqtt/probe/{sid}` | 查询会话状态 JSON；无此会话 `404` | Bearer + 限流 |
+| `DELETE /api/mqtt/probe/{sid}` | 停止并删除会话；无此会话 `404` | Bearer + 限流 |
+| `POST /api/mqtt/probe/{sid}/publish` | 借该会话发布一条消息；`409` 表示连接未建立 | Bearer + 限流 |
+| `GET /api/mqtt/stream?sid=` | SSE 事件流（第二条事件流路由，200 ms 轮询会话事件队列）| Bearer 或 `?token=` + 限流 |
 
-> **非内置域**的 `/api/*`（`sim` / `data` / `validate` / 未来新增）由 App 层经 `SetExtHandler` 注入（§7.6）——内置域只有 `config`，另有免认证的 `/health`、`/metrics`；扩展路由仍在 token 鉴权之后。未注册 handler 时返回 `404 {"error":"ext api not available"}`。
+> **非内置域**的 `/api/*`（`sim` / `data` / `validate` / `preview` / `mqtt` / 未来新增）由 App 层经 `SetExtHandler` 注入（§7.6）——内置域只有 `config`，另有免认证的 `/health`、`/metrics`；扩展路由仍在 token 鉴权之后。未注册 handler 时返回 `404 {"error":"ext api not available"}`。
 
 ## 7.3 配置管理 /api/config/*
 
@@ -206,6 +236,80 @@ public:
 - > `[webApi]` 段消息属全局 schema 域，不经 `protocols`/`tags` 域校验，**有意不建规则**（规则表宁缺勿假：建了也永不命中）
 - `subject` / `field`：供 UI 点击定位（协议：模块/操作；标签：设备/标签）；`message` 始终是校验器原文，**不丢信息**
 - 参数非法或缺失 → `400`；方法非 GET/POST → `405`；GET 目标配置不存在 → `404`
+
+### 7.3.2 试渲染 /api/preview
+
+用途：WebUI 协议工具栏「试渲染」——把「当前编辑器内容 + 操作 + 变量」渲染成一帧请求字节（见 [docs/webui.md](../webui.md)）。与网关共用 `RequestBuilder` 管线（`derivedLength` 注入 + `autoCompute`），**只读**：不写盘、不备份、不重载、不连设备。
+
+| 方法 | 语义 |
+|------|------|
+| `GET /api/preview?scope=protocols&name=<n>[&operation=<op>]` | 渲染**磁盘现有内容**；省略 `operation` 时只返回 `operations` 清单 |
+| `POST /api/preview?scope=protocols&name=<n>`（body 见下）| 渲染**候选内容**（`body.protocol` 优先于磁盘） |
+
+```jsonc
+// 请求体
+{
+  "protocol": "<候选 JSON 文本或对象>",   // 可选；缺省读磁盘
+  "operation": "Read",
+  "variables": { "StartByteAddress": 100, "ByteCount": 2 },  // 可选数值覆盖
+  "raw": { "Data": "01 02 03" },          // 可选 {Name:raw} 载荷
+  "payloadBytes": 3                       // raw 省略时的占位字节数 (0..1024)
+}
+// 响应 (渲染失败也返回 200, 语义看 ok)
+{ "ok": true, "frameLength": 12, "hex": "AA BB ...", "ascii": "..",
+  "errors": [], "warnings": [], "operations": ["Read", "..."],
+  "variables": [{ "name": "UnitID", "source": "override", "value": 7 }],
+  "lengthField": { "offset": 2, "width": 2, "byteOrder": "big",
+                   "value": 6, "expected": 6, "ok": true } }
+```
+
+- `source` 层级：`protocol` \| `operation` \| `override` \| `default` \| `derived` \| `auto`；`auto` 变量在渲染期求值，`value` 恒为 `null`
+- 长度槽位核对范围：只要 `framing.type=LengthField` 且槽位宽合法，**任何操作**（含读）都会核对；保存期 `TrialRenderer` 仅核对含 `{Name:raw}` 的写操作 —— 预览更严格，两者期望值算法共用 `Core::ExpectedLengthFieldValue`
+- `raw` 的键名 = 操作 `requestTemplate` 中整元素 `{Name:raw}` 的 `Name`；响应不回传该清单（由前端从候选内容自行提取），省略即用 `payloadBytes` 占位
+- `scope` 仅支持 `protocols`（其余 `400`）；`operation` 不存在时 `ok:false` 并在 `errors[0]` 列出可用操作
+- `variables` 须为 0..4294967295 的整数，`raw` 须为 hex 字符串，`payloadBytes` 0..1024；非法 → `400`
+
+> 路由为前缀匹配且**注册顺序即优先级**：`/api/preview/response` 必须先于 `/api/preview` 注册，否则会被后者吞掉。
+
+### 7.3.3 响应解析预览 /api/preview/response
+
+用途：WebUI 试渲染面板的「响应解析」页签——把设备返回的字节喂给网关**同一个** `Engine::ResponseParser`，核对成帧判定、`dataStartIndex`、字节序、类型转换与质量码（见 [docs/webui.md](../webui.md)）。**只读**：不写盘、不重载、不连设备。可选的 `converters` 用于预览 **tags.json 的标签级读后换算链**（v5 C1，`value' = value*k + b`），响应同时回报换算前值与实际使用的链。
+
+| 方法 | 语义 |
+|------|------|
+| `GET /api/preview/response?scope=protocols&name=<n>&operation=<op>&hex=<hex>[&finalType=&bitOffset=&byteCount=&byteOrder=]` | 解析**磁盘现有协议**；`hex` 须紧凑或改用 POST（`QueryParam` 不做 URL 解码） |
+| `POST /api/preview/response?scope=protocols&name=<n>`（body 见下）| 用**候选内容**解析（`body.protocol` 优先于磁盘） |
+
+```jsonc
+// 请求体
+{
+  "protocol": "<候选 JSON 文本或对象>",   // 可选；缺省读磁盘
+  "operation": "Read",                  // 省略时只返回 operations 清单
+  "hex": "03 04 00 2A 00 01",           // 响应字节; 空格/换行/逗号可省略
+  "finalType": "UInt16",                // 可选; 缺省 UInt16
+  "bitOffset": -1,                      // 可选; Bool 位提取 0..7, -1 = 不提取
+  "byteCount": 0,                       // 可选; 0 = dataStartIndex 之后剩余全量
+  "byteOrder": "LittleEndian",          // 可选; 缺省用协议/标签级解析顺序
+  "converters": [{ "kind": "scale", "k": 0.1, "b": -40 }]  // 可选; 标签级换算链 (POST only)
+}
+// 响应 (语义失败也返回 200, 语义看 ok)
+{ "ok": true, "operation": "Read", "errors": [], "warnings": [],
+  "operations": ["Read"],
+  "condition": { "checked": true, "expr": "resp[1] == 4", "ok": true },
+  "byteOrder": "BigEndian", "dataStartIndex": 2,
+  "frameLength": 6, "rawLength": 2, "rawHex": "00 2A",
+  "value": { "type": "Double", "text": "-35.8", "numeric": -35.8 },
+  "converters": [{ "k": 0.1, "b": -40 }],
+  "valueBeforeConversion": { "type": "UInt16", "text": "42", "numeric": 42 },
+  "quality": "Good", "timestamp": 1730000000 }
+```
+
+- 校验顺序：协议 JSON → `operation` 存在性 → `hex` 合法性 → `bitOffset` 范围 → `dataStartIndex` 越界 → `validCondition` → 类型转换
+- `validCondition` 不满足 → `ok:false` 且 `errors[0]` 指出条件表达式（不返回看似正常的值）；未声明 `validCondition` 时 `condition.checked=false`
+- `byteCount` 超出数据区剩余量 → 退化为剩余全量并写入 `warnings[]`（与运行时一致）；`dataStartIndex` 恰好等于帧长 → 数据区为空，报「解析失败」
+- `converters` 项 `{kind:"scale", k, b}` 与 `tags.json` 同形：按序应用后结果统一为 `Double`；`kind` 仅支持 `scale`，`k=0` / 非有限数值 / 非数值型 `finalType` → `ok:false`（规则 13 语义提前到预览期）；仅 POST 支持
+- `value` 仅在类型转换成功时非 `null`；未提供 `converters` 时 `valueBeforeConversion` 为 `null`；非数值类型（`Bool` / `String` / `ByteArray`）的 `numeric` 为 `null`
+- 缺 `hex` → `400`；`bitOffset` 非 `-1|0..7`、`byteCount` 超 `0..4294967295`、`protocol` 类型非法 → `400`；方法非 GET/POST → `405`；GET 目标配置不存在 → `404`
 
 ## 7.4 reload 运行时联动（仿真器 + 实时数据）
 
@@ -361,7 +465,7 @@ WebApi 线程                    io 线程                            metrics
 
 ## 7.6 扩展路由机制（依赖倒置）
 
-`WebApiServer` 的路由白名单仅放行 `api/sim` 与 `api/data` 两个前缀给 `_ext` 回调——WebApi 模块不反向依赖 Simulation/Polling，业务 handler 全部由 App 层组装注入：
+`WebApiServer` 不硬编码业务前缀：除内置 `api/config` 与免认证的 `/health`、`/metrics` 外，其余 `/api/*` 一律交 `_ext` 回调——WebApi 模块不反向依赖 Simulation/Polling/Northbound，业务 handler 全部由 App 层组装注入：
 
 ```cpp
 // src/App/main.cpp → RunProduction
@@ -372,6 +476,11 @@ extRoutes.Add("/api/data",
     [](const AppContext& c, const HttpRequest& r) { return HandleDataApi(r, *c.latest); });
 extRoutes.Add("/api/sim",
     [](const AppContext& c, const HttpRequest& r) { return HandleSimApi(r, *c.sims); });
+// MQTT 观测会话 (需按值捕获引擎对象引用; hub 不进 AppContext)
+extRoutes.Add("/api/mqtt/probe",
+    [&mqttProbe](const AppContext&, const HttpRequest& r) {
+        return HandleMqttProbeApi(mqttProbe, r);
+    });
 
 server.SetExtHandler([&ctx, &extRoutes](
         const std::string& m, const std::string& p, const std::string& b) {
@@ -386,6 +495,12 @@ server.SetExtHandler([&ctx, &extRoutes](
 server.SetStreamRoute("/api/data/stream", 3000,
     [&latest](const std::string& p) {
         return BuildLatestJson(latest, QueryParam(p, "device"));
+    });
+
+// 第二条事件流 (MQTT 观测会话): 自己的周期与 provider, 与数据流互不影响
+server.SetEventStreamRoute("/api/mqtt/stream", 200,
+    [&mqttProbe](const std::string& p) {
+        return BuildMqttProbeStream(mqttProbe, p);
     });
 ```
 
@@ -410,6 +525,7 @@ server.SetStreamRoute("/api/data/stream", 3000,
 | 配置管理 | ScopeManager.vue + JsonEditor.vue | 协议/标签 CRUD、备份列表、一键回滚、左侧搜索框（item>5 显示）+ 设备 ID / 标签名实时重名校验 | `/api/config/*` |
 | 仿真控制台 | SimPanel.vue | 仿真器卡片、寄存器表格读写、3s 轮询刷新）、单行改值即时生效 | `/api/sim/*` |
 | 实时监控 | LivePanel.vue | 最新值快照表格、关键字过滤、变化行高亮、质量徽标（Good/Bad/Uncertain）、SSE 实时推送（断流自动重连）、手动刷新兜底、sparkline 30 点趋势图 | `/api/data/stream`、`/api/data/latest` |
+| MQTT 测试 | MqttTestPanel.vue | 网关代连 broker（TCP）并订阅过滤器，SSE 回推消息与连接状态，可借会话回环发布 | `/api/mqtt/probe*`、`/api/mqtt/stream` |
 
 ---
 

@@ -56,12 +56,13 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
     }
 
     // 按 scanRateMs 分组 (TagGrouper::GroupByScanRate)
-        // 写标签 (direction=write) 不参与轮询 — 它们只作为 /api/data/write
-    //   的定向目标, 无采集语义; 在引擎入口过滤, TagGrouper 无需感知.
+        // 写标签 (direction=write) 与推送标签 (source=push) 不参与轮询 —
+    //   前者只作为 /api/data/write 的定向目标, 后者由南向 ingest 适配器产出;
+    //   在引擎入口过滤, TagGrouper 无需感知.
     std::vector<Core::TagDefinition> pollTags;
     pollTags.reserve(tags.size());
     for (size_t i = 0; i < tags.size(); ++i) {
-        if (tags[i].direction != "write") pollTags.push_back(tags[i]);
+        if (tags[i].direction != "write" && tags[i].source != "push") pollTags.push_back(tags[i]);
     }
 
     auto tagGroups = _gateway.GetTagGrouper().GroupByScanRate(pollTags);

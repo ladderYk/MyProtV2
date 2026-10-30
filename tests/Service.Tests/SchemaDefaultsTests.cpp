@@ -71,6 +71,7 @@ std::string TransportTypeName(MyProt::Core::TransportType t) {
         case MyProt::Core::TransportType::Tcp:    return "Tcp";
         case MyProt::Core::TransportType::Tls:    return "Tls";
         case MyProt::Core::TransportType::Serial: return "Serial";
+        case MyProt::Core::TransportType::Udp:    return "Udp";
     }
     return "";
 }

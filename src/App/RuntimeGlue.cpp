@@ -38,6 +38,8 @@
 #include "MyProt/Engine/ResponseParser.hpp"   // 写路径 byteOrder 裁决共用 (读写
 #include "MyProt/Service/ConfigDirectoryLoader.hpp"
 #include "MyProt/Simulation/SimulationServer.hpp"
+#include "MyProt/Northbound/MqttPublisher.hpp"   // 北向发布热重载
+#include "MyProt/Southbound/SouthboundManager.hpp"  // 南向入站热重载
 #include "RuntimeGlue.hpp"
 #include "AppSignals.hpp"
 #include "CrashDiagnostics.hpp"
@@ -215,6 +217,16 @@ std::string QueryParam(const std::string& path, const std::string& key) {
                      << " 标签/" << snapshot->devices.size() << " 设备)"
                      << std::endl;
         });
+
+        // 6. 北向 MQTT — 与轮询装配同一入口 (enabled=false / 配置未变时内部短路)。
+        //    放在调用线程而非 io.post: Apply 需要停旧会话并 join 发布线程,
+        //    在轮询 io 线程里做阻塞 join 会拖住引擎热重载。
+        if (ctx.mqtt) ctx.mqtt->Apply(snapshot->server.mqtt);
+
+        // 7. 南向入站 — 与北向同一入口: 设备 ingest 增删改在此代生效。
+        //    Apply 内部先停旧适配器并 join 自己的 io 线程, 不在轮询线程上做。
+        if (ctx.southbound) ctx.southbound->Apply(snapshot->devices, snapshot->tags);
+
         return MyProt::Core::VoidExpected();
     }
 

@@ -134,6 +134,60 @@ TEST(MiniExpressionTest, BitwisePrecedenceMatchesC) {
     EXPECT_EQ(andEq, 0u);
 }
 
+// ── 内建函数: hi8/lo8/hi16/lo16 取代 "% 256" / "/ 256 % 256" 手写算术 ──
+TEST(MiniExpressionTest, BuiltinByteExtraction) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    // 字节提取: 0x1234 → hi8=0x12 lo8=0x34
+    std::uint64_t hi = 0, lo = 0;
+    ASSERT_TRUE(TryEval("hi8(0x1234)", resp, hi));
+    ASSERT_TRUE(TryEval("lo8(0x1234)", resp, lo));
+    EXPECT_EQ(hi, 0x12u);
+    EXPECT_EQ(lo, 0x34u);
+
+    // 字提取: 0x12345678 → hi16=0x1234 lo16=0x5678
+    std::uint64_t hiw = 0, low = 0;
+    ASSERT_TRUE(TryEval("hi16(0x12345678)", resp, hiw));
+    ASSERT_TRUE(TryEval("lo16(0x12345678)", resp, low));
+    EXPECT_EQ(hiw, 0x1234u);
+    EXPECT_EQ(low, 0x5678u);
+}
+
+// ── 内建函数可与算术/响应字节组合 (等价于旧写法) ──
+TEST(MiniExpressionTest, BuiltinComposesWithArithmetic) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    // hi8(0x1234 / 2) == 0x09; 旧写法 0x1234 / 2 / 256 % 256 同样得 0x09
+    std::uint64_t a = 0, b = 0;
+    ASSERT_TRUE(TryEval("hi8(0x1234 / 2)", resp, a));
+    ASSERT_TRUE(TryEval("0x1234 / 2 / 256 % 256", resp, b));
+    EXPECT_EQ(a, b);
+
+    // 参数可以是响应字节表达式
+    std::uint64_t c = 0;
+    ASSERT_TRUE(TryEval("lo8((resp[1] << 8) | resp[2])", resp, c));
+    EXPECT_EQ(c, 0x10u);
+
+    // 允许函数名与 '(' 之间有空白
+    std::uint64_t d = 0;
+    ASSERT_TRUE(TryEval("hi8 (0x1234)", resp, d));
+    EXPECT_EQ(d, 0x12u);
+}
+
+// ── 未知函数 / 参数个数错误必须在解析期失败 (不能运行期才静默) ──
+TEST(MiniExpressionTest, BuiltinArityAndUnknownFunctionRejected) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    std::uint64_t unused = 0;
+    EXPECT_FALSE(TryEval("hi9(1)", resp, unused));       // 未知函数名
+    EXPECT_FALSE(TryEval("hi8(1, 2)", resp, unused));    // 多参数
+    EXPECT_FALSE(TryEval("hi8(1", resp, unused));        // 缺右括号
+    EXPECT_FALSE(TryEval("hi8()", resp, unused));        // 空参数
+}
+
 // ── 非法表达式必须是"错误"而不是抛异常 / 静默 0 ──
 TEST(MiniExpressionTest, InvalidExpressionReturnsError) {
     const Bytes frame = SampleFrame();

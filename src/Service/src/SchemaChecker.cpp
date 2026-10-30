@@ -53,10 +53,13 @@ void ConfigValidator::validateTransport(const Core::TransportConfig& t,
             }
             // 能力前移提示: TLS 运行期通道尚未实现 (tls 暂缓决策), 加载即告警
             r.addWarning("TLS 传输的运行期通道尚未实现, 设备将无法建立连接 "
-                         "(当前版本仅支持 Tcp)");
+                         "(当前版本运行期仅支持 Tcp/Udp；Serial 配置合法但通道尚未接入工厂)");
             break;
         case Core::TransportType::Serial:
             if (t.serial.baudRate == 0) r.addError("Serial baudRate 必须 > 0 (规则2)");
+            break;
+        case Core::TransportType::Udp:
+            // UDP 无连接, 协议级无额外约束; 端口有效性由设备层 (规则10) 校验
             break;
         default:
             r.addError("transport.type 判别值越界 (规则2)");
@@ -71,7 +74,17 @@ void ConfigValidator::validateFraming(const Core::FramingConfig& f,
         case Core::FramingType::LengthField: {
             const Core::LengthFieldConfig& lf = f.lengthField;
             // 规则 3
-            if (lf.lengthFieldLength != 1 && lf.lengthFieldLength != 2
+            if (lf.lengthEncoding == Core::LengthFieldEncoding::Varint) {
+                if (lf.lengthFieldLength != 0) {
+                    r.addError("LengthField lengthFieldEncoding=Varint 时 lengthFieldLength 必须为 0 "
+                               "(宽度由 varint 编码决定), 实际 "
+                               + std::to_string(lf.lengthFieldLength) + " (规则3)");
+                }
+                if (lf.varintMaxBytes < 1 || lf.varintMaxBytes > 4) {
+                    r.addError("LengthField varintMaxBytes 取值须为 1~4, 实际 "
+                               + std::to_string(lf.varintMaxBytes) + " (规则3)");
+                }
+            } else if (lf.lengthFieldLength != 1 && lf.lengthFieldLength != 2
                     && lf.lengthFieldLength != 4) {
                 r.addError("LengthField lengthFieldLength 取值须为 1/2/4, 实际 "
                            + std::to_string(lf.lengthFieldLength) + " (规则3)");
@@ -79,16 +92,95 @@ void ConfigValidator::validateFraming(const Core::FramingConfig& f,
             if (lf.lengthFieldOffset < 0) {
                 r.addError("LengthField lengthFieldOffset 必须 ≥ 0 (规则3)");
             }
+            // Varint 宽度不定, 静态只能约束最少 1 字节
+            const int lengthWidth = lf.lengthEncoding == Core::LengthFieldEncoding::Varint
+                ? 1 : lf.lengthFieldLength;
             if (lf.headerLength != 0
-                    && lf.headerLength < lf.lengthFieldOffset + lf.lengthFieldLength) {
-                r.addError("headerLength 必须 ≥ lengthFieldOffset + lengthFieldLength, 或为 0 (规则3)");
+                    && lf.headerLength < lf.lengthFieldOffset + lengthWidth) {
+                r.addError("headerLength 必须 ≥ lengthFieldOffset + 长度域宽度, 或为 0 (规则3)");
             }
             const int effHeader = lf.headerLength > 0
                 ? lf.headerLength
-                : lf.lengthFieldOffset + lf.lengthFieldLength;
+                : lf.lengthFieldOffset + lengthWidth;
             if (lf.maxFrameSize <= effHeader) {
                 r.addError("maxFrameSize (" + std::to_string(lf.maxFrameSize)
                            + ") 必须 > 有效帧头长度 (" + std::to_string(effHeader) + ") (规则3)");
+            }
+
+            // ADR-0021 §2.2: 位域字段
+            const int64_t frameBits = static_cast<int64_t>(lf.maxFrameSize) * 8;
+            for (size_t i = 0; i < lf.headerFields.size(); ++i) {
+                const Core::HeaderFieldConfig& hf = lf.headerFields[i];
+                const std::string ctx = "headerFields[" + std::to_string(i) + "]";
+                if (hf.name.empty()) {
+                    r.addError(ctx + " name 不能为空 (规则3)");
+                } else {
+                    for (size_t k = 0; k < i; ++k) {
+                        if (lf.headerFields[k].name == hf.name) {
+                            r.addError(ctx + " name 重复: \"" + hf.name + "\" (规则3)");
+                            break;
+                        }
+                    }
+                }
+                if (hf.bitOffset < 0) {
+                    r.addError(ctx + " bitOffset 必须 ≥ 0 (规则3)");
+                }
+                if (hf.bitWidth < 1 || hf.bitWidth > 32) {
+                    r.addError(ctx + " bitWidth 取值须为 1~32, 实际 "
+                               + std::to_string(hf.bitWidth) + " (规则3)");
+                } else if (hf.bitOffset >= 0
+                        && static_cast<int64_t>(hf.bitOffset) + hf.bitWidth > frameBits) {
+                    r.addError(ctx + " 位域越界: bitOffset+" "bitWidth 超出 maxFrameSize (规则3)");
+                }
+            }
+
+            // ADR-0021 §2.3: 分派表
+            if (!lf.dispatch.field.empty()) {
+                bool found = false;
+                for (size_t i = 0; i < lf.headerFields.size(); ++i) {
+                    if (lf.headerFields[i].name == lf.dispatch.field) { found = true; break; }
+                }
+                if (!found) {
+                    r.addError("dispatch.field \"" + lf.dispatch.field
+                               + "\" 未在 headerFields 中声明 (规则3)");
+                }
+                for (size_t i = 0; i < lf.dispatch.cases.size(); ++i) {
+                    for (size_t k = 0; k < i; ++k) {
+                        if (lf.dispatch.cases[k].value == lf.dispatch.cases[i].value) {
+                            r.addError("dispatch.cases value 重复: "
+                                       + std::to_string(lf.dispatch.cases[i].value) + " (规则3)");
+                            break;
+                        }
+                    }
+                }
+            } else if (!lf.dispatch.cases.empty()) {
+                r.addError("dispatch.cases 已声明但 dispatch.field 为空 (规则3)");
+            }
+
+            // ADR-0021 §2.4: 重复记录
+            if (!lf.repeat.countField.empty()) {
+                bool found = false;
+                for (size_t i = 0; i < lf.headerFields.size(); ++i) {
+                    if (lf.headerFields[i].name == lf.repeat.countField) { found = true; break; }
+                }
+                if (!found) {
+                    r.addError("repeat.countField \"" + lf.repeat.countField
+                               + "\" 未在 headerFields 中声明 (规则3)");
+                }
+                if (lf.repeat.stride <= 0) {
+                    r.addError("repeat.stride 必须 > 0 (规则3)");
+                }
+                if (lf.repeat.offset < 0) {
+                    r.addError("repeat.offset 必须 ≥ 0 (规则3)");
+                }
+                if (lf.repeat.maxCount <= 0) {
+                    r.addError("repeat.maxCount 必须 > 0 (规则3)");
+                }
+                if (lf.repeat.name.empty()) {
+                    r.addError("repeat.name 不能为空 (规则3)");
+                }
+            } else if (lf.repeat.stride != 0) {
+                r.addError("repeat.stride 已声明但 repeat.countField 为空 (规则3)");
             }
             break;
         }
@@ -188,15 +280,21 @@ void ConfigValidator::validateDevice(const Core::DeviceConfig& dev,
 
     switch (proto->transport.type) {
         case Core::TransportType::Tcp:
-        case Core::TransportType::Tls: {
+        case Core::TransportType::Tls:
+        case Core::TransportType::Udp: {
             // 规则 10
             if (dev.connection.host.empty()) {
-                r.addError("Tcp/Tls 设备 " + ctx + " connection.host 不能为空 (规则10)");
+                r.addError("Tcp/Tls/Udp 设备 " + ctx + " connection.host 不能为空 (规则10)");
             }
             if (dev.connection.port == 0) {
-                const uint16_t def = proto->transport.type == Core::TransportType::Tcp
-                    ? proto->transport.tcp.defaultPort
-                    : proto->transport.tls.defaultPort;
+                uint16_t def = 0;
+                if (proto->transport.type == Core::TransportType::Tcp) {
+                    def = proto->transport.tcp.defaultPort;
+                } else if (proto->transport.type == Core::TransportType::Udp) {
+                    def = proto->transport.udp.defaultPort;
+                } else {
+                    def = proto->transport.tls.defaultPort;
+                }
                 if (def == 0) {
                     r.addError("设备 " + ctx + " port=0 且协议 defaultPort=0, 无可用端口 (规则10)");
                 }
@@ -218,6 +316,59 @@ void ConfigValidator::validateDevice(const Core::DeviceConfig& dev,
     if (dev.resilience.has_value()) {
         validateResilience(dev.resilience.value(), "设备 " + ctx, r);
     }
+    if (dev.ingest.has_value()) {
+        validateIngest(dev.ingest.value(), ctx, r);
+    }
+}
+
+void ConfigValidator::validateIngest(const Core::IngestConfig& ing,
+                                     const std::string& ctx,
+                                     ValidationResult& r) const {
+    const std::string p = "设备 " + ctx + " ingest";
+    if (ing.type == "mqtt") {
+        const Core::MqttIngestConfig& m = ing.mqtt;
+        if (m.topic.empty()) {
+            r.addError(p + ".mqtt.topic 不能为空 (订阅过滤器)");
+        }
+        if (m.qos != 0 && m.qos != 1) {
+            r.addError(p + ".mqtt.qos 仅支持 0/1 (QoS2 未实现), 实际 "
+                       + std::to_string(m.qos));
+        }
+        if (m.keepAliveSec < 0) {
+            r.addError(p + ".mqtt.keepAliveSec 必须 ≥ 0 (0 = 默认 60)");
+        }
+        if (m.reconnectMinMs <= 0) {
+            r.addError(p + ".mqtt.reconnectMinMs 必须 > 0");
+        }
+        if (m.reconnectMaxMs < m.reconnectMinMs) {
+            r.addError(p + ".mqtt.reconnectMaxMs 必须 ≥ reconnectMinMs");
+        }
+        if (m.maxSilenceMs < 0) {
+            r.addError(p + ".mqtt.maxSilenceMs 必须 ≥ 0 (0 = 关闭静默看门狗)");
+        }
+        if (m.tagFrom != "payload" && m.tagFrom != "topic") {
+            r.addError(p + ".mqtt.tagFrom 取值非法: \"" + m.tagFrom
+                       + "\" (仅 payload/topic)");
+        }
+        if (m.tagFrom == "topic" && m.tagTopicIndex <= 0) {
+            r.addError(p + ".mqtt.tagTopicIndex 在 tagFrom=topic 时必须 ≥ 1 (1-based)");
+        }
+        return;
+    }
+    if (ing.type == "tcp") {
+        const Core::TcpIngestConfig& t = ing.tcp;
+        if (t.port == 0) {
+            r.addError(p + ".tcp.port 必须 > 0 (网关监听端口)");
+        }
+        if (t.maxSilenceMs < 0) {
+            r.addError(p + ".tcp.maxSilenceMs 必须 ≥ 0");
+        }
+        Core::TransportConfig tcpTransport;
+        tcpTransport.type = Core::TransportType::Tcp;
+        validateFraming(t.framing, tcpTransport, r);
+        return;
+    }
+    r.addError(p + ".type 取值非法: \"" + ing.type + "\" (仅 mqtt/tcp)");
 }
 // ── 韧性策略 (§11) ──
 

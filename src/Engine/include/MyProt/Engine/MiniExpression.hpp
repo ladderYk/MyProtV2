@@ -5,7 +5,9 @@
 //   Condition (v1.28): == != > < >= <= && || ! and resp[N] response-byte indexing
 //     — comparison/logical nodes evaluate to 0/1; resp[N] resolves via the VarLookup
 //       callback using the canonical name "resp[<index>]" (index may itself be an expression).
-//   Does not support: function calls, strings, ternary (use autoCompute strategies for those)
+//   Builtin functions (v1.33): hi8(x) lo8(x) hi16(x) lo16(x) — byte/word extraction,
+//     replacing the error-prone "% 256" / "/ 256 % 256" arithmetic in derivedLength exprs.
+//   Does not support: other function calls, strings, ternary (use autoCompute strategies for those)
 //
 // Usage:
 //   MiniExpression::Parser p("RegisterCount * 2 + (1 & 0xFF)");
@@ -36,16 +38,19 @@ using VarLookup = std::function<uint64_t(const std::string&, bool& found)>;
 
 /// AST node (public so the implementation .cpp can construct/evaluate directly)
 struct Node {
-    enum Type { Num, Var, Resp, Unary, Binary };
+    enum Type { Num, Var, Resp, Func, Unary, Binary };
     Type type;
-    std::string text;   // for Var
+    std::string text;   // for Var (variable name) / Func (builtin function name)
     uint64_t num = 0;   // for Num
     char op = 0;        // Unary: '-','~','!'  |  Binary arithmetic: '+','-','*','/','%','&','|','^'
                         // Binary shift: 's' (<<)  'S' (>>)
                         // Binary condition (single-char codes, no collision with the above):
                         //   '=' (==)  'n' (!=)  '>'  '<'  'G' (>=)  'L' (<=)  'A' (&&)  'O' (||)
-    std::unique_ptr<Node> lhs, rhs;  // Resp: lhs holds the index expression
+    std::unique_ptr<Node> lhs, rhs;  // Resp: lhs holds the index expression; Func: lhs holds the single argument
 };
+
+/// Whether name is a supported builtin function (hi8 / lo8 / hi16 / lo16).
+bool IsBuiltinFunction(const std::string& name);
 
 class Parser {
 public:
@@ -90,6 +95,7 @@ private:
     std::unique_ptr<Node> ParseNumber();
     std::unique_ptr<Node> ParseIdent();
     std::unique_ptr<Node> ParseLenToken();   // {name:len} byte-length reference
+    std::unique_ptr<Node> ParseCall(const std::string& name);  // builtin function call
 
     // Evaluation
     uint64_t EvalNode(const Node& n, const VarLookup& lookup) const;

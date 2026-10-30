@@ -8,6 +8,7 @@
 
 #include "MyProt/Service/ConfigValidator.hpp"
 #include "ConfigInternals.hpp"
+#include "ConfigJsonText.hpp"   // 配置文件 JSON: 允许注释 + 容忍 BOM (HTTP 体不走这里)
 
 #include <cctype>
 #include <string>
@@ -157,7 +158,7 @@ Core::Expected<ProtocolValidationOutcome> ConfigValidator::validateAndParseProto
 
     nlohmann::json doc;
     try {
-        doc = nlohmann::json::parse(json);
+        doc = detail::ParseConfigJsonText(json);
     } catch (const nlohmann::json::parse_error& e) {
         return Core::Unexpected(Core::Error::Code::ParseError,
                                 std::string("JSON 语法错误: ") + e.what());
@@ -208,7 +209,7 @@ Core::Expected<ValidationResult> ConfigValidator::validateConfigRootJson(
 
     nlohmann::json doc;
     try {
-        doc = nlohmann::json::parse(json);
+        doc = detail::ParseConfigJsonText(json);
     } catch (const nlohmann::json::parse_error& e) {
         return Core::Unexpected(Core::Error::Code::ParseError,
                                 std::string("JSON 语法错误: ") + e.what());
@@ -244,7 +245,7 @@ Core::Expected<ValidationResult> ConfigValidator::validateConfigRootJson(
     for (size_t i = 0; i < protocolJsons.size(); ++i) {
         nlohmann::json pdoc;
         try {
-            pdoc = nlohmann::json::parse(protocolJsons[i]);
+            pdoc = detail::ParseConfigJsonText(protocolJsons[i]);
         } catch (const nlohmann::json::parse_error& e) {
             return Core::Unexpected(Core::Error::Code::ParseError,
                                     "协议文件[" + std::to_string(i) + "] JSON 语法错误: "
@@ -275,7 +276,7 @@ Core::Expected<Core::ProtocolConfig> ConfigValidator::parseProtocolJson(
 
     nlohmann::json doc;
     try {
-        doc = nlohmann::json::parse(json);
+        doc = detail::ParseConfigJsonText(json);
     } catch (const nlohmann::json::parse_error& e) {
         return Core::Unexpected(Core::Error::Code::ParseError,
                                 std::string("JSON 语法错误: ") + e.what());
@@ -295,7 +296,7 @@ Core::Expected<Core::ConfigRoot> ConfigValidator::parseConfigRootJson(
 
     nlohmann::json doc;
     try {
-        doc = nlohmann::json::parse(json);
+        doc = detail::ParseConfigJsonText(json);
     } catch (const nlohmann::json::parse_error& e) {
         return Core::Unexpected(Core::Error::Code::ParseError,
                                 std::string("JSON 语法错误: ") + e.what());
@@ -318,7 +319,7 @@ Core::Expected<ConfigRootValidationOutcome> ConfigValidator::validateAndParseCon
 
     nlohmann::json doc;
     try {
-        doc = nlohmann::json::parse(json);
+        doc = detail::ParseConfigJsonText(json);
     } catch (const nlohmann::json::parse_error& e) {
         return Core::Unexpected(Core::Error::Code::ParseError,
                                 std::string("JSON 语法错误: ") + e.what());

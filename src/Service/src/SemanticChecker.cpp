@@ -173,11 +173,36 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
         // 写标签 (direction=write): 不参与轮询, scanRateMs 不作要求;
     //       readBackTag 仅写标签可配; writeVariable 不可为空.
     const bool isWriteTag = (tag.direction == "write");
+    const bool isPushTag = (tag.source == "push");
     if (tag.direction != "read" && !isWriteTag) {
         r.addError("标签 " + ctx + " direction 取值非法: \"" + tag.direction
                    + "\" (仅 read/write) (规则13)");
     }
-    if (!isWriteTag && tag.scanRateMs <= 0) {
+    if (tag.source != "poll" && !isPushTag) {
+        r.addError("标签 " + ctx + " source 取值非法: \"" + tag.source
+                   + "\" (仅 poll/push) (规则13)");
+    }
+    if (isPushTag && isWriteTag) {
+        r.addError("标签 " + ctx + " source=push 与 direction=write 互斥 (规则13)");
+    }
+    if (isPushTag) {
+        // push 标签由 ingest 适配器产出: 不经操作模板、不参与轮询
+        if (!tag.operation.empty()) {
+            r.addError("标签 " + ctx + " source=push 不得声明 operation (不经模板解析) (规则13)");
+        }
+        if (tag.scanRateMs != 0) {
+            r.addWarning("标签 " + ctx + " source=push 的 scanRateMs 将被忽略 (规则13)");
+        }
+        std::unordered_map<std::string, const Core::DeviceConfig*>::const_iterator pdev =
+            deviceMap.find(tag.deviceId);
+        if (pdev == deviceMap.end()) {
+            r.addError("标签 " + ctx + " 引用不存在的设备: \"" + tag.deviceId
+                       + "\" (规则12)");
+        } else if (!pdev->second->ingest.has_value()) {
+            r.addError("标签 " + ctx + " source=push 但设备 \"" + tag.deviceId
+                       + "\" 未配置 ingest (规则13)");
+        }
+    } else if (!isWriteTag && tag.scanRateMs <= 0) {
         r.addError("标签 " + ctx + " scanRateMs 必须 > 0 (规则13)");
     }
     if (isWriteTag && tag.writeVariable.empty()) {
@@ -197,9 +222,9 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     if (isWriteTag && !tag.writeVariables.empty()) {
         r.addWarning("标签 " + ctx + " 写标签 (direction=write) 无需 writeVariables, 将被忽略 (规则13)");
     }
-    if (!isAllowedFinalType(tag.finalType)) {
+    if (!(isPushTag && tag.finalType == "Auto") && !isAllowedFinalType(tag.finalType)) {
         r.addError("标签 " + ctx + " finalType 取值非法: \"" + tag.finalType
-                   + "\" (规则13, 见 Config_Schema §6)");
+                   + "\" (规则13, 见 Config_Schema §6; push 标签可用 Auto)");
     }
 
         // v5 (C1): converters 校验 — 仅读标签 + 仅数值型 finalType.
@@ -211,7 +236,8 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
         const std::string& ft = tag.finalType;
         const bool numeric =
             ft == "UInt16" || ft == "Int16" || ft == "UInt32" || ft == "Int32"
-            || ft == "UInt64" || ft == "Int64" || ft == "Float" || ft == "Double";
+            || ft == "UInt64" || ft == "Int64" || ft == "Float" || ft == "Double"
+            || (isPushTag && ft == "Auto");   // Auto 按 payload 原生类型推断, 数值型时换算链生效
         if (!numeric) {
             r.addError("标签 " + ctx + " converters 仅支持数值型 finalType, 当前: \""
                        + ft + "\" (规则13)");
@@ -254,6 +280,11 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     //   与 tags.json 中读取标签声明的 {ByteCount:N} 与协议 JSON 协议族单位 {RegisterCount:M} (Modbus)
 //     一致性由协议 JSON derivedLength 自身保证, 此处不再做跨字段核对 (避免把协议族知识渗入校验).
     //   仍保留 {StartByteAddress} > 0 的合理性警告 (按字节地址线性推断).
+    if (isPushTag) {
+        // push 标签不经 operation/模板/占位符链路: 来源绑定与类型已在上面校验完毕
+        return;
+    }
+
     // 引用链: tag → device → protocol → operation
     std::unordered_map<std::string, const Core::DeviceConfig*>::const_iterator dit =
         deviceMap.find(tag.deviceId);
@@ -450,6 +481,81 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     }
 }
 
+// ── 设备级模板变量 (devices[].variables) ──────────────────────
+
+/// 校验设备级变量名能否在协议中落脚。
+/// 作用域: 协议 inputs/outputs + 各操作 inputs/outputs + 握手会话变量。
+/// 未声明的键在解析期会被折入 tag.variables 但无人引用 —— 拼写错误
+/// (如 DA1 -> DA01) 在运行期只表现为"改了配置却没生效", 因此加载期直接报错。
+static void ValidateDeviceVariables(const Core::DeviceConfig& dev,
+                                    const Core::ProtocolConfig& proto,
+                                    ValidationResult& r) {
+    if (dev.variables.empty()) return;
+    const std::string ctx = dev.id.empty() ? std::string("(匿名设备)") : dev.id;
+
+    std::set<std::string> declared;
+    for (std::unordered_map<std::string, Core::VariableConfig>::const_iterator it =
+            proto.inputs.begin(); it != proto.inputs.end(); ++it)
+        declared.insert(it->first);
+    for (std::unordered_map<std::string, Core::VariableConfig>::const_iterator it =
+            proto.outputs.begin(); it != proto.outputs.end(); ++it)
+        declared.insert(it->first);
+    for (std::unordered_map<std::string, Core::OperationConfig>::const_iterator op =
+            proto.operations.begin(); op != proto.operations.end(); ++op) {
+        for (std::unordered_map<std::string, Core::VariableConfig>::const_iterator it =
+                op->second.inputs.begin(); it != op->second.inputs.end(); ++it)
+            declared.insert(it->first);
+        for (std::unordered_map<std::string, Core::VariableConfig>::const_iterator it =
+                op->second.outputs.begin(); it != op->second.outputs.end(); ++it)
+            declared.insert(it->first);
+    }
+    for (size_t i = 0; i < proto.handshake.size(); ++i) {
+        if (!proto.handshake[i].sessionVariable.empty())
+            declared.insert(proto.handshake[i].sessionVariable);
+    }
+
+    for (std::map<std::string, uint32_t>::const_iterator it = dev.variables.begin();
+            it != dev.variables.end(); ++it) {
+        const std::string& name = it->first;
+        if (Core::IsFrameReservedName(name)) {
+            r.addError("设备 " + ctx + " variables 使用了保留名 \"" + name
+                       + "\" (成帧原语名, 不可作为模板变量)");
+            continue;
+        }
+        if (declared.find(name) == declared.end()) {
+            std::string names;
+            int shown = 0;
+            for (std::set<std::string>::const_iterator d = declared.begin();
+                    d != declared.end(); ++d) {
+                if (shown == 12) { names += ", ..."; break; }
+                if (shown > 0) names += ", ";
+                names += *d;
+                ++shown;
+            }
+            r.addError("设备 " + ctx + " variables 含未声明变量 \"" + name
+                       + "\" (协议 " + proto.protocolName
+                       + " 的 inputs/outputs/握手会话变量中均无此名, 拼写错误?); 可用: "
+                       + names);
+            continue;
+        }
+        // 显式值优先于 auto 策略 (引擎语义, 可用于钉住某次取值), 但通常是误配
+        const Core::VariableConfig* vc = 0;
+        std::unordered_map<std::string, Core::VariableConfig>::const_iterator pit =
+            proto.inputs.find(name);
+        if (pit != proto.inputs.end()) vc = &pit->second;
+        else {
+            std::unordered_map<std::string, Core::VariableConfig>::const_iterator oit =
+                proto.outputs.find(name);
+            if (oit != proto.outputs.end()) vc = &oit->second;
+        }
+        if (vc != 0 && vc->isAuto()) {
+            r.addWarning("设备 " + ctx + " variables 声明了 auto 变量 \"" + name
+                         + "\" (" + (vc->isDerivedLength() ? std::string("derivedLength") : vc->strategy)
+                         + "); 显式值将覆盖自动计算, 如非有意请删除该键");
+        }
+    }
+}
+
 // ── 配置根 (含跨文件引用) ──
 
 ValidationResult ConfigValidator::validateConfigRoot(
@@ -492,6 +598,12 @@ ValidationResult ConfigValidator::validateConfigRoot(
     }
     for (size_t i = 0; i < root.devices.size(); ++i) {
         validateDevice(root.devices[i], protoMap, r);
+        // 设备级模板变量须能在协议中落脚 (拼写错误在运行期不可见)
+        std::unordered_map<std::string, const Core::ProtocolConfig*>::const_iterator dp =
+            protoMap.find(root.devices[i].protocol);
+        if (dp != protoMap.end()) {
+            ValidateDeviceVariables(root.devices[i], *dp->second, r);
+        }
     }
 
     // 标签层: 规则 12 name 唯一 + 引用链

@@ -148,8 +148,21 @@
     <ClCompile Include="..\MiniTestMain.cpp" />
     <ClCompile Include="SchemaDefaultsTests.cpp" />
     <ClCompile Include="ValidationIssueTests.cpp" />
+    <ClCompile Include="FramingSpecTests.cpp" />
+    <ClCompile Include="ProtoTemplateTests.cpp" />
+    <ClCompile Include="DerivedExprTests.cpp" />
+    <ClCompile Include="ConfigCommentTests.cpp" />
+    <ClCompile Include="TrialPreviewTests.cpp" />
+    <ClCompile Include="ResponsePreviewTests.cpp" />
     <ClCompile Include="..\..\src\Service\src\SchemaRegistry.cpp" />
     <ClCompile Include="..\..\src\Service\src\ValidationIssue.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Service\MyProt.Service.vcxproj">
+      <Project>{A1B2C3D4-5555-4000-8000-000000000005}</Project>
+      <Private>false</Private>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

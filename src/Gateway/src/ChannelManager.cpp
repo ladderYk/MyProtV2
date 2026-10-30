@@ -4,12 +4,14 @@
 #include "MyProt/Engine/MiniExpression.hpp"
 #include "MyProt/Core/Metrics.hpp"
 #include "MyProt/Core/Log.hpp"
+#include "MyProt/Core/TemplateGrammar.hpp"
 #include "MyProt/Service/DeviceLifecycle.hpp"
 
 #include <sstream>
 #include <iomanip>
 #include <cstdlib>
 #include <cstdint>
+#include <map>
 
 namespace MyProt { namespace Gateway {
 
@@ -96,8 +98,11 @@ bool ExtractSessionVar(Core::ByteView response,
 }
 
 // ── 握手请求帧渲染 ────────────────────────────────────────────────
-// 按 token 序列拼出字节: 十六进制字面量直接解析; {Var} 若命中会话变量则
-// 按其 hex 值展开; {Username}/{Password} 以原始 ASCII 字节注入。
+// 按 token 序列拼出字节: 十六进制字面量直接解析; {Var} 依次查
+//   1) {Username}/{Password} — 以原始 ASCII 字节注入;
+//   2) 握手会话变量 (前序步骤提取) — 按其 hex 值展开;
+//   3) 设备级静态变量 devices[].variables — 按占位符宽度/线序渲染
+//      (如 {UnitID:X2}, {NodeID:X4LE}); 未声明宽度则拒绝, 避免静默截断.
 // 返回 BuildError 时说明模板引用了未知变量。
 Core::Expected<Core::Bytes> RenderHandshakeRequest(
     const std::vector<std::string>& requestTemplate,
@@ -125,16 +130,49 @@ Core::Expected<Core::Bytes> RenderHandshakeRequest(
             }
 
             auto var = session.GetSessionVar(name);
-            if (!var.has_value()) {
-                return Core::Unexpected(Core::Error::Code::BuildError,
-                    "握手模板变量未找到: " + name);
+            if (var.has_value()) {
+                // 会话变量存为连续 hex, 逐字节解析
+                const std::string& hex = var.value();
+                for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+                    char buf[3] = { hex[i], hex[i + 1], 0 };
+                    frame.push_back(static_cast<uint8_t>(std::strtoul(buf, nullptr, 16)));
+                }
+                continue;
             }
-            // 会话变量存为连续 hex, 逐字节解析
-            const std::string& hex = var.value();
-            for (size_t i = 0; i + 1 < hex.size(); i += 2) {
-                char buf[3] = { hex[i], hex[i + 1], 0 };
-                frame.push_back(static_cast<uint8_t>(std::strtoul(buf, nullptr, 16)));
+
+            // 设备级静态变量 (与用户名/密码同层, 会话变量优先)
+            std::map<std::string, uint32_t>::const_iterator dv =
+                device.variables.find(name);
+            if (dv != device.variables.end()) {
+                Core::TemplateGrammar::Segment seg;
+                std::string parseErr;
+                const Core::TemplateGrammar::ParseStatus st =
+                    Core::TemplateGrammar::ParseElement(token, seg, false, false, &parseErr);
+                if (st != Core::TemplateGrammar::ParseOk
+                        || seg.kind != Core::TemplateGrammar::kVariable
+                        || seg.widthBytes <= 0) {
+                    return Core::Unexpected(Core::Error::Code::BuildError,
+                        "握手模板中的设备变量须声明宽度: e.g. {" + name + ":X4}", name);
+                }
+                const uint64_t value = dv->second;
+                const uint64_t maxVal = (seg.widthBytes >= 8)
+                    ? ~0ULL
+                    : ((1ULL << (8 * seg.widthBytes)) - 1ULL);
+                if (value > maxVal) {
+                    return Core::Unexpected(Core::Error::Code::BuildError,
+                        "握手模板变量溢出: " + name + "=" + std::to_string(value)
+                            + " 超出 " + std::to_string(seg.widthBytes) + " 字节",
+                        name);
+                }
+                for (int b = 0; b < seg.widthBytes; ++b) {
+                    const int shift = seg.littleEndian ? b : (seg.widthBytes - 1 - b);
+                    frame.push_back(static_cast<uint8_t>((value >> (shift * 8)) & 0xFF));
+                }
+                continue;
             }
+
+            return Core::Unexpected(Core::Error::Code::BuildError,
+                "握手模板变量未找到: " + name);
         } else {
             // 十六进制字面量: 空格分隔字节
             const char* p = token.c_str();
@@ -205,6 +243,8 @@ std::string ChannelManager::ComputeEndpointKey(
         return "tls:" + conn.host + ":" + std::to_string(conn.port);
     case Core::TransportType::Serial:
         return "serial:" + transport.serial.portName;
+    case Core::TransportType::Udp:
+        return "udp:" + conn.host + ":" + std::to_string(conn.port);
     default:
         return "unknown";
     }
@@ -291,6 +331,8 @@ void ChannelManager::PerformConnect(
             conn.port = protocol.transport.tcp.defaultPort;
         } else if (protocol.transport.type == Core::TransportType::Tls) {
             conn.port = protocol.transport.tls.defaultPort;
+        } else if (protocol.transport.type == Core::TransportType::Udp) {
+            conn.port = protocol.transport.udp.defaultPort;
         }
     }
 

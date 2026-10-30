@@ -79,10 +79,81 @@ Fields WebApiFields() {
 // ── 连接块 (设备层) ──
 Fields ConnectionFields() {
     return Fields{
-        Plain("host", "string", false, "", "Tcp/Tls: 主机名或 IP"),
-        Plain("port", "uint16", false, "0", "Tcp/Tls: 0 = 使用协议 defaultPort"),
+        Plain("host", "string", false, "", "Tcp/Tls/Udp: 主机名或 IP"),
+        Plain("port", "uint16", false, "0", "Tcp/Tls/Udp: 0 = 使用协议 defaultPort"),
         Plain("portName", "string", false, "", "Serial: 覆盖协议级 portName"),
         Plain("timeoutMs", "int", false, "3000", "连接建立超时(ms)")
+    };
+}
+
+// ── 南向推送接入块 (设备层): ingest.type 选择分支 ──
+Fields IngestMqttFields() {
+    return Fields{
+        Plain("host", "string", false, "", "broker 主机; 空 = 回退 device.connection.host"),
+        Plain("port", "uint16", false, "0", "broker 端口; 0 = 1883"),
+        Plain("clientId", "string", false, "", "空 = myprot-sub-<deviceId>"),
+        Plain("username", "string", false, "", "broker 用户名; 日志脱敏"),
+        Plain("password", "string", false, "", "broker 密码; 日志脱敏"),
+        Plain("keepAliveSec", "int", false, "60", "心跳周期(s); 0 = 默认 60"),
+        Plain("cleanSession", "bool", false, "true", "cleanSession 标志"),
+        Plain("qos", "int", false, "0", "订阅 QoS: 0/1 (QoS2 未实现)"),
+        Plain("reconnectMinMs", "int", false, "1000", "重连初始退避(ms)"),
+        Plain("reconnectMaxMs", "int", false, "30000", "重连退避上限(ms)"),
+        Plain("maxSilenceMs", "int", false, "0",
+              "静默看门狗(ms); >0 时超过该时长未收到数据, 相关标签置 Uncertain; 0 = 关闭"),
+        Plain("topic", "string", true, "", "订阅过滤器 (支持 + / #)"),
+        EnumF("tagFrom", false, "payload", "标签名来源", { "payload", "topic" }),
+        Plain("tagTopicIndex", "int", false, "0",
+              "tagFrom=topic 时承载标签名的主题段序号 (1-based)"),
+        Plain("tagField", "string", false, "tag", "tagFrom=payload 时标签名字段名"),
+        Plain("valueField", "string", false, "value", "payload 中值字段名"),
+        Plain("tsField", "string", false, "ts", "payload 中时间戳字段名; 空 = 用本地接收时间")
+    };
+}
+
+Fields IngestTcpFields() {
+    return Fields{
+        Plain("bindAddress", "string", false, "0.0.0.0", "监听地址"),
+        Plain("port", "uint16", true, "0", "监听端口 (>0)"),
+        ObjF("framing", true, "入站成帧配置", Fields{
+            EnumF("type", true, "LengthField", "成帧判别字段; Message 为 CAN 预留",
+                  {"LengthField", "Fixed", "Silence", "Message"}),
+            Plain("lengthFieldOffset", "int", false, "0", "LengthField: 长度域偏移(字节)"),
+            Plain("lengthFieldLength", "int", false, "0",
+                  "LengthField: 长度域宽度; Fixed 1/2/4, Varint 时必须为 0"),
+            EnumF("lengthFieldEncoding", false, "Fixed",
+                  "LengthField: 长度域编码; Varint = base-128 (ADR-0021)",
+                  {"Fixed", "Varint"}),
+            Plain("varintMaxBytes", "int", false, "4", "LengthField: Varint 最大字节数 (1~4)"),
+            Plain("lengthIncludesHeader", "bool", false, "false", "LengthField: 长度值是否含头部"),
+            EnumF("byteOrder", false, "BigEndian", "LengthField: 长度域字节序",
+                  {"BigEndian", "LittleEndian", "WordBigByteLittle", "WordLittleByteBig"}),
+            Plain("headerLength", "int", false, "0", "LengthField: 头部总长(字节)"),
+            Plain("lengthAdjustment", "int", false, "0", "LengthField: 长度修正值"),
+            Plain("maxFrameSize", "int", false, "1024", "运行时帧长度安全上限(字节)"),
+            Plain("fixedLength", "int", true, "", "Fixed: 定长帧长度(字节)"),
+            Plain("charTimeUs", "int", false, "0", "Silence: 单字符时间(us)"),
+            Plain("frameGapUs", "int", false, "0", "Silence: 帧间静默阈值(us), 须 > 0"),
+            Plain("headerFields", "array<object>", false, "[]",
+                  "LengthField: 位域字段 [{name,bitOffset,bitWidth}] (ADR-0021)"),
+            ObjF("dispatch", false, "LengthField: 按位域值分派帧类型 (ADR-0021)", Fields{
+                Plain("field", "string", false, "", "headerFields 中的字段名"),
+                Plain("rejectUnknown", "bool", false, "true", "未命中 case 时判为非法帧"),
+                Plain("cases", "array<object>", false, "[]", "分派表 [{value,type,name}]")
+            }),
+            ObjF("repeat", false, "LengthField: 重复记录区 (ADR-0021)", Fields{
+                Plain("countField", "string", false, "", "headerFields 中的计数字段名"),
+                Plain("stride", "int", false, "0", "每条记录字节数 (>0)"),
+                Plain("offset", "int", false, "0", "记录区起始字节偏移"),
+                Plain("name", "string", false, "records", "输出的 Bytes 字段名"),
+                Plain("maxCount", "int", false, "1024", "count 安全上限 (>0)")
+            })
+        }),
+        Plain("maxSilenceMs", "int", false, "0",
+              "静默看门狗(ms); >0 时超过该时长未收到数据, 相关标签置 Uncertain; 0 = 关闭"),
+        Plain("tagField", "string", false, "tag", "payload 中标签名字段名"),
+        Plain("valueField", "string", false, "value", "payload 中值字段名"),
+        Plain("tsField", "string", false, "ts", "payload 中时间戳字段名; 空 = 用本地接收时间")
     };
 }
 
@@ -108,9 +179,9 @@ const Fields& SchemaRegistry::ProtocolFields() {
     // transport / framing 均为扁平判别联合体: 判别字段 type 与分支字段同层,
     // 仅 type 对应分支的字段有效 (Config_Schema §2.1 / §2.2)
     static const Fields kTransportChildren = Fields{
-        EnumF("type", true, "Tcp", "传输判别字段; 决定生效分支", {"Tcp", "Tls", "Serial"}),
+        EnumF("type", true, "Tcp", "传输判别字段; 决定生效分支", {"Tcp", "Tls", "Serial", "Udp"}),
         Plain("defaultPort", "uint16", false, "502",
-              "Tcp: 设备未指定端口时的回退值; Tls: 默认 0 = 必须由设备显式指定"),
+              "Tcp/Udp: 设备未指定端口时的回退值; Tls: 默认 0 = 必须由设备显式指定"),
         Plain("certFile", "string", false, "", "Tls: 客户端证书路径, 空 = 不使用双向认证"),
         Plain("keyFile", "string", false, "", "Tls: 客户端私钥路径"),
         Plain("caFile", "string", false, "", "Tls: CA 证书路径"),
@@ -127,8 +198,13 @@ const Fields& SchemaRegistry::ProtocolFields() {
               "成帧判别字段; Message 为 CAN 预留, v1 报名称错误",
               {"LengthField", "Fixed", "Silence", "Message"}),
         Plain("lengthFieldOffset", "int", false, "0", "LengthField: 长度域偏移(字节), >= 0"),
-        Plain("lengthFieldLength", "int", true, "",
-              "LengthField: 长度域宽度(字节), 取值 1/2/4"),
+        Plain("lengthFieldLength", "int", false, "0",
+              "LengthField: 长度域宽度(字节), Fixed 取值 1/2/4; Varint 时必须为 0"),
+        EnumF("lengthFieldEncoding", false, "Fixed",
+              "LengthField: 长度域编码; Varint = base-128 (ADR-0021)",
+              {"Fixed", "Varint"}),
+        Plain("varintMaxBytes", "int", false, "4",
+              "LengthField: Varint 最大字节数 (1~4); 超出即判非法帧"),
         Plain("lengthIncludesHeader", "bool", false, "false", "LengthField: 长度值是否含头部"),
         EnumF("byteOrder", false, "BigEndian", "LengthField: 长度域字节序",
               {"BigEndian", "LittleEndian", "WordBigByteLittle", "WordLittleByteBig"}),
@@ -145,7 +221,22 @@ const Fields& SchemaRegistry::ProtocolFields() {
         Plain("frameGapUs", "int", false, "0",
               "Silence: 帧间静默阈值(us), Silence 分支必须 > 0 — v1.27 起不再默认 3.5×charTimeUs (Modbus RTU 约定已从引擎移除, 请按协议显式填写)"),
         Plain("idFieldLength", "int", false, "2",
-              "Message(CAN 预留): 伪字节流头部 CAN ID 占用字节数")
+              "Message(CAN 预留): 伪字节流头部 CAN ID 占用字节数"),
+        Plain("headerFields", "array<object>", false, "[]",
+              "LengthField: 位域字段 [{name,bitOffset,bitWidth}], MSB-first 计数 (ADR-0021)"),
+        ObjF("dispatch", false, "LengthField: 按位域值分派帧类型 (ADR-0021)", Fields{
+            Plain("field", "string", false, "", "headerFields 中的字段名; 空 = 不分派"),
+            Plain("rejectUnknown", "bool", false, "true", "未命中 case 时判为非法帧"),
+            Plain("cases", "array<object>", false, "[]",
+                  "分派表 [{value,type,name}]; type 缺省 = value")
+        }),
+        ObjF("repeat", false, "LengthField: 重复记录区 (ADR-0021)", Fields{
+            Plain("countField", "string", false, "", "headerFields 中的计数字段名; 空 = 不提取"),
+            Plain("stride", "int", false, "0", "每条记录字节数 (>0)"),
+            Plain("offset", "int", false, "0", "记录区起始字节偏移"),
+            Plain("name", "string", false, "records", "输出的 Bytes 字段名"),
+            Plain("maxCount", "int", false, "1024", "count 安全上限 (>0)")
+        })
     };
 
     static const Fields kOperationChildren = Fields{
@@ -248,6 +339,13 @@ const Fields& SchemaRegistry::DeviceFields() {
         Plain("password", "string", false, "", "握手阶段模板变量注入; 日志脱敏"),
         ObjF("resilience", false,
              "逐设备韧性覆盖; 未设置 = 用全局 resilience", ResilienceFields()),
+        ObjF("ingest", false,
+             "南向推送接入绑定; 未设置 = 仅轮询设备. type=mqtt 见 mqtt 子段, type=tcp 见 tcp 子段",
+             Fields{
+                 EnumF("type", true, "", "接入类型", { "mqtt", "tcp" }),
+                 ObjF("mqtt", false, "MQTT 订阅参数 (type=mqtt)", IngestMqttFields()),
+                 ObjF("tcp", false, "TCP 监听参数 (type=tcp)", IngestTcpFields())
+             }),
         Plain("variables", "map", false, "{}",
               "设备级模板变量缺省 (uint32); 标签 variables 未声明同名键时回退至此")
     };
@@ -283,6 +381,10 @@ const Fields& SchemaRegistry::TagFields() {
               "read=参与轮询 (默认, 写能力由 writeOperation/writeBytesOperation 声明); "
               "write=只写标签 (operation 即写操作, 不参与轮询)",
               {"read", "write"}),
+        EnumF("source", false, "poll",
+              "值来源 (单一来源, 无仲裁): poll=轮询引擎采集; "
+              "push=由设备 ingest 适配器产出 (不参与轮询, 不声明 operation)",
+              {"poll", "push"}),
         Plain("writeVariable", "string", false, Core::kDefaultWriteValueVariable,
               "写值注入的模板变量名 (模板以 {Name:X?} 或 {Name:raw} 消费)"),
         Plain("readBackTag", "string", false, "",
@@ -292,7 +394,7 @@ const Fields& SchemaRegistry::TagFields() {
         //   Modbus tag: variables.ByteCount = N×2 (寄存器数 × 2); 协议 JSON 通过 derivedLength 派生 RegisterCount 给 FC03 命令字用
         //   S7 tag:     variables.ByteCount = N (直接字节数)
         EnumF("finalType", false, "UInt16", "转换目标类型 (原始数据不足时 TypeConversionError)",
-              {"ByteArray", "UInt16", "Int16", "UInt32", "Int32",
+              {"Auto", "ByteArray", "UInt16", "Int16", "UInt32", "Int32",
                "UInt64", "Int64", "Float", "Double", "Bool", "String"}),
         EnumF("byteOrder", false, "(回退: 协议 dataByteOrder)",
               "数据解码字节序; 未设置走回退链",

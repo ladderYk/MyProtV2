@@ -68,6 +68,16 @@ public:
         _streamProvider = fn;
     }
 
+    /// Register a second, independent event-stream route (same SSE mechanics as
+    /// SetStreamRoute, with its own prefix / push period). Used by /api/mqtt/stream,
+    /// whose provider drains a queue instead of taking periodic snapshots.
+    void SetEventStreamRoute(const std::string& pathPrefix, int intervalMs,
+                             SnapshotProvider fn) {
+        _eventPrefix = pathPrefix;
+        _eventIntervalMs = intervalMs;
+        _eventProvider = fn;
+    }
+
     /// Start the HTTP server and block on listening (internally io_context.run(); the caller decides the thread)
     void Start();
 
@@ -110,12 +120,16 @@ private:
 
     /// SSE streaming session state bundle - held by the async callback chain for the connection's life (socket+timer live and die together)
     struct StreamSession {
-        StreamSession(asio::io_context& io, const std::string& p)
-            : timer(new asio::steady_timer(io)), path(p) {}
+        StreamSession(asio::io_context& io, const std::string& p,
+                      int interval, const SnapshotProvider& fn)
+            : timer(new asio::steady_timer(io)), path(p),
+              intervalMs(interval), provider(fn) {}
         std::shared_ptr<asio::ip::tcp::socket> socket;   // filled back at handshake
         std::shared_ptr<asio::steady_timer> timer;
         std::string path;                                // includes query (device/token)
         std::shared_ptr<std::string> payload;            // in-flight frame buffer (kept alive until written)
+        int intervalMs;                                  // push period for this session
+        SnapshotProvider provider;                       // data stream or event stream
     };
 
     /// SSE handshake: rate-limit + auth (with ?token= fallback) -> response headers + first frame -> enter the periodic-push loop
@@ -138,6 +152,9 @@ private:
     RouteTable _routes;             // 内置路由表 (method + pattern + :param)
     std::string _streamPrefix;      // SSE path prefix (when unregistered _streamProvider is empty)
     int _streamIntervalMs;
+    SnapshotProvider _eventProvider;  // 第二条事件流 (MQTT 观测会话)
+    std::string _eventPrefix;
+    int _eventIntervalMs;
     asio::io_context _io;
     asio::ip::tcp::acceptor _acceptor;
     std::atomic<bool> _running;

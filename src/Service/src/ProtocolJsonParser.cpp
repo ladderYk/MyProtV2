@@ -218,6 +218,7 @@ bool TransportTypeFromString(const std::string& s, Core::TransportType& out) {
     if (s == "Tcp")    { out = Core::TransportType::Tcp; return true; }
     if (s == "Tls")    { out = Core::TransportType::Tls; return true; }
     if (s == "Serial") { out = Core::TransportType::Serial; return true; }
+    if (s == "Udp")    { out = Core::TransportType::Udp; return true; }
     return false;
 }
 
@@ -227,6 +228,91 @@ bool FramingTypeFromString(const std::string& s, Core::FramingType& out) {
     if (s == "Silence")     { out = Core::FramingType::Silence; return true; }
     if (s == "Message")     { out = Core::FramingType::Message; return true; }
     return false;
+}
+
+bool LengthFieldEncodingFromString(const std::string& s, Core::LengthFieldEncoding& out) {
+    if (s == "Fixed")  { out = Core::LengthFieldEncoding::Fixed; return true; }
+    if (s == "Varint") { out = Core::LengthFieldEncoding::Varint; return true; }
+    return false;
+}
+
+/// headerFields: [{"name","bitOffset","bitWidth"}] (ADR-0021 §2.2).
+/// Absent = no field extraction; an empty array is allowed and means the same.
+bool ParseHeaderFieldsDoc(const json& j, std::vector<Core::HeaderFieldConfig>& out,
+                          std::string& err) {
+    if (!j.contains("headerFields")) return true;
+    const json& arr = j.at("headerFields");
+    if (!arr.is_array()) { err = "headerFields 须为对象数组"; return false; }
+    out.clear();
+    out.reserve(arr.size());
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const json& e = arr[i];
+        if (!e.is_object()) { err = "headerFields 元素须为对象"; return false; }
+        Core::HeaderFieldConfig f;
+        if (!OptStr(e, "name", f.name, err)
+                || !OptInt(e, "bitOffset", f.bitOffset, err)
+                || !OptInt(e, "bitWidth", f.bitWidth, err)) {
+            return false;
+        }
+        out.push_back(f);
+    }
+    return true;
+}
+
+/// dispatch: {"field","rejectUnknown","cases":[{"value","type","name"}]}
+/// (ADR-0021 §2.3). Absent = no dispatch; Core::Frame::type stays 0.
+bool ParseDispatchDoc(const json& j, Core::DispatchConfig& out, std::string& err) {
+    if (!j.contains("dispatch")) return true;
+    const json& d = j.at("dispatch");
+    if (!d.is_object()) { err = "dispatch 须为对象"; return false; }
+    if (!OptStr(d, "field", out.field, err)
+            || !OptBool(d, "rejectUnknown", out.rejectUnknown, err)) {
+        return false;
+    }
+    out.cases.clear();
+    if (!d.contains("cases")) return true;
+    const json& arr = d.at("cases");
+    if (!arr.is_array()) { err = "dispatch.cases 须为对象数组"; return false; }
+    out.cases.reserve(arr.size());
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const json& e = arr[i];
+        if (!e.is_object()) { err = "dispatch.cases 元素须为对象"; return false; }
+        Core::DispatchCaseConfig c;
+        if (!e.contains("value")) { err = "dispatch.cases[].value 缺失"; return false; }
+        const json& v = e.at("value");
+        if (v.is_number_unsigned()) {
+            c.value = v.get<uint64_t>();
+        } else if (v.is_number_integer()) {
+            const int64_t raw = v.get<int64_t>();
+            if (raw < 0) { err = "dispatch.cases[].value 必须 ≥ 0"; return false; }
+            c.value = static_cast<uint64_t>(raw);
+        } else {
+            err = "dispatch.cases[].value 须为整数";
+            return false;
+        }
+        int typeValue = static_cast<int>(c.value);
+        if (!OptInt(e, "type", typeValue, err)
+                || !OptStr(e, "name", c.name, err)) {
+            return false;
+        }
+        if (typeValue < 0) { err = "dispatch.cases[].type 必须 ≥ 0"; return false; }
+        c.type = static_cast<uint32_t>(typeValue);
+        out.cases.push_back(c);
+    }
+    return true;
+}
+
+/// repeat: {"countField","stride","offset","name","maxCount"} (ADR-0021 §2.4).
+/// Absent or countField empty = no repeated-record extraction.
+bool ParseRepeatDoc(const json& j, Core::RepeatConfig& out, std::string& err) {
+    if (!j.contains("repeat")) return true;
+    const json& r = j.at("repeat");
+    if (!r.is_object()) { err = "repeat 须为对象"; return false; }
+    return OptStr(r, "countField", out.countField, err)
+        && OptInt(r, "stride", out.stride, err)
+        && OptInt(r, "offset", out.offset, err)
+        && OptStr(r, "name", out.name, err)
+        && OptInt(r, "maxCount", out.maxCount, err);
 }
 
 bool ParityFromString(const std::string& s, Core::SerialTransportConfig::Parity& out) {
@@ -257,6 +343,9 @@ bool ParseTransportDoc(const json& j, Core::TransportConfig& t, std::string& err
     switch (t.type) {
         case Core::TransportType::Tcp:
             ok = OptUInt16(j, "defaultPort", t.tcp.defaultPort, err);
+            break;
+        case Core::TransportType::Udp:
+            ok = OptUInt16(j, "defaultPort", t.udp.defaultPort, err);
             break;
         case Core::TransportType::Tls:
             ok = OptUInt16(j, "defaultPort", t.tls.defaultPort, err)
@@ -303,13 +392,24 @@ bool ParseFramingDoc(const json& j, Core::FramingConfig& f, std::string& err) {
 
     bool ok = true;
     switch (f.type) {
-        case Core::FramingType::LengthField:
+        case Core::FramingType::LengthField: {
+            std::string encoding;
             ok = OptInt(j, "lengthFieldOffset", f.lengthField.lengthFieldOffset, err)
               && OptInt(j, "lengthFieldLength", f.lengthField.lengthFieldLength, err)
               && OptBool(j, "lengthIncludesHeader", f.lengthField.lengthIncludesHeader, err)
               && OptInt(j, "headerLength", f.lengthField.headerLength, err)
               && OptInt(j, "lengthAdjustment", f.lengthField.lengthAdjustment, err)
-              && OptInt(j, "maxFrameSize", f.lengthField.maxFrameSize, err);
+              && OptInt(j, "maxFrameSize", f.lengthField.maxFrameSize, err)
+              && OptStr(j, "lengthFieldEncoding", encoding, err)
+              && OptInt(j, "varintMaxBytes", f.lengthField.varintMaxBytes, err)
+              && ParseHeaderFieldsDoc(j, f.lengthField.headerFields, err)
+              && ParseDispatchDoc(j, f.lengthField.dispatch, err)
+              && ParseRepeatDoc(j, f.lengthField.repeat, err);
+            if (ok && !encoding.empty()
+                    && !LengthFieldEncodingFromString(encoding, f.lengthField.lengthEncoding)) {
+                err = "未知 lengthFieldEncoding: \"" + encoding + "\" (Fixed / Varint)";
+                ok = false;
+            }
             if (ok && j.contains("byteOrder")) {
                 std::string boStr;
                 if (!OptStr(j, "byteOrder", boStr, err) ||
@@ -319,6 +419,7 @@ bool ParseFramingDoc(const json& j, Core::FramingConfig& f, std::string& err) {
                 }
             }
             break;
+        }
         case Core::FramingType::Fixed:
             ok = OptInt(j, "fixedLength", f.fixed.fixedLength, err);
             break;
@@ -369,6 +470,75 @@ bool ParseWebApiDoc(const json& j, Core::WebApiConfig& api, std::string& err) {
         && OptInt(j, "rateLimitRps", api.rateLimitRps, err)
         && OptInt(j, "rateLimitBurst", api.rateLimitBurst, err)
         && OptStr(j, "webRoot", api.webRoot, err);
+}
+
+/// 南向推送接入块 (§2.x, device-level): ingest.type selects the adapter branch.
+bool ParseIngestDoc(const json& j, Core::IngestConfig& ing, std::string& err) {
+    if (!j.is_object()) { err = "ingest 须为对象"; return false; }
+    if (!j.contains("type") || !j.at("type").is_string()) {
+        err = "ingest.type 须为字符串 (mqtt / tcp)";
+        return false;
+    }
+    ing.type = j.at("type").get<std::string>();
+
+    if (ing.type == "mqtt") {
+        if (!j.contains("mqtt") || !j.at("mqtt").is_object()) {
+            err = "ingest.type=mqtt 须含 mqtt 对象";
+            return false;
+        }
+        const json& m = j.at("mqtt");
+        Core::MqttIngestConfig& c = ing.mqtt;
+        if (!OptStr(m, "host", c.host, err)
+                || !OptUInt16(m, "port", c.port, err)
+                || !OptStr(m, "clientId", c.clientId, err)
+                || !OptInt(m, "keepAliveSec", c.keepAliveSec, err)
+                || !OptBool(m, "cleanSession", c.cleanSession, err)
+                || !OptInt(m, "qos", c.qos, err)
+                || !OptInt(m, "reconnectMinMs", c.reconnectMinMs, err)
+                || !OptInt(m, "reconnectMaxMs", c.reconnectMaxMs, err)
+                || !OptInt(m, "maxSilenceMs", c.maxSilenceMs, err)
+                || !OptStr(m, "topic", c.topic, err)
+                || !OptStr(m, "tagFrom", c.tagFrom, err)
+                || !OptInt(m, "tagTopicIndex", c.tagTopicIndex, err)
+                || !OptStr(m, "tagField", c.tagField, err)
+                || !OptStr(m, "valueField", c.valueField, err)
+                || !OptStr(m, "tsField", c.tsField, err)) {
+            return false;
+        }
+        if (m.contains("username")) {
+            if (!m.at("username").is_string()) { err = "ingest.mqtt.username 须为字符串"; return false; }
+            c.username = m.at("username").get<std::string>();
+        }
+        if (m.contains("password")) {
+            if (!m.at("password").is_string()) { err = "ingest.mqtt.password 须为字符串"; return false; }
+            c.password = m.at("password").get<std::string>();
+        }
+        return true;
+    }
+
+    if (ing.type == "tcp") {
+        if (!j.contains("tcp") || !j.at("tcp").is_object()) {
+            err = "ingest.type=tcp 须含 tcp 对象";
+            return false;
+        }
+        const json& t = j.at("tcp");
+        Core::TcpIngestConfig& c = ing.tcp;
+        if (!OptStr(t, "bindAddress", c.bindAddress, err)
+                || !OptUInt16(t, "port", c.port, err)
+                || !OptInt(t, "maxSilenceMs", c.maxSilenceMs, err)
+                || !OptStr(t, "tagField", c.tagField, err)
+                || !OptStr(t, "valueField", c.valueField, err)
+                || !OptStr(t, "tsField", c.tsField, err)) {
+            return false;
+        }
+        if (t.contains("framing")) {
+            if (!ParseFramingDoc(t.at("framing"), c.framing, err)) return false;
+        }
+        return true;
+    }
+
+    err = "ingest.type 取值非法: \"" + ing.type + "\" (仅 mqtt / tcp)";
+    return false;
 }
 
 bool ParseTemplateArray(const json& j, std::vector<std::string>& out, std::string& err) {
@@ -579,11 +749,18 @@ bool ValidateDerivedLengthExprDomain(
                           "请改用整数, 或确认是否为误写)";
                     return false;
                 }
-                if (allowed.find(id) == allowed.end()) {
+                // 内建函数名 (hi8/lo8/hi16/lo16) 不是变量, 不参与声明域校验;
+                // 仅当后面紧跟 '(' 时才按函数处理, 避免误放行同名变量
+                size_t k = j;
+                while (k < n && (expr[k] == ' ' || expr[k] == '\t')) ++k;
+                const bool isBuiltinCall = (k < n && expr[k] == '('
+                    && MyProt::Engine::MiniExpression::IsBuiltinFunction(id));
+                if (!isBuiltinCall && allowed.find(id) == allowed.end()) {
                     err = prefix + ".outputs." + kv.first
                         + ".expr 引用了未声明的输入变量 \"" + id
                         + "\" (仅允许引用同一作用域 inputs 已声明名或模板 {Name:raw} 载荷名, "
-                          "{name:len} 取字节长度, {Frame:fixed}/{name:offset} 为模板结构原语)";
+                          "{name:len} 取字节长度, {Frame:fixed}/{name:offset} 为模板结构原语, "
+                          "hi8/lo8/hi16/lo16 为内建函数)";
                     return false;
                 }
                 i = j;
@@ -1165,6 +1342,14 @@ bool ParseRootDocImpl(const json& doc, int defaultVer,
                 if (!ParseResilienceDoc(rj, res, err)) return false;
                 dev.resilience = res;
             }
+            if (dj.contains("ingest")) {
+                Core::IngestConfig ing;
+                if (!ParseIngestDoc(dj.at("ingest"), ing, err)) {
+                    err = "设备 " + dev.id + " " + err;
+                    return false;
+                }
+                dev.ingest = ing;
+            }
             // 设备级模板变量缺省 (§4): 可选 map<string,uint32>
             if (dj.contains("variables")) {
                 const json& vj = dj.at("variables");
@@ -1204,6 +1389,7 @@ bool ParseRootDocImpl(const json& doc, int defaultVer,
                                         // reportMode / deadband 顶层字段不存在 — 消费侧无落点 (见 ROADMAP 上报过滤)
                                         // 写标签: direction/writeVariable/readBackTag (缺省走 TagDefinition 构造默认)
                     || !OptStr(tj, "direction", tag.direction, err)
+                    || !OptStr(tj, "source", tag.source, err)
                     || !OptStr(tj, "writeVariable", tag.writeVariable, err)
                     || !OptStr(tj, "readBackTag", tag.readBackTag, err)
                                         // 标签级写能力: writeOperation + writeVariables (缺省 = 只读)
@@ -1212,6 +1398,11 @@ bool ParseRootDocImpl(const json& doc, int defaultVer,
                                         // 位偏移为标签一等字段 (缺省 -1 = 未声明)
                     || !OptInt(tj, "bitOffset", tag.bitOffset, err)) {
                 return false;
+            }
+            // push 标签不经过模板解析: 未显式声明时按 payload 原生类型推断, 且不参与轮询
+            if (tag.source == "push") {
+                if (!tj.contains("finalType")) tag.finalType = "Auto";
+                if (!tj.contains("scanRateMs")) tag.scanRateMs = 0;
             }
                         // tag.address 不存在 — 无任何消费方 (引擎不解析、Schema/API 未登记)
             // 注: 请求-应答超时不在此解析, 统一由 device.requestTimeoutMs 决定 (2026-08-24 收敛)

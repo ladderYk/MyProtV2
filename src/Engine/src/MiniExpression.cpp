@@ -41,6 +41,17 @@ static std::unique_ptr<Node> MakeResp(std::unique_ptr<Node> index) {
     n->lhs = std::move(index);
     return n;
 }
+static std::unique_ptr<Node> MakeFunc(const std::string& name, std::unique_ptr<Node> arg) {
+    auto n = std::unique_ptr<Node>(new Node());
+    n->type = Node::Func;
+    n->text = name;
+    n->lhs = std::move(arg);
+    return n;
+}
+
+bool IsBuiltinFunction(const std::string& name) {
+    return name == "hi8" || name == "lo8" || name == "hi16" || name == "lo16";
+}
 
 Parser::Parser(const std::string& expr) : expr_(expr) {}
 Parser::~Parser() = default;
@@ -247,6 +258,14 @@ std::unique_ptr<Node> Parser::ParsePrimary() {
         }
         std::string ident = expr_.substr(start, pos_ - start);
         SkipWs();
+        if (pos_ < expr_.size() && expr_[pos_] == '(') {
+            // 内建函数调用 (hi8/lo8/hi16/lo16) — 解析期即拒绝未知函数名, 避免运行期才发现拼写错误
+            if (!IsBuiltinFunction(ident)) {
+                throw Error("MiniExpression: 未知函数: " + ident
+                            + " (支持 hi8/lo8/hi16/lo16)");
+            }
+            return ParseCall(ident);
+        }
         if (ident == "resp" && pos_ < expr_.size() && expr_[pos_] == '[') {
             ++pos_;                         // consume '['
             auto idx = ParseShift();         // index expression (full arithmetic incl. shifts)
@@ -288,6 +307,18 @@ std::unique_ptr<Node> Parser::ParseNumber() {
     }
     return MakeNum(val);
 }
+/// 内建函数调用 — 当前只接受单个参数 (hi8/lo8/hi16/lo16)。
+std::unique_ptr<Node> Parser::ParseCall(const std::string& name) {
+    if (!Consume('(')) throw Error("MiniExpression: " + name + " 缺少 '('");
+    auto arg = ParseOr();
+    SkipWs();
+    if (pos_ < expr_.size() && expr_[pos_] == ',') {
+        throw Error("MiniExpression: " + name + " 只接受 1 个参数");
+    }
+    if (!Consume(')')) throw Error("MiniExpression: " + name + " 缺少右括号");
+    return MakeFunc(name, std::move(arg));
+}
+
 std::unique_ptr<Node> Parser::ParseIdent() {
     SkipWs();
     size_t start = pos_;
@@ -349,6 +380,14 @@ uint64_t Parser::EvalNode(const Node& n, const VarLookup& lookup) const {
             uint64_t v = lookup(name, found);
             if (!found) throw Error("MiniExpression: 响应字节越界或未提供: " + name);
             return v;
+        }
+        case Node::Func: {
+            const uint64_t v = EvalNode(*n.lhs, lookup);
+            if (n.text == "hi8")  return (v >> 8) & 0xFF;
+            if (n.text == "lo8")  return v & 0xFF;
+            if (n.text == "hi16") return (v >> 16) & 0xFFFF;
+            if (n.text == "lo16") return v & 0xFFFF;
+            throw Error("MiniExpression: 未知函数: " + n.text);
         }
         case Node::Unary: {
             uint64_t v = EvalNode(*n.rhs, lookup);

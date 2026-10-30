@@ -27,6 +27,9 @@
     <ClInclude Include="include\MyProt\Service\ConfigValidator.hpp">
       <Filter>Header Files\include_MyProt_Service</Filter>
     </ClInclude>
+    <ClInclude Include="include\MyProt\Service\ProtoTemplate.hpp">
+      <Filter>Header Files\include_MyProt_Service</Filter>
+    </ClInclude>
     <ClInclude Include="include\MyProt\Service\SessionContext.hpp">
       <Filter>Header Files\include_MyProt_Service</Filter>
     </ClInclude>
@@ -34,6 +37,12 @@
       <Filter>Header Files\include_MyProt_Service</Filter>
     </ClInclude>
     <ClInclude Include="include\MyProt\Service\ValidationIssue.hpp">
+      <Filter>Header Files\include_MyProt_Service</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Service\TrialPreview.hpp">
+      <Filter>Header Files\include_MyProt_Service</Filter>
+    </ClInclude>
+    <ClInclude Include="include\MyProt\Service\ResponsePreview.hpp">
       <Filter>Header Files\include_MyProt_Service</Filter>
     </ClInclude>
     <ClInclude Include="src\ConfigInternals.hpp">
@@ -47,10 +56,19 @@
     <ClCompile Include="src\TrialRenderer.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
+    <ClCompile Include="src\TrialPreview.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ResponsePreview.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
     <ClCompile Include="src\ConfigDeepValidator.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="src\ProtocolJsonParser.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ProtoTemplate.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>
     <ClCompile Include="src\SchemaChecker.cpp">

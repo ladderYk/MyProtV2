@@ -1,10 +1,13 @@
 // src/App/main.cpp — MyProt V2 网关生产入口
 // 用法: MyProt.App.exe [--config <dir>] [--port N] [--bind <ipv4>]
+//       MyProt.App.exe --proto-init <lengthfield|fixed|serial> [--out <file>] [--force]
+//       MyProt.App.exe --validate <file.json|dir> [--json]
 //       (无参数默认 configs:8080, 仅环回监听)
 // E2E 测试序列已迁至 MyProt.E2E 独立工程 (2026-08-25)。
 #include <cstdlib>
 #include <iostream>
 #include <iomanip>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -23,15 +26,22 @@
 #include "MyProt/Core/Value.hpp"
 #include "MyProt/Core/Log.hpp"
 #include "MyProt/Transport/TcpChannel.hpp"
+#include "MyProt/Transport/UdpChannel.hpp"
 #include "MyProt/Gateway/ProtocolGateway.hpp"
 #include "MyProt/Polling/PollingEngine.hpp"
 #include "MyProt/Polling/LatestValueStore.hpp"
 #include "MyProt/Service/ConfigStore.hpp"
 #include "MyProt/Service/ConfigDirectoryLoader.hpp"
+#include "MyProt/Service/ProtoTemplate.hpp"
 #include "MyProt/WebApi/WebApiServer.hpp"
 #include "MyProt/Simulation/SimulationServer.hpp"
+#include "MyProt/Northbound/MqttPublisher.hpp"
+#include "MyProt/Northbound/MqttProbeHub.hpp"
+#include "MyProt/Southbound/SouthboundManager.hpp"
 #include "RuntimeGlue.hpp"
 #include "HttpRouter.hpp"
+#include "MqttProbeApi.hpp"
+#include "ValidateCli.hpp"
 
 using namespace MyProt::App;
 // ══════════════════════════════════════════════════════════════════════
@@ -209,8 +219,12 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
             return std::make_shared<MyProt::Transport::TcpChannel>(
                 ioCtx, channelId);
         }
+        if (proto && proto->transport.type == MyProt::Core::TransportType::Udp) {
+            return std::make_shared<MyProt::Transport::UdpChannel>(
+                ioCtx, channelId);
+        }
         LOG_WARN("ChannelFactory",
-                 "设备 %s 的协议传输类型暂未支持通道创建 (仅 Tcp)",
+                 "设备 %s 的协议传输类型暂未支持通道创建 (仅 Tcp/Udp)",
                  channelId.c_str());
         return std::shared_ptr<MyProt::Transport::IChannel>();
     };
@@ -222,6 +236,15 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
 
     // 最新值快照 — 轮询回调写入, /api/data/latest 读取 (线程安全)
     MyProt::Polling::LatestValueStore latest;
+
+    // 北向 MQTT 发布器 — 独占线程, 由 ApplyRuntimeSync 按 server.json 启停
+    MyProt::Northbound::MqttPublisher mqttPublisher(latest);
+
+    // 南向入站 (MQTT 订阅 / TCP 监听) — 独占线程, 由 ApplyRuntimeSync 按 device.ingest 启停
+    MyProt::Southbound::SouthboundManager southbound(latest);
+
+    // 管理面 MQTT 观测会话 — 浏览器无法直连 1883, 由后端代连 broker 并回推 (独占 io 线程)
+    MyProt::Northbound::MqttProbeHub mqttProbe;
 
     // 轮询结果分发: 写实时快照 + 日志输出
     // CircuitOpen 期间把 Bad 标转译为 Uncertain + 保留上次值 (避免 UI 出现 Bad 抖动)
@@ -285,7 +308,8 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
     AppContext ctx = {
         &io, &gateway, &engine, startEngine,
         &snapshotHolder,
-        &latest, &sims, &simOwners, &store
+        &latest, &sims, &simOwners, &store,
+        &mqttPublisher, &southbound
     };
 
     // ── 5. 首次运行时装配 (仿真器 + 引擎; 与 reload 热重载同一入口) ──
@@ -353,6 +377,22 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
         [](const AppContext& c, const HttpRequest& r) {
             return HandleValidateApi(*c.store, r);
         });
+    // 响应解析预览: 响应字节 + 操作 + 标签式参数 → 解析值 (不落盘/不重载, 与网关同一解析器)
+    //   注册须在 "/api/preview" 之前: 路由为前缀匹配, 后者会吞掉子路径
+    extRoutes.Add("/api/preview/response",
+        [](const AppContext& c, const HttpRequest& r) {
+            return HandleResponsePreviewApi(*c.store, r);
+        });
+    // 试渲染预览: 协议 JSON + 操作 + 变量 → 请求字节 (不落盘/不重载, 与网关同一渲染管线)
+    extRoutes.Add("/api/preview",
+        [](const AppContext& c, const HttpRequest& r) {
+            return HandlePreviewApi(*c.store, r);
+        });
+    // MQTT 观测会话 (测试面板): 后端代连 broker, 经 /api/mqtt/stream 回推事件
+    extRoutes.Add("/api/mqtt/probe",
+        [&mqttProbe](const AppContext&, const HttpRequest& r) {
+            return HandleMqttProbeApi(mqttProbe, r);
+        });
     server.SetExtHandler([&ctx, &extRoutes](
                 const std::string& m, const std::string& p,
                 const std::string& b) {
@@ -367,6 +407,11 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
     server.SetStreamRoute("/api/data/stream", 3000,
         [&latest](const std::string& p) {
             return BuildLatestJson(latest, QueryParam(p, "device"));
+        });
+    // 第二条事件流: GET /api/mqtt/stream?sid=X — 200ms 批量拉取观测会话事件
+    server.SetEventStreamRoute("/api/mqtt/stream", 200,
+        [&mqttProbe](const std::string& p) {
+            return BuildMqttProbeStream(mqttProbe, p);
         });
     std::string serverError;
     std::atomic<bool> serverDone(false);
@@ -397,6 +442,7 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
     }
 
     LOG_INFO("App", "正在停止...");
+    mqttPublisher.Stop();   // 先停北向发布 — 不再向后端 broker 推送
     engine.Stop();          // 停轮询 — 不再产生新的 io 工作
     server.Stop();          // 停管理面 — 拒绝新请求
     // 排空 io: 在途写路径的 io.post 必须被执行, 否则 WebApi 线程会空等写超时
@@ -411,6 +457,7 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
         }
     }
     serverThread.join();
+    mqttProbe.StopAll();   // 关闭观测会话的外连, 释放 broker 连接
     gateway.Shutdown();
     for (std::size_t i = 0; i < simOwners.size(); ++i) {
         simOwners[i]->Stop();
@@ -428,11 +475,76 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
     return exitCode;
 }
 
+// ── P0: 协议脚手架 (--proto-init) ──────────────────────────────
+// 只把内置模板写成文件, 不加载配置也不启动网关。模板正文在
+// MyProt::Service::ProtoTemplate (Service.Tests 逐份走真实校验器, 模板失效先在测试里暴露)。
+// 提示信息统一写 stdout: PowerShell 5.1 用 OEM 代码页回读原生 stderr,
+//   UTF-8 中文会变乱码 (成功/失败都是给人看的, 可读性优先).
+int RunProtoInit(const std::string& kind, const std::string& outPath, bool force) {
+    MyProt::Core::Platform::EnableUtf8Console();
+
+    const MyProt::Service::ProtoTemplate* tpl =
+        MyProt::Service::FindProtoTemplate(kind);
+    if (tpl == 0) {
+        const std::vector<MyProt::Service::ProtoTemplate>& all =
+            MyProt::Service::ListProtoTemplates();
+        std::cout << "--proto-init 未知模板: \"" << kind << "\"\n可选模板:\n";
+        for (size_t i = 0; i < all.size(); ++i) {
+            std::cout << "  " << all[i].kind << "\t" << all[i].summary << "\n";
+        }
+        return 2;
+    }
+
+    const std::string path = outPath.empty()
+        ? MyProt::Core::Platform::JoinPath("configs/protocols", tpl->protocolName + ".json")
+        : outPath;
+    const std::string abs = MyProt::Core::Platform::NormalizePath(path);
+    if (!force && MyProt::Core::Platform::FileExists(abs)) {
+        std::cout << "目标已存在: " << abs << "\n(如需覆盖请加 --force)\n";
+        return 2;
+    }
+    const std::size_t slash = abs.find_last_of("/\\");
+    if (slash != std::string::npos && slash > 0) {
+        MyProt::Core::Platform::EnsureDirectory(abs.substr(0, slash));
+    }
+    std::ofstream out(abs.c_str(), std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        std::cout << "无法写入: " << abs << "\n";
+        return 2;
+    }
+    out << tpl->json << "\n";
+    out.close();
+    if (!out.good()) {
+        std::cout << "写入失败: " << abs << "\n";
+        return 2;
+    }
+
+    std::cout << "已生成协议模板: " << abs << "\n"
+              << "下一步:\n"
+              << "  1. 按设备手册替换 requestTemplate 与 responseParser 的字节/判定\n"
+              << "  2. 在 configs/tags.json 的 devices[] 增加:"
+              << " {\"id\":\"<设备>\",\"protocol\":\"" << tpl->protocolName
+              << "\",\"connection\":{\"host\":\"<ip>\",\"port\":<端口>}}\n"
+              << "  3. 同型号设备仅站号/节点号不同时, 写在 devices[].variables"
+              << " (如 \"UnitID\": 3), 不要复制协议文件\n"
+              << "  4. 在 tags[] 增加标签, operation=\"" << tpl->exampleOperation
+              << "\", variables 写 StartByteAddress / ByteCount\n"
+              << "文档: docs/protocols/README.md (5 分钟最小协议)\n";
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     // 无参数 = 默认启动网关 (configs 目录, API 8080); 不再默认执行 E2E 测试
     std::string dir = "configs";
     std::string bindAddr;
     unsigned long portArg = 8080;
+    std::string protoInitKind;
+    std::string protoInitOut;
+    std::string validateTarget;
+    bool protoInit = false;
+    bool validate = false;
+    bool validateJson = false;
+    bool force = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--config" && i + 1 < argc) {
@@ -441,10 +553,26 @@ int main(int argc, char* argv[]) {
             portArg = std::strtoul(argv[++i], 0, 10);
         } else if (a == "--bind" && i + 1 < argc) {
             bindAddr = argv[++i];
+        } else if (a == "--proto-init") {
+            protoInit = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') protoInitKind = argv[++i];
+        } else if (a == "--validate") {
+            validate = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') validateTarget = argv[++i];
+        } else if (a == "--json") {
+            validateJson = true;
+        } else if (a == "--out" && i + 1 < argc) {
+            protoInitOut = argv[++i];
+        } else if (a == "--force") {
+            force = true;
         } else if (!a.empty() && a[0] >= '0' && a[0] <= '9') {
             portArg = std::strtoul(a.c_str(), 0, 10);   // 兼容旧式位置端口参数
         }
     }
+    // 脚手架 / 校验都是独立子命令: 只读写文件, 不启动网关
+    if (protoInit) return RunProtoInit(protoInitKind, protoInitOut, force);
+    if (validate) return RunValidate(validateTarget, validateJson);
+
     const uint16_t port = (portArg > 0 && portArg < 65536)
                               ? static_cast<uint16_t>(portArg) : 8080;
     return RunProduction(ResolveConfigDir(dir), port, bindAddr);

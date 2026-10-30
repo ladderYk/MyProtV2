@@ -5,7 +5,8 @@
 //
 // 响应 (校验未通过也返回 200 — 请求本身成功, 语义见 body.ok):
 //   {"ok":bool,"scope":"..","name":"..","errorCount":N,"warningCount":M,
-//    "issues":[{"severity","ruleId","subject","field","message"}, ...]}
+//    "issues":[{"severity","ruleId","subject","field","pointer","message"}, ...]}
+//   pointer 为 RFC 6901 JSON Pointer (可为空 = 该消息不带定位信息)。
 // 参数缺失/非法 → 400; 方法非 GET/POST → 405; GET 目标配置不存在 → 404
 //
 // 与 PUT /api/config/... 的差别: 本端点**绝不写盘 / 不备份 / 不触发热重载** — 纯只读。
@@ -57,6 +58,7 @@ std::string IssueJson(const Service::ValidationIssue& i) {
     s += ",\"ruleId\":";   s += JsonString(i.ruleId);
     s += ",\"subject\":";  s += JsonString(i.subject);
     s += ",\"field\":";    s += JsonString(i.field);
+    s += ",\"pointer\":";  s += JsonString(i.pointer);
     s += ",\"message\":";  s += JsonString(i.message);
     s += "}";
     return s;

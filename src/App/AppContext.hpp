@@ -23,7 +23,10 @@
 #include "MyProt/Service/ConfigStore.hpp"
 #include "MyProt/Simulation/SimulationServer.hpp"
 
-namespace MyProt { namespace App {
+namespace MyProt {
+namespace Northbound { class MqttPublisher; }   // 北向发布 (可空, E2E 精简装配)
+namespace Southbound { class SouthboundManager; }  // 南向入站 (可空, E2E 精简装配)
+namespace App {
 
 /// Device ID -> simulation-server handle (lookup table for the sim extension routes)
 typedef std::map<std::string, Simulation::SimulationServer*> SimServerMap;
@@ -42,7 +45,7 @@ struct HttpRequest {
 };
 
 /// Runtime-state aggregate - shared by production RunProduction and the E2E test isomorphic assembly.
-/// Aggregate initialization order: io, gateway, engine, startEngine, snapshot, latest, sims, simOwners, store
+/// Aggregate initialization order: io, gateway, engine, startEngine, snapshot, latest, sims, simOwners, store, mqtt, southbound
 struct AppContext {
     asio::io_context* io;              // write-path post / engine re-assembly dispatch
     Gateway::ProtocolGateway* gateway;
@@ -53,6 +56,8 @@ struct AppContext {
     SimServerMap* sims;
     std::vector<std::unique_ptr<Simulation::SimulationServer> >* simOwners;
     Service::ConfigStore* store;                    // management-plane read/write service
+    Northbound::MqttPublisher* mqtt;                // northbound MQTT publisher (nullptr = disabled)
+    Southbound::SouthboundManager* southbound;      // southbound ingest adapters (nullptr = disabled)
 };
 
 }} // namespace MyProt::App

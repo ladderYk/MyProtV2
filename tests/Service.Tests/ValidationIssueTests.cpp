@@ -286,3 +286,43 @@ TEST(ValidationIssueTest, WebApiScopeDeliberatelyUnclassified) {
     const ValidationIssue j = One("[webApi] certFile 与 keyFile 须同时为空或同时非空 (仅配其一)", "tags");
     EXPECT_EQ(j.ruleId, "unclassified");
 }
+
+// ── JSON Pointer: 与 field 同源, 逐 token 展开 (RFC 6901) ──
+TEST(ValidationIssueTest, PointerMirrorsFieldForDotFreeSubject) {
+    const ValidationIssue i = One(
+        "操作 WriteRegisters 派生长度 \"ByteCount\" expr 求值失败 "
+        "(语法错误或引用了未知变量/原语)");
+    EXPECT_EQ(i.field, "operations.WriteRegisters.outputs");
+    EXPECT_EQ(i.pointer, "/operations/WriteRegisters/outputs");
+}
+
+// ── JSON Pointer: 主体中的 '.' 不拆级 (标签名 PLC-001.Temp 是单个 token) ──
+TEST(ValidationIssueTest, PointerKeepsDottedSubjectAsSingleToken) {
+    const ValidationIssue i = One("标签 PLC-001.Temp direction 取值非法: \"up\"", "tags");
+    EXPECT_EQ(i.field, "tags.PLC-001.Temp.direction");
+    EXPECT_EQ(i.pointer, "/tags/PLC-001.Temp/direction");
+}
+
+// ── JSON Pointer: '~' 与 '/' 按 RFC 6901 转义 ──
+TEST(ValidationIssueTest, PointerEscapesTildeAndSlash) {
+    const ValidationIssue i = One("标签 A/B~C finalType 取值非法: \"X\"", "tags");
+    EXPECT_EQ(i.pointer, "/tags/A~1B~0C/finalType");
+}
+
+// ── 成帧类消息在 tags 域也保留定位 (跨文件校验的返回路径) ──
+TEST(ValidationIssueTest, FrameRulesClassifyInAnyScope) {
+    const ValidationIssue i = One(
+        "操作 WriteMultipleRegisters 试渲染失败: 模板变量未提供 (ADR-0012 §2)", "tags");
+    EXPECT_EQ(i.ruleId, "frame.derived_expr");
+    EXPECT_EQ(i.pointer, "/operations/WriteMultipleRegisters/outputs");
+}
+
+// ── 无定位信息时 pointer 为空 (不给出错误的跳转) ──
+TEST(ValidationIssueTest, PointerEmptyForFileLevelIssue) {
+    const ValidationIssue i = One("protocolName 为空 (规则1)");
+    EXPECT_EQ(i.field, "protocolName");
+    EXPECT_EQ(i.pointer, "/protocolName");
+
+    const ValidationIssue j = One("[WARN] [webApi] rateLimitRps 必须 ≥ 1");
+    EXPECT_TRUE(j.pointer.empty());
+}

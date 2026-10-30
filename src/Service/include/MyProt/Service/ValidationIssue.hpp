@@ -25,6 +25,10 @@ struct ValidationIssue {
     std::string scope;      // validation domain: "protocol" | "tags" (passed in by the caller)
     std::string subject;    // the located subject: operation name / device ID / tag name (may be empty)
     std::string field;      // suggested locate path, e.g. "operations.WriteRegisters.requestTemplate" (may be empty)
+    std::string pointer;    // RFC 6901 JSON Pointer for the same location, e.g. "/operations/WriteRegisters/requestTemplate"
+                            //   (may be empty when the message carries no locate information);
+                            //   built token-wise, so subjects containing '.' (tag names like "PLC-001.Temp")
+                            //   stay a single pointer token instead of being split into extra levels
     std::string message;    // the validator's original message (with the "[WARN] " prefix stripped)
 };
 

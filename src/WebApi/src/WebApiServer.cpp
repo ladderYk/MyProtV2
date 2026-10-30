@@ -191,7 +191,7 @@ WebApiServer::WebApiServer(const Core::WebApiConfig& config, Service::ConfigStor
     , _token(ReadEnvValue(kTokenEnvVar)), _auth(_token)
     , _limiter(config.rateLimitRps, config.rateLimitBurst)
     , _io(), _acceptor(_io), _running(false)
-    , _streamIntervalMs(3000) {
+    , _streamIntervalMs(3000), _eventIntervalMs(3000) {
     // Fail-Fast: 生产模式要求显式配置 token (ADR-0008 §3)
     if (_config.requireAuth && _token.empty()) {
         throw std::runtime_error("WebApi: MYPROT_API_TOKEN 未设置但 webApi.requireAuth=true");
@@ -239,6 +239,16 @@ void WebApiServer::DoAccept() {
             }
             if (_running.load()) DoAccept();              // 继续接受下一连接
         });
+}
+
+/// SSE 路由前缀匹配: 完整前缀之后只能是字符串结尾或 '?'
+static bool IsStreamPath(const std::string& path,
+                         const WebApiServer::SnapshotProvider& provider,
+                         const std::string& prefix) {
+    if (!provider || prefix.empty()) return false;
+    if (path.size() < prefix.size()) return false;
+    if (path.compare(0, prefix.size(), prefix) != 0) return false;
+    return path.size() == prefix.size() || path[prefix.size()] == '?';
 }
 
 void WebApiServer::HandleConnection(
@@ -303,13 +313,18 @@ void WebApiServer::HandleConnection(
             }
 
             // ── SSE 流式路由 (独立于 Connection: close 模型; 仅 GET, 无 body) ──
-            if (_streamProvider && method == "GET" &&
-                    path.size() >= _streamPrefix.size() &&
-                    path.compare(0, _streamPrefix.size(), _streamPrefix) == 0 &&
-                    (path.size() == _streamPrefix.size()
-                        || path[_streamPrefix.size()] == '?')) {
+            // 事件流前缀优先匹配 (更具体), 再落到数据流快照路由
+            const bool streamMatched =
+                IsStreamPath(path, _streamProvider, _streamPrefix);
+            const bool eventMatched =
+                IsStreamPath(path, _eventProvider, _eventPrefix);
+            if (method == "GET" && (streamMatched || eventMatched)) {
+                const int intervalMs =
+                    eventMatched ? _eventIntervalMs : _streamIntervalMs;
+                const SnapshotProvider& provider =
+                    eventMatched ? _eventProvider : _streamProvider;
                 auto session = std::shared_ptr<StreamSession>(
-                    new StreamSession(_io, path));
+                    new StreamSession(_io, path, intervalMs, provider));
                 session->socket = socket;
                 HandleStream(session, authToken);
                 return;
@@ -417,7 +432,7 @@ void WebApiServer::HandleStream(const std::shared_ptr<StreamSession>& session,
     // 响应头 + 首帧一次写出; 收到合法 200 后浏览器 EventSource 才触发 onopen
     std::string first;
     try {
-        first = _streamProvider(session->path);
+        first = session->provider(session->path);
     } catch (const std::exception&) {
         RespondAndClose(session->socket, 500, "application/json",
                         "{\"error\":\"internal error\"}");
@@ -440,7 +455,7 @@ void WebApiServer::HandleStream(const std::shared_ptr<StreamSession>& session,
 
 void WebApiServer::StreamWait(const std::shared_ptr<StreamSession>& session) {
     if (!_running.load()) { StreamClose(session); return; }
-    session->timer->expires_after(std::chrono::milliseconds(_streamIntervalMs));
+    session->timer->expires_after(std::chrono::milliseconds(session->intervalMs));
     session->timer->async_wait([this, session](const asio::error_code& ec) {
         // 取消 (Stop → timer.cancel / io 停止分发) 即断开清理
         if (ec) { StreamClose(session); return; }
@@ -451,7 +466,7 @@ void WebApiServer::StreamWait(const std::shared_ptr<StreamSession>& session) {
 void WebApiServer::StreamPush(const std::shared_ptr<StreamSession>& session) {
     std::string snapshot;
     try {
-        snapshot = _streamProvider(session->path);
+        snapshot = session->provider(session->path);
     } catch (const std::exception&) {
         StreamClose(session);                 // provider 异常 → 断开, 客户端自动重连
         return;

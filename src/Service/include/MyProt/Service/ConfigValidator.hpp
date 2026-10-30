@@ -129,6 +129,10 @@ private:
                             const Core::ProtocolConfig*>& protoMap,
                         ValidationResult& r) const;
 
+    // ── Southbound ingest (§2.x, device-level push binding) ──
+    void validateIngest(const Core::IngestConfig& ing,
+                        const std::string& ctx, ValidationResult& r) const;
+
     // ── Tag layer (§7 rules 12-15) ──
     void validateTag(const Core::TagDefinition& tag,
                      const std::unordered_map<std::string,

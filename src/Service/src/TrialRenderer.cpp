@@ -160,9 +160,7 @@ std::vector<std::string> ConfigValidator::CheckFrameConsistency(
             default: continue;   // 校验器规则 3 已拦截非法宽度
         }
         const long long total = static_cast<long long>(frame.size());
-        const long long expected = lf.lengthIncludesHeader
-            ? total - lf.lengthAdjustment
-            : total - lf.headerLength - lf.lengthAdjustment;
+        const long long expected = Core::ExpectedLengthFieldValue(lf, total);
         if (static_cast<long long>(lenVal) != expected) {
             std::ostringstream oss;
             oss << "操作 " << opName << " 帧长一致性失败: 长度槽位值 " << lenVal
