@@ -4,6 +4,7 @@
 //       页面隐藏 (document.hidden) 时暂停, 回到前台立即补一次。
 import { reactive, computed } from 'vue'
 import { listConfigs, getConfig, latestValues, simStatus } from '../api'
+import { parseConfigJson } from '../jsonText'
 
 const POLL_MS = 5000
 
@@ -37,7 +38,7 @@ async function loadConfig() {
     const tagNames = await listConfigs('tags')
     state.tagConfigName = (tagNames && tagNames[0]) || ''
     if (tagNames && tagNames.length) {
-      const doc = JSON.parse(await getConfig('tags', tagNames[0]))
+      const doc = parseConfigJson(await getConfig('tags', tagNames[0]))
       state.devices = (doc.devices || []).map(d => ({
         id: d.id,
         protocol: d.protocol || '',

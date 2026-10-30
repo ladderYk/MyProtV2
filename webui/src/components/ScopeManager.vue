@@ -7,11 +7,13 @@ import PageHeader from './PageHeader.vue'
 import JsonEditor from './JsonEditor.vue'
 import ProtocolForm from './ProtocolForm.vue'
 import TagsForm from './TagsForm.vue'
+import TrialPreviewPanel from './TrialPreviewPanel.vue'
 import {
   listConfigs, getConfig, saveConfig, deleteConfig,
   listBackups, restoreBackup, validateConfig
 } from '../api'
 import { t, locale } from '../i18n'
+import { parseConfigJson } from '../jsonText'
 
 const props = defineProps({
   scope: { type: String, required: true },
@@ -39,8 +41,9 @@ const baseline = ref('')         // 已保存内容的规范化文本 (判断是
 const message = ref('')
 const messageKind = ref('ok')
 const newName = ref('')
-const newTemplate = ref('modbus')   // 新建协议模板: 'modbus' | 's7' | 'seer' | 'blank' (v5 C5)
+const newTemplate = ref('modbus')   // 新建起点: 内置模板 'modbus'|'s7'|'seer'|'blank'，或 'copy:<协议名>' 复制现有协议
 const itemKw = ref('')              // 协议列表搜索关键字
+const showPreview = ref(false)      // 试渲染抽屉 (仅 protocols; 用当前编辑器内容渲染一帧)
 
 // ── 方案 2: 结构化校验问题 (自检 / 保存被拒) ──
 const issues = ref([])              // [{severity,ruleId,subject,field,message}]
@@ -120,7 +123,7 @@ function onSelectTab(name) {
 function setDocFromText(text, bump) {
   rawText.value = text
   try {
-    doc.value = JSON.parse(text)
+    doc.value = parseConfigJson(text)
     parseError.value = ''
     if (bump) revision.value++
   } catch (e) {
@@ -143,7 +146,7 @@ function canonical(v) {
 /// 记录基线 (打开文件 / 保存成功)
 function setBaseline(text) {
   try {
-    baseline.value = canonical(JSON.parse(text))
+    baseline.value = canonical(parseConfigJson(text))
   } catch (_) {
     baseline.value = ''
   }
@@ -152,7 +155,7 @@ function setBaseline(text) {
 /// 与基线一致时撤销「未保存」— 改回原值不应再提示保存
 function refreshDirty(text) {
   try {
-    dirty.value = canonical(JSON.parse(text)) !== baseline.value
+    dirty.value = canonical(parseConfigJson(text)) !== baseline.value
   } catch (_) {
     dirty.value = true                      // 语法错误期间仍视为有修改
   }
@@ -190,7 +193,7 @@ function showJson() { activeTab.value = 'json' }
 
 async function onSave() {
   try {
-    JSON.parse(rawText.value)              // 客户端先校验一道
+    parseConfigJson(rawText.value)         // 客户端先校验一道 (允许注释)
   } catch (e) {
     flash('err', t('JSON 格式错误，未提交: {msg}', { msg: e.message }))
     return
@@ -225,7 +228,7 @@ async function explainSaveFailure() {
 /// 工具栏「自检」: 保存前先看问题 (不改磁盘)
 async function onSelfCheck() {
   try {
-    JSON.parse(rawText.value)
+    parseConfigJson(rawText.value)
   } catch (e) {
     flash('err', t('JSON 格式错误，无法自检: {msg}', { msg: e.message }))
     return
@@ -542,9 +545,25 @@ async function onCreate() {
     return
   }
   // 注意: 后端 Save 会对 Protocol 做深度字段校验, 空白内容会因缺必填字段被拒
-  // v5 (C5): 模板四选一
+  // v5 (C5): 模板四选一; v5.1: 可直接以现有协议为模板 (复制→改名→重置仿真端口)
   let doc
-  if (newTemplate.value === 'modbus') doc = modbusTcpTemplate(name)
+  if (newTemplate.value.indexOf('copy:') === 0) {
+    const src = newTemplate.value.slice('copy:'.length)
+    try {
+      doc = parseConfigJson(await getConfig('protocols', src))
+    } catch (e) {
+      flash('err', t('读取模板协议「{name}」失败: {msg}', { name: src, msg: e.message }))
+      return
+    }
+    if (!doc || typeof doc !== 'object') {
+      flash('err', t('模板协议「{name}」内容不是合法对象', { name: src }))
+      return
+    }
+    // 根字段是 protocolName (与文件同名); 保留原协议的其他段
+    doc.protocolName = name
+    // 两份协议共用同一个仿真端口会启动失败: 复制时默认关闭仿真
+    if (doc.simulation && typeof doc.simulation === 'object') doc.simulation.listenPort = 0
+  } else if (newTemplate.value === 'modbus') doc = modbusTcpTemplate(name)
   else if (newTemplate.value === 's7') doc = s7Template(name)
   else if (newTemplate.value === 'seer') doc = seerTemplate(name)
   else doc = blankTemplate(name)
@@ -675,10 +694,15 @@ watch(() => props.scope, () => {
         <div v-if="!filteredItems.length" class="cfg-empty">{{ t('无匹配协议') }}</div>
         <div class="create-area stacked">
           <select v-model="newTemplate" :title="t('新建模板')">
-            <option value="modbus">{{ t('Modbus TCP 模板') }}</option>
-            <option value="s7">{{ t('S7-1200 模板 (含握手)') }}</option>
-            <option value="seer">{{ t('SEER AGV 模板') }}</option>
-            <option value="blank">{{ t('空白骨架') }}</option>
+            <optgroup :label="t('内置模板')">
+              <option value="modbus">{{ t('Modbus TCP 模板') }}</option>
+              <option value="s7">{{ t('S7-1200 模板 (含握手)') }}</option>
+              <option value="seer">{{ t('SEER AGV 模板') }}</option>
+              <option value="blank">{{ t('空白骨架') }}</option>
+            </optgroup>
+            <optgroup v-if="items.length" :label="t('复制现有协议')">
+              <option v-for="n in items" :key="'copy:' + n" :value="'copy:' + n">{{ n }}</option>
+            </optgroup>
           </select>
           <input ref="newNameEl" v-model="newName" :placeholder="t('新协议名')" @keyup.enter="onCreate" />
           <button class="btn small primary" :disabled="!newName.trim()" @click="onCreate">{{ t('新建') }}</button>
@@ -710,6 +734,8 @@ watch(() => props.scope, () => {
             <button :class="{ active: activeTab === 'json' }" @click="showJson">JSON</button>
           </div>
           <button v-if="isProtocols" class="btn danger small" @click="() => onDelete()">{{ t('删除') }}</button>
+          <!-- 试渲染: 用当前编辑器内容渲染一帧 (只读, 不落盘/不重载) -->
+          <button v-if="isProtocols" class="btn small" :disabled="!!parseError" @click="showPreview = true">{{ t('试渲染') }}</button>
           <!-- 方案 2: 只读自检 (不落盘) — 保存前先看问题 -->
           <button class="btn small" :disabled="!selected" @click="onSelfCheck">{{ t('自检') }}</button>
           <button class="btn primary small" :disabled="!dirty" @click="onSave">{{ t('保存') }}</button>
@@ -744,7 +770,10 @@ watch(() => props.scope, () => {
               @update:model-value="onDocChange"
             />
           </div>
-          <JsonEditor v-if="activeTab === 'json'" v-model="rawText" @update:model-value="onRawChange" />
+          <template v-if="activeTab === 'json'">
+            <JsonEditor v-model="rawText" @update:model-value="onRawChange" />
+            <p class="json-hint">{{ t('支持 // 与 /* */ 注释；切换到表单模式保存后注释会被丢弃') }}</p>
+          </template>
         </div>
       </template>
       <div v-else class="placeholder">
@@ -752,6 +781,13 @@ watch(() => props.scope, () => {
       </div>
       </div><!-- /cfg-main -->
     </div>
+
+    <TrialPreviewPanel
+      v-if="isProtocols"
+      v-model="showPreview"
+      :protocol-name="selected"
+      :protocol-text="rawText"
+    />
   </div>
 </template>
 
@@ -761,6 +797,11 @@ watch(() => props.scope, () => {
   flex-direction: column;
   gap: var(--mp-sp-3);
   min-height: 0;
+}
+.json-hint {
+  margin: 6px 2px 0;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted-2);
 }
 .msg {
   flex: none;

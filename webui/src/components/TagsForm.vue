@@ -12,6 +12,7 @@ import VarTracePanel from './VarTracePanel.vue'
 import FieldHelp from './FieldHelp.vue'
 import { listConfigs, getConfig, getSchema } from '../api'
 import { t } from '../i18n'
+import { parseConfigJson } from '../jsonText'
 
 const props = defineProps({
   modelValue: { type: Object, required: true }
@@ -215,7 +216,7 @@ onMounted(async () => {
     protocolNames.value = await listConfigs('protocols')
     await Promise.all(protocolNames.value.map(async p => {
       try {
-        const doc = JSON.parse(await getConfig('protocols', p))
+        const doc = parseConfigJson(await getConfig('protocols', p))
         // v1.8 增: 存原始协议文档, 供 hintSource() 区分协议级 inputs vs 操作级 inputs
         protoDocs[p] = doc
         opsByProtocol[p] = Object.keys(doc.operations || {})

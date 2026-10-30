@@ -9,6 +9,7 @@ import LoginGate from './components/LoginGate.vue'
 import ScopeManager from './components/ScopeManager.vue'
 import SimPanel from './components/SimPanel.vue'
 import LivePanel from './components/LivePanel.vue'
+import MqttTestPanel from './components/MqttTestPanel.vue'
 import OverviewPanel from './components/OverviewPanel.vue'
 import HelpDrawer from './components/HelpDrawer.vue'
 import { listConfigs, setToken, reloadConfig, setAuthLostHandler, health } from './api'
@@ -29,7 +30,8 @@ const NAV = [
     group: '运行',
     items: [
       { key: 'live', label: '实时监控' },
-      { key: 'sim', label: '仿真控制' }
+      { key: 'sim', label: '仿真控制' },
+      { key: 'mqtt', label: 'MQTT 测试' }
     ]
   },
   {
@@ -228,6 +230,7 @@ async function onConfigChanged() {
         />
         <LivePanel v-else-if="activeView === 'live'" @navigate="go" />
         <SimPanel v-else-if="activeView === 'sim'" @navigate="go" />
+        <MqttTestPanel v-else-if="activeView === 'mqtt'" />
         <ScopeManager
           v-else :key="activeView" :scope="activeView" :intent="navIntent"
           @changed="onConfigChanged"

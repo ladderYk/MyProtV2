@@ -9,6 +9,7 @@ import StatusBadge from './StatusBadge.vue'
 import EmptyState from './EmptyState.vue'
 import { latestValues, dataStreamUrl, writeTag, listConfigs, getConfig } from '../api'
 import { t } from '../i18n'
+import { parseConfigJson } from '../jsonText'
 
 const rows = ref([])          // [{name, device, value, quality, timestamp, changed}]
 const emit = defineEmits(['navigate'])   // 空状态里的跳转按钮 (去添加标签 / 去启动仿真)
@@ -234,7 +235,7 @@ async function loadWriteTagIndex() {
   try {
     const names = await listConfigs('tags')
     if (!names.length) return
-    const doc = JSON.parse(await getConfig('tags', names[0]))
+    const doc = parseConfigJson(await getConfig('tags', names[0]))
     const idx = {}
     const meta = {}
     const oneWay = []

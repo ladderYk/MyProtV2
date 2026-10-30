@@ -657,10 +657,11 @@ onMounted(async () => {
             @change="v => { local.transport.type = v; emitDoc() }"
           >
             <el-option label="Tcp" value="Tcp" />
+            <el-option label="Udp" value="Udp" />
             <el-option label="Tls" value="Tls" />
             <el-option label="Serial" value="Serial" />
           </el-select>
-          <div class="field-hint">{{ t('TCP 最常用；Tls/Serial 的详细参数请在 JSON 模式配置') }}</div>
+          <div class="field-hint">{{ t('TCP/UDP 可直接运行；Tls/Serial 的详细参数请在 JSON 模式配置') }}</div>
         </el-form-item>
         <el-form-item :label="t('默认端口')">
         <el-input-number

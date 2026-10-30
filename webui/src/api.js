@@ -140,6 +140,29 @@ export async function validateConfig(scope, name, payload) {
   }
   return JSON.parse(await request('POST', `/api/validate?${q}`, payload))
 }
+// ── 试渲染预览 (/api/preview): 协议 + 操作 + 变量 → 请求字节 ──
+//   只读: 不落盘 / 不重载 / 不连设备; body.protocol 可传未保存的候选内容 (含注释)
+//   返回 {ok, protocol, operation, frameLength, hex, ascii, errors, warnings,
+//         operations, variables:[{name,source,value}], lengthField|null}
+export async function previewConfig(scope, name, body) {
+  const q = new URLSearchParams({ scope })
+  if (name) q.set('name', name)
+  return JSON.parse(await request('POST', `/api/preview?${q}`, JSON.stringify(body || {})))
+}
+
+// ── 响应解析预览 (/api/preview/response): 响应字节 → 解析值 ──
+//   只读: 走网关同一 ResponseParser; body.protocol 可传未保存的候选内容 (含注释)
+//   body.converters 可传标签级换算链 [{kind:'scale',k,b}], 响应回传 valueBeforeConversion
+//   返回 {ok, operation, condition:{checked,expr,ok}, byteOrder, dataStartIndex,
+//         frameLength, rawLength, rawHex, value:{type,text,numeric}|null,
+//         converters:[{k,b}], valueBeforeConversion:{type,text,numeric}|null,
+//         quality, errors[], warnings[], operations}
+export async function previewResponse(scope, name, body) {
+  const q = new URLSearchParams({ scope })
+  if (name) q.set('name', name)
+  return JSON.parse(await request('POST', `/api/preview/response?${q}`, JSON.stringify(body || {})))
+}
+
 export async function deleteConfig(scope, name) {
   return request('DELETE', `/api/config/${scope}/${encodeURIComponent(name)}`)
 }
@@ -207,4 +230,24 @@ export function dataStreamUrl(device) {
   if (token) params.set('token', token)
   const qs = params.toString()
   return `/api/data/stream${qs ? '?' + qs : ''}`
+}
+
+// ── MQTT 观测会话 (/api/mqtt/probe): 后端代连 broker, 浏览器不再直连 1883/WebSocket ──
+// body: { host, port, topic, qos, clientId?, username?, password?, keepAliveSec? }
+export async function createMqttProbe(body) {
+  return JSON.parse(await request('POST', '/api/mqtt/probe', JSON.stringify(body)))
+}
+export async function stopMqttProbe(sid) {
+  return request('DELETE', `/api/mqtt/probe/${encodeURIComponent(sid)}`)
+}
+export async function publishMqttProbe(sid, body) {
+  return request('POST', `/api/mqtt/probe/${encodeURIComponent(sid)}/publish`, JSON.stringify(body))
+}
+
+// MQTT 事件流 — 与 dataStreamUrl 同构, 同样用 ?token= 兜底
+export function mqttProbeStreamUrl(sid) {
+  const params = new URLSearchParams({ sid })
+  const token = getToken()
+  if (token) params.set('token', token)
+  return `/api/mqtt/stream?${params.toString()}`
 }

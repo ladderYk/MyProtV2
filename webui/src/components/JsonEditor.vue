@@ -2,6 +2,7 @@
 // JSON 编辑器 — textarea + 实时语法校验指示
 import { computed } from 'vue'
 import { t } from '../i18n'
+import { parseConfigJson } from '../jsonText'
 
 const props = defineProps({
   modelValue: { type: String, default: '' }
@@ -16,7 +17,8 @@ const validity = computed(() => {
   const text = props.modelValue
   if (!text.trim()) return { ok: false, msg: t('空文档') }
   try {
-    JSON.parse(text)
+    // 与保存链路一致: 允许 // 与 /* */ 注释 (字符串内的注释符不会被截断)
+    parseConfigJson(text)
     return { ok: true, msg: t('JSON 有效') }
   } catch (e) {
     return { ok: false, msg: t('JSON 错误: {msg}', { msg: e.message }) }

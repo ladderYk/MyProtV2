@@ -12,6 +12,7 @@ import {
   simStatus, readSimRegisters, writeSimRegisters,
   listConfigs, getConfig, saveConfig
 } from '../api'
+import { parseConfigJson } from '../jsonText'
 import { t } from '../i18n'
 
 const emit = defineEmits(['navigate'])   // 空状态 → 去协议配置设置仿真端口
@@ -139,7 +140,7 @@ async function loadCfgDocs() {
     cfgProtos.value = names || []
     await Promise.all(cfgProtos.value.map(async p => {
       try {
-        const doc = JSON.parse(await getConfig('protocols', p))
+        const doc = parseConfigJson(await getConfig('protocols', p))
         cfgDocs[p] = doc
         if (!doc.simulation || typeof doc.simulation !== 'object') {
           doc.simulation = { listenPort: 0, registerCount: 65536, initialValues: {} }
