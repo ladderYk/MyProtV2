@@ -1,7 +1,8 @@
 // src/Southbound/include/MyProt/Southbound/TagValueSink.hpp
 // Single write entry for device-initiated values. Polling results go straight to
 // LatestValueStore; push adapters must go through this sink so that quality
-// degradation, converter application and change detection stay identical.
+// degradation and converter application stay identical. Change detection is NOT
+// done here: LatestValueStore::Update derives TagValue::valueChanged for both paths.
 
 #pragma once
 #include <functional>
@@ -36,12 +37,12 @@ public:
     /// No frame within maxSilenceMs (quality = Uncertain, last good value kept).
     void EmitSilent(const Core::TagDefinition& tag, int64_t timestampMs);
 
-    /// Drop the change-detection cache (called on config reload).
+    /// Drop the last-good-value cache (called on config reload; the store is cleared too).
     void Reset();
 
     static int64_t NowMs();
 
-    /// Type + value equality (ignores timestamp / quality).
+    /// Type + value equality (delegates to Core::TypedValueEquals, kept for callers).
     static bool SameValue(const Core::TypedValue& a, const Core::TypedValue& b);
 
 private:
@@ -50,7 +51,7 @@ private:
 
     StoreWriter _writer;
     mutable std::mutex _mutex;
-    std::map<std::string, Core::TypedValue> _last;   // change detection per tag
+    std::map<std::string, Core::TypedValue> _last;   // last good value per tag (EmitSilent fallback)
 
     TagValueSink(const TagValueSink&) = delete;
     TagValueSink& operator=(const TagValueSink&) = delete;

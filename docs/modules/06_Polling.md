@@ -96,6 +96,23 @@ private:
 
 `PollStats`（`src/Polling/include/MyProt/Polling/PollStats.hpp`）仅保留两个 `std::atomic<int64_t>`：`totalReads` / `activeTags`（读统计由上述 `Core::Metrics` counter 承担）。
 
+### 变化检测
+
+`LatestValueStore::Update` 是 `TagValue::valueChanged` 的**唯一计算落点**：写入时相对上一次写入判断，轮询与南向推送共用同一口径。
+
+```
+changed = 首次写入（无基线）
+       || quality  != 上次 quality
+       || !TypedValueEquals(typedValue, 上次 typedValue)   // Core/Value.hpp
+```
+
+- **不参与比较**：`timestamp` / `requestId` / `rawData` / `lastError`——否则每次采样都会被误判为变化
+- **质量优先**：值完全相同但质量码变了（如 `Good→Uncertain`）也算变化，上游能看到降级事件
+- **NaN 恒变**：`Float/Double` 按 `==` 比较，NaN 与自身不等，每次 NaN 采样都置位（可作设备异常信号）
+- **生产者不置位**：`PollingEngine` / `TagReader` / `TagValueSink` 构造的 `TagValue` 中该字段无意义，消费方必须读 store 写回后的副本（`Lookup` / `Snapshot`）
+
+下游三处同源消费：`/api/data/latest` 的 `changed`、SSE `snapshot` 的 `changed`、MQTT `publishMode=changed` 的过滤（后者另用 `BuildSignature` 做同口径签名，见 [modules/11](./11_Northbound.md)）。
+
 ### 热重载代际防护
 
 `Start` 递增 `_generation`，每个 `PollGroup` 记录装配时的代际。所有异步回调入口（GOC 完成、退避续跑、`ReadBatch` 完成、`PollBatchChain` 入口）先校验代际：
@@ -109,7 +126,7 @@ private:
 对 `CircuitOpen` 引起的 `Bad` 值，在写入 `LatestValueStore` 前转译为 `Uncertain` 并沿用上次值：
 
 - 条件：`tv.quality == Bad && tv.lastError.code == CircuitOpen`
-- 查 `latest.Lookup(tagName, last)`，若上次质量是 **`Good` 或 `Uncertain`** → 替换 `typedValue`、`valueChanged = false`、`quality = Uncertain`、清空 `lastError`
+- 查 `latest.Lookup(tagName, last)`，若上次质量是 **`Good` 或 `Uncertain`** → 替换 `typedValue`、`quality = Uncertain`、清空 `lastError`（`valueChanged` 由 `LatestValueStore::Update` 按「值不变、质量 Good→Uncertain」判为 true）
 - 判定同时接受 `Good` 与 `Uncertain`；若仅接受 `Good`，熔断持续时**第二个轮询周期即退化为 `Bad`**
 
 **效果**：设备离线期间 `/api/data/latest` 返回 `Uncertain` + 上次值（而非 `Bad` + 0），UI 不抖动；设备恢复后自动转 `Good`。

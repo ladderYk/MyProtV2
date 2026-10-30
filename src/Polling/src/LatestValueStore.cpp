@@ -8,7 +8,18 @@ namespace MyProt { namespace Polling {
 void LatestValueStore::Update(const std::vector<Core::TagValue>& values) {
     std::lock_guard<std::mutex> lock(_mutex);
     for (size_t i = 0; i < values.size(); ++i) {
-        _latest[values[i].tagName] = values[i];
+        Core::TagValue tv = values[i];
+        // 变化检测的唯一落点: 首次写入, 或 type+值 或质量码相对上次写入变化。
+        // 时间戳/requestId 不参与比较; 生产者无需自行填充 valueChanged。
+        std::map<std::string, Core::TagValue>::const_iterator it =
+            _latest.find(tv.tagName);
+        if (it == _latest.end()) {
+            tv.valueChanged = true;
+        } else {
+            tv.valueChanged = it->second.quality != tv.quality
+                || !Core::TypedValueEquals(it->second.typedValue, tv.typedValue);
+        }
+        _latest[tv.tagName] = tv;
     }
 }
 

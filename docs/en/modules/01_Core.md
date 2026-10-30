@@ -923,7 +923,7 @@ struct TagValue {
     Error lastError;
     int64_t timestamp;                // epoch ms
     int64_t requestId;                // end-to-end correlation id (ADR-0009)
-    bool valueChanged = false;        // changed vs. previous sample
+    bool valueChanged = false;        // computed by LatestValueStore::Update (producers never set it)
 };
 ```
 
@@ -991,7 +991,7 @@ A `{Payload:raw}` placeholder consumes runtime-injected payload bytes: the write
 | `lastError` | on exit | `Error{Good, "", ""}` sentinel | `InvalidResponse` / `TypeConversionError` | `Timeout` / `ConnectionClosed` / `CircuitOpen` etc. |
 | `timestamp` | parse success / before failure callback | local arrival time | same | failure callback time |
 | `requestId` | assigned at TagReader entry (atomic counter) | shared by merged requests | same | same |
-| `valueChanged` | change detection — **not implemented**: always false in the production read path | false | false | false |
+| `valueChanged` | **not filled here**: producers (`TagReader` / `TagValueSink`) never set it; `LatestValueStore::Update` computes it at write time (see §1.3.6) | decided when written to the store | same | same |
 
 > Consumer contract: only `Good` tags may be used as business values. `Uncertain` tags should keep `rawData` for "reference the old value + show a degraded flag" strategies and do not count toward the Good ratio. `Bad` tags may drop `typedValue` but **must** be retained to raise alerts. `requestId` must survive into persistence so a logical read can be traced end to end.
 
@@ -1018,21 +1018,40 @@ A `{Payload:raw}` placeholder consumes runtime-injected payload bytes: the write
 > `Bool`: `bytes[0] == 0x00` -> false, non-zero -> true, zero bytes -> `TypeConversionError` (`Uncertain`).
 > `String`: decoded as UTF-8; failure -> `TypeConversionError` (`Uncertain`), never truncated at the first invalid byte.
 
-### 1.3.6 valueChanged / deadband limits per finalType
+### 1.3.6 Unified valueChanged computation (LatestValueStore)
 
-`valueChanged` drives reporting when `reportMode="OnChange"`: true only when `|new - last| > deadband`.
+`valueChanged` has exactly **one place**: [`LatestValueStore::Update`](./06_Polling.md#change-detection) computes it against the previously written sample. Producers (polling `TagReader`, southbound `TagValueSink`) never fill it, which removes the old split semantics ("always false on the polling path, self-computed on the push path").
 
-| finalType | deadband effective? | Comparison | deadband = 0 |
-|---|---|---|---|
-| `Bool` | no | `new != last` | same as deadband > 0 |
-| integer types | yes | `|new - last| > deadband` | plain `!=` |
-| `Float/Double` | yes | `|new - last| > deadband` (double precision) | NaN never equals -> `valueChanged = true` |
-| `ByteArray` | no | byte-wise memcmp | deadband ignored |
-| `String` | no | string `==` | deadband ignored |
-| `Empty` | no | always false | — |
+```
+changed = first write
+       || quality != previous quality
+       || !TypedValueEquals(typedValue, previous typedValue)
+```
 
-> `deadband` is a double but compared at the precision of the finalType (integers cast it to `int64_t`; Bool/String/ByteArray ignore it). `deadband < 0` is a load-time Warning treated as 0.
-> Note: with the withdrawal of the standalone `DataDispatcher`, deadband behaviour in v1 is effectively "Always" — every poll is delivered. `valueChanged` stays false.
+| Scenario | valueChanged | Notes |
+|---|:--:|---|
+| First write for that tag | `true` | no baseline yet |
+| Only `timestamp` / `requestId` differ, value and quality equal | `false` | neither field is compared (a fast poll never looks "changed") |
+| Different type or payload | `true` | per-type rules below |
+| Quality transition (incl. `Good->Uncertain`, `Good->Bad`) | `true` | identical value still counts (upstream must see the degradation) |
+| Consecutive `Uncertain` / consecutive `Bad` with the same payload | `false` | neither quality nor payload moved |
+| First write after `Clear()` | `true` | baseline dropped, back to "first write" |
+
+`TypedValueEquals` (`Core/Value.hpp`) dispatches by type:
+
+| `ValueType` | Comparison | Notes |
+|---|---|---|
+| `Empty` | always equal | two empty values are not a change |
+| `ByteArray` | byte-wise | a different length or any different byte counts |
+| `UInt16/32/64`, `Int16/32/64` | integer equality | — |
+| `Float/Double` | floating-point equality (`==`) | **NaN != NaN** -> every NaN sample counts as changed (usable as an anomaly alarm); `-0.0 == 0.0` is not a change |
+| `Bool` | boolean equality | — |
+| `String` | exact string equality | case sensitive |
+| different types | never equal | e.g. `UInt16(1)` vs `Int16(1)` |
+
+> **Why not in the producer**: "changed" is relative to the last sample actually stored, and only the store holds that baseline; polling and push also share one store, so the definition must be single.
+>
+> **The former `deadband` / `reportMode` are gone** (no consumer, see [ADR-0003](../../adr/0003-known-issues.md)): v1 does no deadband suppression - any value/quality change sets the flag. Consumers that only want deltas filter on `changed` themselves (MQTT `publishMode=changed` does exactly that, see [modules/11](./11_Northbound.md)).
 
 ### 1.3.7 timestamp source and trust in peer clocks
 
@@ -1482,7 +1501,7 @@ configuration validation failed (10 errors):
 | parse failure | `ConfigError` | fatal | yes |
 | version gate failure | `ConfigError` | fatal | yes |
 | missing field / wrong type | `ConfigError` | fatal | yes (after aggregation) |
-| field warning (e.g. `deadband<0`) | (none) | warning | **no** (log warn) |
+| field warning (e.g. `operation` references a missing/removed tag) | (none) | warning | **no** (log warn) |
 | orphan read operation | (none) | warning | **no** |
 | protocol field mismatching the docs | (none) | warning | **no** |
 | unknown `builtInFunctions` entry | `ConfigError` | fatal | yes |
@@ -1567,7 +1586,7 @@ v.d = static_cast<double>(f);  // still NaN
 v.type = ValueType::Float;
 ```
 
-- NaN triggers `valueChanged = true` in the §1.3.6 deadband comparison, but with the standalone DataDispatcher withdrawn the effective v1 behaviour is "Always" (see [06_Polling §6.2](./06_Polling.md)); NaN is still delivered with Good quality.
+- NaN always counts as changed in the §1.3.6 rule (`NaN != NaN`, so every sample sets `valueChanged=true`), yet is still delivered with `Good` quality; upstream can use this for persistent-NaN alarms.
 - Upstream consumers (MQTT) must handle NaN themselves (JSON `null` or the string `"NaN"`).
 
 ### 1.10.4 Byte-order fallback
@@ -1609,7 +1628,7 @@ v.type = ValueType::Float;
 
 | Structure | Synchronisation | Location |
 |---|---|---|
-| `LatestValueStore` | `std::shared_mutex` (many readers, one writer) | `src/Polling/src/LatestValueStore.hpp` |
+| `LatestValueStore` | `std::mutex` (same mutex for readers and writer; the critical section only touches the map) | `src/Polling/include/MyProt/Polling/LatestValueStore.hpp` |
 | `ConnectionManager` | `asio::strand` (serialised per channel) | `src/Gateway/src/ChannelManager.cpp` |
 | `CircuitBreaker` | per-device `std::mutex` | `src/Gateway/src/Resilience.cpp` |
 | `WebApiServer` | independent strand per connection | `src/WebApi/src/WebApiServer.cpp` |
@@ -1623,10 +1642,10 @@ POCO classes expose **no** setters; fields are final after construction. Modific
 ```cpp
 // ✓ correct
 TagValue v2 = v1;
-v2.valueChanged = true;
+v2.timestamp = 2000;
 
 // ❌ wrong (no such API)
-v1.setValueChanged(true);
+v1.setTimestamp(2000);
 ```
 
 ### 1.11.3 Two ways to cross threads

@@ -59,30 +59,7 @@ int64_t TagValueSink::NowMs() {
 }
 
 bool TagValueSink::SameValue(const Core::TypedValue& a, const Core::TypedValue& b) {
-    if (a.type != b.type) return false;
-    switch (a.type) {
-    case Core::ValueType::Empty:
-        return true;
-    case Core::ValueType::ByteArray:
-        return a.bytes == b.bytes;
-    case Core::ValueType::UInt16:
-    case Core::ValueType::UInt32:
-    case Core::ValueType::UInt64:
-        return a.u == b.u;
-    case Core::ValueType::Int16:
-    case Core::ValueType::Int32:
-    case Core::ValueType::Int64:
-        return a.i == b.i;
-    case Core::ValueType::Float:
-    case Core::ValueType::Double:
-        return a.d == b.d;          // NaN != NaN, intentional
-    case Core::ValueType::Bool:
-        return a.b == b.b;
-    case Core::ValueType::String:
-        return a.str == b.str;
-    default:
-        return false;
-    }
+    return Core::TypedValueEquals(a, b);
 }
 
 Core::TypedValue TagValueSink::ApplyConverters(const Core::TagDefinition& tag,
@@ -112,12 +89,9 @@ void TagValueSink::Emit(const Core::TagDefinition& tag,
     tv.requestId = 0;
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        std::map<std::string, Core::TypedValue>::const_iterator it =
-            _last.find(tag.name);
-        tv.valueChanged = (it == _last.end())
-            || !SameValue(it->second, tv.typedValue);
-        _last[tag.name] = tv.typedValue;
+        _last[tag.name] = tv.typedValue;   // baseline for EmitSilent only
     }
+    // valueChanged 由 LatestValueStore::Update 统一计算 (见 Value.hpp)
     if (_writer) {
         std::vector<Core::TagValue> one(1, tv);
         _writer(one);
@@ -138,7 +112,7 @@ void TagValueSink::EmitBad(const Core::TagDefinition& tag,
     tv.lastError = Core::Error::Make(
         Core::Error::Code::ParseError, reason,
         "device=" + tag.deviceId + ", tag=" + tag.name);
-    tv.valueChanged = true;         // quality transitioned by definition
+    // 质量变化由 LatestValueStore 检测, 这里不自行置变化位
     if (_writer) {
         std::vector<Core::TagValue> one(1, tv);
         _writer(one);
@@ -152,13 +126,13 @@ void TagValueSink::EmitSilent(const Core::TagDefinition& tag, int64_t timestampM
     tv.timestamp = timestampMs > 0 ? timestampMs : NowMs();
     tv.quality = Core::QualityCode::Uncertain;
     tv.requestId = 0;
-    tv.valueChanged = false;        // keep the last value; only quality degrades
     {
         std::lock_guard<std::mutex> lock(_mutex);
         std::map<std::string, Core::TypedValue>::const_iterator it =
             _last.find(tag.name);
         if (it != _last.end()) tv.typedValue = it->second;
     }
+    // 值不变、质量 Good→Uncertain, 由 LatestValueStore 判为变化
     if (_writer) {
         std::vector<Core::TagValue> one(1, tv);
         _writer(one);

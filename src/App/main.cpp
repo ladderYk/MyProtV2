@@ -262,9 +262,9 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
                         (last.quality == MyProt::Core::QualityCode::Good ||
                          last.quality == MyProt::Core::QualityCode::Uncertain)) {
                         tv.typedValue = last.typedValue;
-                        tv.valueChanged = false;
                         tv.quality = MyProt::Core::QualityCode::Uncertain;
                         tv.lastError = MyProt::Core::Error();
+                        // valueChanged 由 latest.Update 统一判定 (值不变、质量 Good→Uncertain ⇒ 变化)
                     }
                 }
                 translated.push_back(tv);

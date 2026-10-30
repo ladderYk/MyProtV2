@@ -1003,9 +1003,7 @@ struct ConfigRoot {
       "variables": { "StartAddress": 0, "RegisterCount": 2 },
       "scanRateMs": 5000,
       "registerCount": 2,
-      "finalType": "Float",
-      "deadband": 0.5,
-      "reportMode": "OnChange"
+      "finalType": "Float"
     }
   ]
 }
@@ -1103,7 +1101,7 @@ struct TagValue {
     Error lastError;
     int64_t timestamp;                // epoch ms
     int64_t requestId;                // 端到端关联 id (correlation id, ADR-0009): 一次逻辑读取全链路共用, 合并请求的所有标签同 id
-    bool valueChanged = false;        // 相比上次是否有变化
+    bool valueChanged = false;        // 由 LatestValueStore::Update 写入时计算 (生产者不置位)
 };
 
 }} // namespace MyProt { namespace Core
@@ -1177,7 +1175,7 @@ struct TagValue {
 | `lastError` | 出口处 | `Error{Good, "", ""}`（code 越界哨兵） | 携带 `InvalidResponse`/`TypeConversionError` | 携带 `Timeout`/`ConnectionClosed`/`CircuitOpen` 等 |
 | `timestamp` | 解析成功（Uncertain 路径） / 失败回调前（Bad 路径） | 成功时取对端应答时刻 | 同 Uncertain | 失败时取失败回调时刻（贴近对端失败时间） |
 | `requestId` | TagReader 入口分配（atomic 计数器，ADR-0009） | 合并请求的所有标签同 id | 同 Uncertain | 同 Bad |
-| `valueChanged` | 变化检测（**当前未实现**：生产读路径从不置位，字段恒为 false；`TagDefinition.deadband` / `reportMode` 保留但业务未生效） | 恒为 false | 恒为 false | 恒为 false |
+| `valueChanged` | **不在此表填充**：生产端（`TagReader` / `TagValueSink`）不置位，由 `LatestValueStore::Update` 写入时统一计算（见 §1.3.6） | 写入 store 时判定 | 写入 store 时判定 | 写入 store 时判定 |
 
 > **消费方契约**：
 > - 仅 `Good` 标签的 `typedValue` 可直接当业务值使用。
@@ -1210,22 +1208,40 @@ struct TagValue {
 
 > **String 边界**：`finalType="String"` 时按 UTF-8 解码 `bytes`；解码失败 → `TypeConversionError`（`Uncertain`），**不**断字节。响应方契约：WebApi 输出 JSON 时直接 `str` 字段输出（已经是合法 UTF-8）。
 
-### 1.3.6 valueChanged 死区比较的 finalType 限制
+### 1.3.6 valueChanged 的统一判定（LatestValueStore）
 
-`valueChanged` 决定上报策略（`reportMode="OnChange"` 时）：仅在 `|新值 - 上次值| > deadband` 时为 true。
+`valueChanged` 只有**一个落点**：[`LatestValueStore::Update`](./06_Polling.md#变化检测) 在写入时相对上一次写入计算。生产者（轮询 `TagReader`、南向 `TagValueSink`）一律不填写此位，避免了「轮询路径恒 false、推送路径自算」的双套语义。
 
-| finalType | deadband 生效? | 比较规则 | deadband=0 行为 |
-|-----------|----------------|----------|-----------------|
-| `Bool` | ✗ | 恒 `newValue != lastValue` | 同 deadband>0 行为（0 阈值 = 任何变化） |
-| `UInt16/Int16/UInt32/Int32/UInt64/Int64` | ✓ | `|new - last| > deadband` | 仅 `!=` 比较（任何数值变化都触发） |
-| `Float/Double` | ✓ | `|new - last| > deadband`（双精度比较） | NaN 永不等 → `valueChanged=true`（首字节 NaN 报警） |
-| `ByteArray` | ✗ | 逐字节 memcmp | deadband 字段忽略 |
-| `String` | ✗ | 字符串 `==` | deadband 字段忽略 |
-| `Empty` | ✗ | 恒 false | — |
+```
+changed = 首次写入
+       || quality  != 上次 quality
+       || !TypedValueEquals(typedValue, 上次 typedValue)
+```
 
-> **死区缩放规则**：`deadband` 字段是 double，但比较时与同 finalType 字段同等精度（Int 比较时 `static_cast<int64_t>(deadband)`；Bool/String/ByteArray 完全忽略）。`deadband < 0` → 加载期 Warning（不阻断），行为按 0 处理。
+| 场景 | valueChanged | 说明 |
+|------|:--:|------|
+| 该标签第一次写入 | `true` | 无基线，必然算变化 |
+| 仅 `timestamp` / `requestId` 不同，值与质量相同 | `false` | 两者**不参与**比较（高频轮询不会因时间戳变化刷屏） |
+| 类型或载荷不同 | `true` | 按 `ValueType` 逐类比较，见下表 |
+| 质量码变化（含 `Good→Uncertain`、`Good→Bad`） | `true` | 值相同也算变化（上游需感知降级） |
+| 连续 `Uncertain` / 连续 `Bad` 且载荷相同 | `false` | 质量未再变化、载荷也未变 |
+| `Clear()` 之后的下一次写入 | `true` | 基线被丢弃，回到「首次写入」 |
+
+`TypedValueEquals`（`Core/Value.hpp`）按类型分派的比较规则：
+
+| `ValueType` | 比较规则 | 备注 |
+|-----------|----------|------|
+| `Empty` | 恒相等 | 两个空值不算变化 |
+| `ByteArray` | 逐字节比较 | 长度或任一字节不同即算变化 |
+| `UInt16/32/64`、`Int16/32/64` | 整型值相等 | — |
+| `Float/Double` | 浮点值相等（`==`） | **NaN != NaN** → 每次 NaN 采样都算变化（可作设备异常报警信号）；`-0.0 == 0.0` 不算变化 |
+| `Bool` | 布尔值相等 | — |
+| `String` | 字符串完全相等 | 区分大小写 |
+| 类型不同 | 恒不等 | 例如 `UInt16(1)` vs `Int16(1)` |
+
+> **为什么不在生产者侧算**：变化是「相对上次成功落库的样本」而言，只有持有基线的存储层才知道上一次是什么；且轮询与推送共用同一 store，口径必须唯一。
 >
-> **Uncertain 路径的死区比较**：Uncertain 仍与上次 Good 值比较（`rawData` 不参与计算），触发 `valueChanged=true` 时上报（`quality=Uncertain`）——便于上游感知"值变了但可能不准"。`OnChange` 上游应同时感知"值变化 + 质量码"两事件。
+> **原 `deadband` / `reportMode` 已删除**（无消费落点，见 [ADR-0003](../adr/0003-known-issues.md)）：v1 不做死区抑制，任何值/质量变化都置位；需要「只推变化」的消费者自行按 `changed` 过滤（MQTT `publishMode=changed` 即如此，见 [modules/11](./11_Northbound.md)）。
 
 ### 1.3.7 timestamp 时刻选择与对端时钟信任
 
@@ -1706,7 +1722,7 @@ LoadConfig(jsonPath)
 | 解析失败 | `ConfigError` | 致命 | 阻断 |
 | 版本门禁失败 | `ConfigError` | 致命 | 阻断 |
 | 字段缺失 / 类型错 | `ConfigError` | 致命 | 阻断（聚合后）|
-| 字段警告（如 `deadband<0`） | (无 error) | 警告 | **不**阻断（log warn）|
+| 字段警告（如 `operation` 引用了不存在/已删除的标签） | (无 error) | 警告 | **不**阻断（log warn）|
 | 孤儿读 op | (无 error) | 警告 | **不**阻断（log warn）|
 | 协议字段不匹配文档 | (无 error) | 警告 | **不**阻断（log warn）|
 | builtInFunctions 未知 | `ConfigError` | 致命 | 阻断 |
@@ -1793,7 +1809,7 @@ v.d = static_cast<double>(f);  // NaN 仍 NaN
 v.type = ValueType::Float;
 ```
 
-- NaN 在 §1.3.6 deadband 比较中触发 `valueChanged = true`（首字节报警）——但 v1 撤回独立 DataDispatcher 后 deadband 行为 = Always（每轮都透传，详见 [modules/06_Polling §6.2 撤回横幅](./06_Polling.md#62-datadispatcher-已撤回)）；NaN 仍以 Good quality 透传。
+- NaN 在 §1.3.6 的变化判定中恒算变化（`NaN != NaN`，每次采样都置 `valueChanged=true`），但仍以 `Good` quality 透传；上游可据此做“持续 NaN”报警。
 - 上游（MQTT）应自行处理 NaN（JSON 中 `null` 或字符串 `"NaN"`）。
 
 ### 1.10.4 字节序回退
@@ -1839,7 +1855,7 @@ v.type = ValueType::Float;
 
 | 结构 | 同步机制 | 位置 |
 |------|----------|------|
-| `LatestValueStore` | `std::shared_mutex`（多读单写） | `src/Polling/src/LatestValueStore.hpp` |
+| `LatestValueStore` | `std::mutex`（读写同一互斥量，临界区仅哈希表操作） | `src/Polling/include/MyProt/Polling/LatestValueStore.hpp` |
 | `ConnectionManager` | `asio::strand`（按 channel 串行） | `src/Gateway/src/ChannelManager.cpp` |
 | `CircuitBreaker` | per-device `std::mutex` | `src/Gateway/src/Resilience.cpp` |
 | `WebApiServer` | 每个连接独立 strand | `src/WebApi/src/WebApiServer.cpp` |
@@ -1854,10 +1870,10 @@ v.type = ValueType::Float;
 // ✓ 正确
 TagValue v1 = ...;
 TagValue v2 = v1;
-v2.valueChanged = true;  // 修改副本
+v2.timestamp = 2000;     // 修改副本
 
 // ❌ 错误（不存在该 API）
-v1.setValueChanged(true);
+v1.setTimestamp(2000);
 ```
 
 ### 1.11.3 跨线程传递的两种方式

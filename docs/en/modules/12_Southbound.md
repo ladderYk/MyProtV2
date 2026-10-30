@@ -16,7 +16,7 @@ Brings **device-initiated** data into the gateway: the gateway is the receiver (
 | TCP listening (`LengthField` / `Fixed` framing, multiple connections) | Binary payload codecs (v1 is JSON only) |
 | topic / JSON payload -> tag mapping (`tagFrom=topic|payload`) | Downstream commands / write path (still `POST /api/data/write`) |
 | Silence watchdog (`maxSilenceMs` -> `Uncertain`), decode failure -> `Bad` | QoS2, MQTT 5.0, TLS, WebSocket |
-| Post-read `converters`, self-maintained `valueChanged` | Inbound message persistence / history replay |
+| Post-read `converters`, change flag computed by `LatestValueStore` | Inbound message persistence / history replay |
 
 **Single source**: a tag's `source` is either `poll` or `push`. `push` tags are filtered out at the `PollingEngine::Start` entry, do not participate in polling and declare no `operation`; there is **no arbitration** between the two sources (no newest-by-timestamp selection).
 
@@ -53,7 +53,7 @@ It does not depend on `Engine` / `Gateway` / `WebApi`: inbound data never goes t
 - `Apply` = `Stop()` + `Start()`: stop the old adapters first (`_running=false` -> `io.stop()` -> `join`) and then rebuild; **no blocking I/O on the polling thread**
 - The watchdog is registered **before** the IO thread starts (`ScheduleWatchdog`) so the timer is never mutated across threads
 - `Stop` order: set the flag -> stop io -> join -> `transport->Stop()` for each adapter -> clear bindings -> `_sink.Reset()` -> release timer/work/io
-- `TagValueSink` keeps a `std::mutex` plus the `_last` change baseline; `LatestValueStore::Update` is itself thread-safe
+- `TagValueSink` keeps a `std::mutex` plus `_last` (used only by `EmitSilent` to reuse the previous value, not for change detection); `LatestValueStore::Update` is itself thread-safe and computes `valueChanged` on write
 
 ## 12.4 Data flow
 
@@ -89,11 +89,13 @@ TCP frame    --+                              |
 
 ## 12.5 Quality semantics
 
-| Event | Quality | Value | valueChanged |
+| Event | Quality | Value | valueChanged (computed by `LatestValueStore::Update`) |
 |------|------|----|:--:|
-| Normal ingest | `Good` | New value (optionally through `converters`) | Compared with the previous one (type + value) |
-| JSON/type/mapping failure | `Bad` | `Empty` + `lastError(ParseError)` | `true` (quality transition) |
-| Silence timeout (`maxSilenceMs>0`) | `Uncertain` | **Keeps the previous value** | `false` (quality only) |
+| Normal ingest | `Good` | New value (optionally through `converters`) | Compared with the previous write (type + value); same value with only a new timestamp -> `false` |
+| JSON/type/mapping failure | `Bad` | `Empty` + `lastError(ParseError)` | `true` on the first `Bad` or on a quality transition; consecutive `Bad` with the same `Empty` payload -> `false` |
+| Silence timeout (`maxSilenceMs>0`) | `Uncertain` | **Keeps the previous value** | `Good->Uncertain` -> `true` (the value is unchanged but the quality moved); consecutive silence -> `false` |
+
+> Rule: `changed = first write || quality changed || !TypedValueEquals`; `timestamp` / `requestId` are not compared. NaN never equals NaN, so every NaN sample counts as changed.
 
 - Silence is measured from binding start (not from the first frame), and **each silence period emits one** `Uncertain`; the next frame resets it and logs an `INFO` recovery line
 - The watchdog ticks every 500 ms — it is fault detection, not a sampling cadence
@@ -132,7 +134,8 @@ Configuration lives in the **device section** `ingest` of `tags.json` ([Config_S
 | Test | Coverage |
 |------|------|
 | `tests/Southbound.Tests/PayloadMapperTests.cpp` | 1-based topic segments, single/batch/scalar, `defaultTag` fallback, bad JSON, `Auto` inference, explicit type precedence, out-of-range rejection |
-| `tests/Southbound.Tests/TagValueSinkTests.cpp` | `Good` + `valueChanged` self-comparison, `converters`, `Bad` + `ParseError`, `Silent` keeps the previous value, `Reset` clears the baseline |
+| `tests/Southbound.Tests/TagValueSinkTests.cpp` | `converters`, `Bad` + `ParseError`, `EmitSilent` keeps the previous value and degrades quality, `Reset` clears `_last` |
+| `tests/Southbound.Tests/LatestValueStoreTests.cpp` | Change flag: first write, timestamp-only change, value/quality change, type change, ByteArray by content, NaN always changed, `Clear` drops the baseline |
 | `tests/Southbound.Tests/IngestLoopbackTests.cpp` | TCP `Fixed` coalescing split into two frames, in-process fake broker CONNECT/SUBSCRIBE/SUBACK/PUBLISH loopback, Manager end-to-end mapping + silence degradation |
 | `tests/Northbound.Tests/MqttCodecTests.cpp` | SUBSCRIBE layout / SUBACK decoding |
 

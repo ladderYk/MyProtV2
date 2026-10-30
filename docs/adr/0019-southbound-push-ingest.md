@@ -54,6 +54,7 @@ public:
 
 - 轮询与推送写同一份快照，`/api/data`、北向 MQTT、SSE 无需区分来源
 - `TagValueSink` 自维护"上次类型 + 值"基线填充 `valueChanged`（轮询链路该字段从未置位，推送侧不依赖它存在）
+  - **2026-10-30 修订**：此条已过时。变化位现由 `LatestValueStore::Update` 统一计算（首次 / 质量码 / 类型+值），sink 不再维护比较基线，`_last` 仅用于 `EmitSilent` 保留上次值；轮询路径的 `changed` 因此也变为真实值。
 - 读后换算 `converters` 在 sink 内应用，规则与轮询标签一致（数值型才生效，结果为 `Double`）
 
 ### 2.4 质量语义：失败 `Bad`、静默 `Uncertain`

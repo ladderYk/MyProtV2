@@ -2195,9 +2195,16 @@ int RunE2E() {
         batch.push_back(t2);
         store.Update(batch);
 
+        // 变化检测统一在 store: 同值重写(仅时间戳变化)不算变化
+        t1.timestamp = 2000;
+        std::vector<MyProt::Core::TagValue> same(1, t1);
+        store.Update(same);
+        MyProt::Core::TagValue probe;
+        Check("Latest: 同值重写不算变化",
+              store.Lookup("Temperature", probe) && !probe.valueChanged);
+
         std::vector<MyProt::Core::TagValue> over;
-        t1.typedValue.d = 37.25;                    // 同名覆盖 → 新值生效
-        t1.valueChanged = true;
+        t1.typedValue.d = 37.25;                    // 同名覆盖 → 新值生效 + 变化位
         over.push_back(t1);
         store.Update(over);
 

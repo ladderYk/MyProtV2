@@ -35,6 +35,29 @@ struct TypedValue {
         : type(ValueType::Empty), u(0), i(0), d(0.0), b(false) {}
 };
 
+/// Type + payload equality (ignores quality, timestamp and request id).
+/// Single definition shared by the value store and northbound filters so that
+/// "changed" means the same thing on every path. Float/Double compare by value,
+/// so NaN never equals NaN (a NaN sample always counts as changed).
+inline bool TypedValueEquals(const TypedValue& a, const TypedValue& b) {
+    if (a.type != b.type) return false;
+    switch (a.type) {
+    case ValueType::Empty:     return true;
+    case ValueType::ByteArray: return a.bytes == b.bytes;
+    case ValueType::UInt16:
+    case ValueType::UInt32:
+    case ValueType::UInt64:    return a.u == b.u;
+    case ValueType::Int16:
+    case ValueType::Int32:
+    case ValueType::Int64:     return a.i == b.i;
+    case ValueType::Float:
+    case ValueType::Double:    return a.d == b.d;
+    case ValueType::Bool:      return a.b == b.b;
+    case ValueType::String:    return a.str == b.str;
+    default:                   return false;
+    }
+}
+
 struct TagValue {
     std::string tagName;
     std::string deviceId;
@@ -44,7 +67,7 @@ struct TagValue {
     Error lastError;
     int64_t timestamp;                  // epoch ms
     int64_t requestId;                  // end-to-end correlation id (ADR-0009)
-    bool valueChanged;                  // whether it changed vs. the previous value
+    bool valueChanged;                  // derived by LatestValueStore::Update (not by producers)
 
     TagValue()
         : quality(QualityCode::Good), timestamp(0), requestId(0), valueChanged(false) {}

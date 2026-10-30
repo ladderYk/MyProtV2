@@ -251,6 +251,8 @@ std::string MqttPublisher::BuildPayload(const Core::TagValue& tv) const {
 }
 
 std::string MqttPublisher::BuildSignature(const Core::TagValue& tv) {
+    // Same tuple as Core::TypedValueEquals + quality: type | quality | value.
+    // Timestamps are excluded so publishMode=changed does not fire on every poll.
     const Core::TypedValue& v = tv.typedValue;
     std::string s = std::string(TypeName(v.type)) + "|" + QualityName(tv.quality) + "|";
     switch (v.type) {

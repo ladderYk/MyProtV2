@@ -1,6 +1,8 @@
 // tests/Southbound.Tests/TagValueSinkTests.cpp — 单一写入口语义单元测试
-// 覆盖: Good/Bad/Uncertain 三条路径、valueChanged 自比较、converters、静默保留上次值。
+// 覆盖: Good/Bad/Uncertain 三条路径、converters、静默保留上次值、重载后基线清理。
+// 变化位由 LatestValueStore 计算, 因此写入统一经 store 后再断言。
 
+#include "MyProt/Polling/LatestValueStore.hpp"
 #include "MyProt/Southbound/TagValueSink.hpp"
 #include "MiniTest.hpp"
 
@@ -18,12 +20,18 @@ using MyProt::Core::ValueType;
 using MyProt::Southbound::TagValueSink;
 
 struct Capture {
-    std::vector<TagValue> values;
+    MyProt::Polling::LatestValueStore store;
+    std::vector<TagValue> values;   // 经 store 计算变化位后的写入序列
 
     TagValueSink::StoreWriter Writer() {
         Capture* self = this;
         return [self](const std::vector<TagValue>& batch) {
-            self->values.insert(self->values.end(), batch.begin(), batch.end());
+            self->store.Update(batch);
+            for (std::size_t i = 0; i < batch.size(); ++i) {
+                TagValue stored;
+                if (self->store.Lookup(batch[i].tagName, stored))
+                    self->values.push_back(stored);
+            }
         };
     }
 };
@@ -119,7 +127,7 @@ TEST(TagValueSinkTest, SilentKeepsLastValueAndDegradesQuality) {
 
     ASSERT_EQ(capture.values.size(), static_cast<std::size_t>(2));
     EXPECT_TRUE(capture.values[1].quality == QualityCode::Uncertain);
-    EXPECT_FALSE(capture.values[1].valueChanged);
+    EXPECT_TRUE(capture.values[1].valueChanged);      // 值不变但质量降级 → 算变化
     EXPECT_TRUE(capture.values[1].typedValue.type == ValueType::Double);
     EXPECT_EQ(capture.values[1].typedValue.d, 18.0);
 }
@@ -137,6 +145,8 @@ TEST(TagValueSinkTest, ResetForgetsChangeBaseline) {
     sink.Emit(tag, Number(5.0), 200, raw);
     EXPECT_FALSE(capture.values[1].valueChanged);
 
+    // 热重载: store 与 sink 的基线一起清掉 → 下一次写入重新算首帧
+    capture.store.Clear();
     sink.Reset();
     sink.Emit(tag, Number(5.0), 300, raw);
     EXPECT_TRUE(capture.values[2].valueChanged);

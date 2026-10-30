@@ -100,6 +100,23 @@ private:
 
 `PollStats` (`src/Polling/include/MyProt/Polling/PollStats.hpp`) keeps only two `std::atomic<int64_t>` fields: `totalReads` / `activeTags` (read counters live in `Core::Metrics` as described above).
 
+### Change detection
+
+`LatestValueStore::Update` is the **single place** where `TagValue::valueChanged` is computed: it compares against the previously written sample, so polling and southbound push share one definition.
+
+```
+changed = first write (no baseline)
+       || quality != previous quality
+       || !TypedValueEquals(typedValue, previous typedValue)   // Core/Value.hpp
+```
+
+- **Not compared**: `timestamp` / `requestId` / `rawData` / `lastError` - otherwise every sample would look "changed"
+- **Quality wins**: identical value with a quality transition (e.g. `Good->Uncertain`) still counts as changed, so upstream sees the degradation
+- **NaN always changes**: `Float/Double` compare with `==`; NaN never equals itself, so every NaN sample sets the flag (usable as an anomaly signal)
+- **Producers never set it**: the field is meaningless on `TagValue`s built by `PollingEngine` / `TagReader` / `TagValueSink`; consumers must read the copy written back by the store (`Lookup` / `Snapshot`)
+
+Three downstream consumers share this source: `changed` in `/api/data/latest`, `changed` in SSE `snapshot`, and the MQTT `publishMode=changed` filter (which uses `BuildSignature` with the same semantics, see [modules/11](./11_Northbound.md)).
+
 ### Hot-reload generation guard
 
 `Start` increments `_generation` and every `PollGroup` records the generation it was assembled with. Every async callback entry point (GOC completion, backoff resume, `ReadBatch` completion, `PollBatchChain` entry) validates the generation first:
@@ -113,7 +130,7 @@ private:
 For `Bad` values caused by `CircuitOpen`, the dispatcher translates them into `Uncertain` with the previous value before writing to `LatestValueStore`:
 
 - Condition: `tv.quality == Bad && tv.lastError.code == CircuitOpen`
-- It looks up `latest.Lookup(tagName, last)`; if the previous quality was **`Good` or `Uncertain`** it replaces `typedValue`, sets `valueChanged = false`, `quality = Uncertain` and clears `lastError`
+- It looks up `latest.Lookup(tagName, last)`; if the previous quality was **`Good` or `Uncertain`** it replaces `typedValue`, sets `quality = Uncertain` and clears `lastError` (`valueChanged` is then computed by `LatestValueStore::Update`: same value, `Good->Uncertain` quality => true)
 - Both `Good` and `Uncertain` are accepted; accepting only `Good` would make the **second polling cycle degrade to `Bad`** while the breaker stays open
 
 **Effect**: while a device is offline `/api/data/latest` returns `Uncertain` plus the last value (instead of `Bad` plus 0), so the UI does not flicker; it flips back to `Good` automatically once the device recovers.

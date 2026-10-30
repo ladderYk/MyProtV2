@@ -1,6 +1,10 @@
 // src/Polling/include/MyProt/Polling/LatestValueStore.hpp
 // Latest-value snapshot store - keeps each tag's most recent acquisition result, queried by /api/data/latest
-// Thread safety: written by the PollingEngine io thread (Update), read by the WebApi thread (Snapshot)
+// Thread safety: written by the PollingEngine io thread and the Southbound io thread (Update),
+//                read by the WebApi thread (Snapshot).
+// Change detection: Update() is the single place that derives TagValue::valueChanged
+//                (first sample, or type+value or quality differ from the previous write;
+//                timestamps are ignored). Producers must not rely on their own flag.
 
 #pragma once
 #include <map>
@@ -14,7 +18,9 @@ namespace MyProt { namespace Polling {
 
 class LatestValueStore {
 public:
-    /// Batch-update the latest values (called on the PollingEngine callback thread; for same-named tags a later write overrides an earlier one)
+    /// Batch-update the latest values (called on the PollingEngine / Southbound io thread;
+    /// for same-named tags a later write overrides an earlier one).
+    /// Derives valueChanged for each item from the previously stored sample.
     void Update(const std::vector<Core::TagValue>& values);
 
     /// Full snapshot (sorted by tagName); when deviceFilter is non-empty, filter by deviceId prefix

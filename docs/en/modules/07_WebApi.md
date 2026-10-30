@@ -40,7 +40,9 @@ data: {"timestamp":"2026-08-27T10:00:01.534Z","tags":[{"name":"Tank.PV","value":
 ```
 
 **`changed` semantics**: `true` only when the **value or quality changed** relative to the previous
-cycle; clients can use it to skip duplicate rows and save rendering cost (measured: 1000 tags at 1 Hz
+cycle. It is computed by `LatestValueStore::Update` at write time (first write, quality transition, or
+type+value inequality; `timestamp` / `requestId` do not participate). Clients can use it to skip
+duplicate rows and save rendering cost (measured: 1000 tags at 1 Hz
 costs about 250 KB/s including `changed=false` rows; after the optimization about 8 KB/s).
 
 **`finalType` decides the `value` encoding**:
@@ -485,7 +487,8 @@ WebApi thread                  io thread                          metrics
 > never race**; but a stuck WebApi thread (e.g. a hung io thread) produces a 502 Timeout, which relies
 > on the [08_App §8.1 step 9](./08_App.md) main-loop `IsRunning()==false` fallback. `quality` is
 > `Good / Uncertain / Bad`; `value` follows `finalType` (ByteArray becomes an uppercase hex string);
-> `changed` says whether the value changed relative to the previous cycle.
+> `changed` says whether the value or quality changed relative to the previous cycle (computed by
+> `LatestValueStore::Update` when the sample is written).
 
 ## 7.5 write.readBack - read-back after writing (P1 B item)
 

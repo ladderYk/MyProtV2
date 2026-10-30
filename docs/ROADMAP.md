@@ -26,7 +26,7 @@
 | 13 | FileWatcher 强化（debounce + 链路通知） | P2 | 🔧 | `Service/ConfigStore` | 当前已支持热重载，未做事件总线 |
 | 14 | 配置迁移工具（schema 升级） | P3 | 📋 | `scripts/migrate` | 当前不自动迁移 |
 | 15 | `TagValue.remoteTimestamp` / `unit` 字段 | P2 | 🔧 | `TagValue` | 需协议层时间戳抽象；当前仅「网关时间」 |
-| 16 | 上报过滤（变化上报 / 死区） | P2 | 🚧 | `Polling` 发布层 | 原 `deadband` / `reportMode` 字段已删除（无消费落点，见 ADR-0003）；MQTT 北向通道已实装 `publishMode=changed`（类型+值+质量，不含时间戳，见 [modules/11](./modules/11_Northbound.md)），HTTP/SSE 通道的死区/变化抑制仍待设计 |
+| 16 | 上报过滤（变化上报 / 死区） | P2 | 🚧 | `Polling` 发布层 | 原 `deadband` / `reportMode` 字段已删除（无消费落点，见 ADR-0003）。`changed` 已由 `LatestValueStore::Update` 在写入时统一计算（首次 / 质量码 / 类型+值，时间戳与 `requestId` 不参与，见 [modules/06 §变化检测](./modules/06_Polling.md#变化检测)），MQTT 北向以 `publishMode=changed` 消费该位；HTTP/SSE 的「只推变化」与可配置死区仍待设计 |
 | 17 | 模板**文本行原语**（`$"..."` 正文 + `$(Var)` 文本替换） | P2 | 📋 | `Engine` 文法 + `Service` 校验 | 面向文本/JSON 协议（如仙工 SEER：正文为 JSON，参数需文本替换）；当前以"JSON 的 hex 编码"绕过（见 [protocols/seer.md](./protocols/seer.md) §3.2/§6）；可顺带设计"响应文本 → 数值/字段"解码 |
 | 18 | 南向 MQTT 请求-应答（`MqttChannel`） | P2 | 📋 | `Transport` 新通道 | 把 MQTT 作为设备侧协议：需多路复用 + `requestId` correlation + 超时映射；与 `IChannel` 单在途语义冲突，需先定通道契约（见 [modules/11 §11.1](./modules/11_Northbound.md)） |
 | 19 | 南向 MQTT 订阅上报（设备主动推送） | P2 | ✅ 2026-10-25 已销账 | `src/Southbound` | 新增 `IInboundTransport`（MQTT 订阅 / TCP 监听）+ `device.ingest` + 标签 `source=push`；事件流入站经 `TagValueSink` 写入 `LatestValueStore`，不经轮询引擎。见 [modules/12](./modules/12_Southbound.md) / [ADR-0019](./adr/0019-southbound-push-ingest.md)。TCP 入站与 MQTT 订阅同一入口；二进制载荷/入站鉴权仍待扩展 |

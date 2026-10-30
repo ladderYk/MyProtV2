@@ -130,7 +130,7 @@
  +----------+     +-----------+     +-------------+
 ```
 
-> There is no standalone `DataDispatcher` component (callbacks go straight to consumers), and no reporting filter: the `TagDefinition.deadband` / `reportMode` fields **were deleted**; `valueChanged` is currently **not implemented** (the production read path never sets it, always false, passed through every cycle).
+> There is no standalone `DataDispatcher` component (callbacks go straight to consumers), and no reporting filter: the `TagDefinition.deadband` / `reportMode` fields **were deleted**. Change detection is computed in exactly one place, `LatestValueStore::Update`: it sets `valueChanged=true` on the first write, or when the type+value or the quality code differs from the previously written sample (`timestamp` / `requestId` are not compared). Polling and southbound push share this definition, and the `changed` flag in `/api/data/latest`, SSE and MQTT payloads all comes from it.
 
 ---
 

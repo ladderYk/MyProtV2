@@ -123,7 +123,7 @@
  +--------+      +-----------+      +-------------+
 ```
 
-> 无 `DataDispatcher` 独立组件（回调直送消费者），无上报过滤：`TagDefinition.deadband` / `reportMode` 字段**已删除**；`valueChanged` 只在推送入口（`TagValueSink`）按上次类型+值比较填充，生产轮询读路径从不置位（恒为 false）。
+> 无 `DataDispatcher` 独立组件（回调直送消费者），无上报过滤：`TagDefinition.deadband` / `reportMode` 字段**已删除**。变化检测统一由 `LatestValueStore::Update` 计算：首次写入，或「类型 + 值」或质量码相对上一次写入发生变化时置 `valueChanged=true`（时间戳 / `requestId` 不参与比较）；轮询与南向推送共用同一口径，`/api/data/latest`、SSE 与 MQTT 载荷的 `changed` 均来源于此。
 >
 > **南向入站**（`SouthboundManager`）不经 `ProtocolGateway`：MQTT/TCP 适配器 → `PayloadMapper` → `TagValueSink` → 同一个 `LatestValueStore`。`source=push` 标签由入站适配器产出、`source=poll` 标签由轮询管线产出，两者共享快照但互不仲裁。
 

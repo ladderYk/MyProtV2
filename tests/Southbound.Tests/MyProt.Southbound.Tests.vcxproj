@@ -144,6 +144,7 @@
     <ClCompile Include="..\MiniTestMain.cpp" />
     <ClCompile Include="PayloadMapperTests.cpp" />
     <ClCompile Include="TagValueSinkTests.cpp" />
+    <ClCompile Include="LatestValueStoreTests.cpp" />
     <ClCompile Include="IngestLoopbackTests.cpp" />
   </ItemGroup>
   <ItemGroup>

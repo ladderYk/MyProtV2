@@ -230,6 +230,7 @@ if(MYPROT_BUILD_TESTS)
         tests/Southbound.Tests/IngestLoopbackTests.cpp
         tests/Southbound.Tests/PayloadMapperTests.cpp
         tests/Southbound.Tests/TagValueSinkTests.cpp
+        tests/Southbound.Tests/LatestValueStoreTests.cpp
     )
     target_link_libraries(MyProt.Southbound.Tests PRIVATE
         myprot_test_main myprot_southbound myprot_northbound myprot_polling)

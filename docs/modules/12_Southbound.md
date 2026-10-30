@@ -16,7 +16,7 @@
 | TCP 监听（`LengthField` / `Fixed` 切帧、多连接） | 二进制载荷编解码（v1 仅 JSON） |
 | topic / JSON 载荷 → 标签映射（`tagFrom=topic|payload`） | 下行命令 / 写路径（仍走 `POST /api/data/write`） |
 | 静默看门狗（`maxSilenceMs` → `Uncertain`）、解析失败 → `Bad` | QoS2、MQTT 5.0、TLS、WebSocket |
-| `converters` 读后换算、`valueChanged` 自维护 | 入站报文持久化 / 历史回放 |
+| `converters` 读后换算、变化位由 `LatestValueStore` 统一判定 | 入站报文持久化 / 历史回放 |
 
 **单一来源**：标签 `source` 只能是 `poll` 或 `push`。`push` 标签在 `PollingEngine::Start` 入口被过滤，不参与轮询、不声明 `operation`；两种来源之间**不做仲裁**（不按时间戳择新）。
 
@@ -53,7 +53,7 @@ Southbound/
 - `Apply` = `Stop()` + `Start()`：先停旧适配器（`_running=false` → `io.stop()` → `join`）再重建，**不在轮询线程上做阻塞 I/O**
 - 看门狗在 IO 线程启动**之前**注册（`ScheduleWatchdog`），避免跨线程修改 timer
 - `Stop` 顺序：置位 → 停 io → join → 逐个 `transport->Stop()` → 清绑定 → `_sink.Reset()` → timer/work/io 释放
-- `TagValueSink` 内部 `std::mutex` + `_last` 变化基线；`LatestValueStore::Update` 自身线程安全
+- `TagValueSink` 内部 `std::mutex` + `_last`（仅 `EmitSilent` 保留上次值用，不参与变化判定）；`LatestValueStore::Update` 自身线程安全，`valueChanged` 在写入时统一计算
 
 ## 12.4 数据流
 
@@ -89,11 +89,13 @@ TCP 帧      ──┘                              │
 
 ## 12.5 质量语义
 
-| 事件 | 质量 | 值 | valueChanged |
+| 事件 | 质量 | 值 | valueChanged（由 `LatestValueStore::Update` 判定） |
 |------|------|----|:--:|
-| 正常入站 | `Good` | 新值（可经 `converters`） | 与上次比较（类型 + 值） |
-| JSON/类型/映射失败 | `Bad` | `Empty` + `lastError(ParseError)` | `true`（质量跃迁） |
-| 静默超时（`maxSilenceMs>0`） | `Uncertain` | **保留上次值** | `false`（只降质量） |
+| 正常入站 | `Good` | 新值（可经 `converters`） | 与上次写入比较（类型 + 值）；同值重写（仅时间戳变化）→ `false` |
+| JSON/类型/映射失败 | `Bad` | `Empty` + `lastError(ParseError)` | 首次或质量码变化 → `true`；连续 `Bad` 且值同为 `Empty` → `false` |
+| 静默超时（`maxSilenceMs>0`） | `Uncertain` | **保留上次值** | 质量 `Good→Uncertain` → `true`（值相同也算变化）；连续静默 → `false` |
+
+> 判定规则：`changed = 首次写入 || 质量码变化 || TypedValueEquals 不等`，时间戳 / `requestId` 不参与比较；NaN 与 NaN 视为不等（每次采样都算变化）。
 
 - 静默从绑定启动时刻起算（不是首帧时刻），**每段静默只发一次** `Uncertain`；收到下一帧即复位并打 `INFO` 恢复日志
 - 看门狗周期 500ms，属于"故障检测"而非采样节奏
@@ -132,7 +134,8 @@ TCP 帧      ──┘                              │
 | 测试 | 覆盖 |
 |------|------|
 | `tests/Southbound.Tests/PayloadMapperTests.cpp` | topic 段 1-based、单值/批量/标量、`defaultTag` 回退、坏 JSON、`Auto` 推断、显式类型优先、越界拒绝 |
-| `tests/Southbound.Tests/TagValueSinkTests.cpp` | `Good` + `valueChanged` 自比较、`converters`、`Bad` + `ParseError`、`Silent` 保留上次值、`Reset` 清基线 |
+| `tests/Southbound.Tests/TagValueSinkTests.cpp` | `converters`、`Bad` + `ParseError`、`EmitSilent` 保留上次值并降质量、`Reset` 清 `_last` |
+| `tests/Southbound.Tests/LatestValueStoreTests.cpp` | 变化位判定：首次、仅时间戳变化、值/质量变化、类型变化、ByteArray 按内容、NaN 恒变、`Clear` 清基线 |
 | `tests/Southbound.Tests/IngestLoopbackTests.cpp` | TCP `Fixed` 粘包切两帧、进程内假 broker 的 CONNECT/SUBSCRIBE/SUBACK/PUBLISH 环回、Manager 端到端映射 + 静默降级 |
 | `tests/Northbound.Tests/MqttCodecTests.cpp` | SUBSCRIBE 报文布局 / SUBACK 解码 |
 

@@ -33,7 +33,7 @@ event: snapshot
 data: {"timestamp":"2026-08-27T10:00:01.534Z","tags":[{"name":"Tank.PV","value":1234,"quality":"Good","finalType":"UINT16","changed":false}, ...]}
 ```
 
-**changed 字段语义**：本周期与上周期相比**值或质量发生变化**才为 `true`；客户端可据此忽略重复行节省渲染开销（实测 1000 tags × 1Hz 时带宽约 250KB/s 含 changed=false；优化后约 8KB/s）。
+**changed 字段语义**：本周期与上周期相比**值或质量发生变化**才为 `true`；判定由 `LatestValueStore::Update` 在写入时完成（首次写入 / 类型+值 / 质量变化），时间戳不参与。客户端可据此忽略重复行节省渲染开销（实测 1000 tags × 1Hz 时带宽约 250KB/s 含 changed=false；优化后约 8KB/s）。
 
 **finalType 决定 value 编码**：
 
@@ -436,7 +436,7 @@ WebApi 线程                    io 线程                            metrics
 | 502 | 10s 超时（future.wait_for 失败）| `Timeout` | `{"error":"写操作等待超时"}` |
 | 503 | read-back 不一致（P1 B 销账项）| `ReadBackMismatch` | `{"error":"read-back 不一致: expected=…, got=…"}` |
 
-> **注意**：`g_running` 标志位 + io 串行保证下，**热重载与 in-flight 写不会产生数据竞争**；但 WebApi 线程被卡死时（如 io 线程 hang）会触发 502 Timeout，需配合 [08_App §8.1 步骤 9](file:///d:/workSpaces/c++/MyProt-master/docs/modules/08_App.md) 主循环检查 `IsRunning()==false` 兜底。`quality` 为 `Good / Uncertain / Bad`；`value` 按 `finalType` 输出（ByteArray 转十六进制大写字符串）；`changed` 为本周期相对上周期是否变化。
+> **注意**：`g_running` 标志位 + io 串行保证下，**热重载与 in-flight 写不会产生数据竞争**；但 WebApi 线程被卡死时（如 io 线程 hang）会触发 502 Timeout，需配合 [08_App §8.1 步骤 9](file:///d:/workSpaces/c++/MyProt-master/docs/modules/08_App.md) 主循环检查 `IsRunning()==false` 兜底。`quality` 为 `Good / Uncertain / Bad`；`value` 按 `finalType` 输出（ByteArray 转十六进制大写字符串）；`changed` 表示该标签相对上一次写入是否变化（`LatestValueStore` 统一判定，时间戳不参与）。
 
 ## 7.5 write.readBack — 写后读回（P1 B 销账项）
 
