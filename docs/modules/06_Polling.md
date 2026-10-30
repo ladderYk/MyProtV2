@@ -78,7 +78,7 @@ private:
 ### 生命周期与调度
 
 - **`Start`**：`_running=true`、`_generation++`、清空并重建 `_groups`。按 `(scanRateMs, deviceId)` 建组（设备级独立 timer + 独立 deadline 预算，ADR-0004 R2）；每组一个 `steady_timer` 并立即 `ScheduleNext`。`direction="write"` 的标签**不参与轮询**。
-- **停用设备（KI-04）**：`device.enabled=false` 不建组、其标签（非 `write`/非 `push`）不进入 `pollTags`，启动时将 `myprot_device_lifecycle_state` 置于 `Disabled` 并打 INFO 日志；热重载改回 `true` 后随下一轮 `Start` 正常建组。
+- **停用设备（KI-04）**：`device.enabled=false` 不建组、其标签（非 `write`/非 `push`）不进入 `pollTags`，启动时将 `myprot_device_lifecycle_state` 置于 `Disabled` 并打 INFO 日志；热重载改回 `true` 后随下一轮 `Start` 正常建组。运行时因 `Degraded` 累积进入 `Disabled` 的设备同样退出采集链：`OnTimerFire` 检测到 `GetLifecycle()==Disabled` 仅续排定时器，不再调 `GetOrCreateChannel`、不产出 Bad、不累计失败计数（触发禁用那一轮仍正常输出一次 Bad）；`Disabled` 为会话内终态，恢复只能靠热重载重建 `PollGroup`。
 - **`Stop`**：`_stopping=true`、`_running=false`、取消各组定时器并清空 `_groups`。
 - **`OnTimerFire`**：`_stopping` / 代际不符 / `ec`（已取消）直接返回；`group->busy` 为真则**跳过本轮**（背压），否则置 `busy=true`、设 `batchDeadline = now + scanRateMs`，进入 `ProcessDevice`。
 

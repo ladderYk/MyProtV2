@@ -431,7 +431,7 @@ New ──(GOC)──► Connecting ──(握手+连接成功)──► Connect
 ### 自动禁用与恢复（KI-04）
 
 - **累积粒度**：`SetLifecycle(Degraded)` 每次真实迁移（前一状态非 `Degraded`）计 1 轮；同状态重复设置幂等不计。`Connected` 将计数清零，因此"抖动但偶发连上"的设备不会被误禁用。
-- **阈值**：`resilience.disableAfterDegraded`（全局块或设备覆盖，默认 `10`，`0` = 永不自动禁用）。达到阈值的那次迁移直接落到 `Disabled`，并打 `WARN` 日志。
+- **阈值**：`resilience.disableAfterDegraded`（全局块或设备覆盖，默认 `10`，`0` = 永不自动禁用）。达到阈值的那次迁移直接落到 `Disabled`，并打 `WARN` 日志。该设备随即退出轮询采集链（不再调 `GetOrCreateChannel`、不产出 Bad、不累计 `poll_read_failures_total`），仅保留定时器空转，见 modules/06_Polling.md。
 - **配置停用**：`device.enabled=false` 在构造时即钉为 `Disabled`；轮询侧不建组、不 collect 其标签，南向侧不建订阅/不占端口，写请求直接返回 `ConfigError("device disabled")`。
 - **恢复**：`Disabled` 是**会话内终态**；唯一恢复路径是配置热重载（改回 `enabled=true` 或调整阈值后保存），`ResetDevices` 重建 `SessionContext` 并重新进入 `New`。无独立 API，避免误操作把故障设备的无限重连风暴"一键复活"。
 - **兼容性**：两个字段均为可选增量（`enabled` 默认 `true`、`disableAfterDegraded` 默认 `10`），旧配置行为不变，`schemaVersion` 不升代。

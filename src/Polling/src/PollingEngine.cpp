@@ -166,6 +166,22 @@ void PollingEngine::OnTimerFire(std::shared_ptr<PollGroup> group,
         ScheduleNext(group);   // 背压: 上一批未完成, 跳过本轮
         return;
     }
+
+    // KI-04: 已被判定 Disabled 的设备不再进入采集链。
+    // 若继续走 ProcessDevice, GetOrCreateChannel 每轮都直接返回 ConfigError,
+    // 虽不产生物理连接, 但仍会按扫描周期产出 Bad 值、累计失败计数并刷日志;
+    // 这里只保留定时器空转等待 (Disabled 为会话内终态, 恢复只能靠热重载重建组,
+    // Start 会重建 PollGroup, 因此跳过不会漏掉恢复)。
+    if (!group->mergedRequests.empty()) {
+        const std::string& deviceId = group->mergedRequests.front().deviceId;
+        std::shared_ptr<Service::SessionContext> session =
+            _gateway.GetChannelManager().GetSession(deviceId);
+        if (session &&
+            session->GetLifecycle() == Service::DeviceLifecycleState::Disabled) {
+            ScheduleNext(group);
+            return;
+        }
+    }
     group->busy = true;
 
     // 本轮 deadline 预算起点 (ADR-0004 §3): 重试/重连共享 scanRateMs 预算,
