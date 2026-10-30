@@ -58,6 +58,12 @@ void SouthboundManager::Start(const std::vector<Core::DeviceConfig>& devices,
 
     for (std::size_t i = 0; i < devices.size(); ++i) {
         const Core::DeviceConfig& device = devices[i];
+        // KI-04: 停用设备不建订阅/不占端口（与轮询侧同一开关）。
+        if (!device.enabled) {
+            LOG_INFO("Southbound", "设备 %s 已停用 (enabled=false), 跳过入站绑定",
+                     device.id.c_str());
+            continue;
+        }
         if (!device.ingest.has_value()) continue;
         const Core::IngestConfig& ingest = device.ingest.value();
         if (ingest.type != "mqtt" && ingest.type != "tcp") {

@@ -384,6 +384,9 @@ void ConfigValidator::validateResilience(const Core::ResilienceConfig& res,
     if (res.failureThreshold < 1)  r.addError(p + "failureThreshold 必须 ≥ 1");
     if (res.cooldownMs < 0)        r.addError(p + "cooldownMs 必须 ≥ 0");
     if (res.halfOpenProbes < 1)    r.addError(p + "halfOpenProbes 必须 ≥ 1");
+    if (res.disableAfterDegraded < 0) {
+        r.addError(p + "disableAfterDegraded 必须 ≥ 0 (0 = 不自动禁用)");
+    }
 }
 
 // ── 管理面 (§12) ──

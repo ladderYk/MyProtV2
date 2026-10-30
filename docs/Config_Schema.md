@@ -616,6 +616,7 @@ configs/
 |------|------|:--:|------|------|
 | `id` | string | ✓ | — | 全局唯一 |
 | `protocol` | string | ✓ | — | 引用 `protocolName` |
+| `enabled` | bool | ✗ | `true` | **设备启用开关**（KI-04）。`false` = 不轮询/不建连/不接收 `ingest`，生命周期直置 `Disabled`；热重载改回 `true` 即恢复。可选增量字段，不升 `schemaVersion` |
 | `connection` | object | ✓ | — | 见下；其中 `timeoutMs` 仅为**连接建立**超时 |
 | `ingest` | object | ✗ | null | **南向推送接入**（网关接收设备主动上报）；null = 仅轮询设备。字段见 §4.1 |
 | `requestTimeoutMs` | int | ✗ | 3000 | **单次请求-应答**超时（一发一收一解析）；该设备所有操作共用，为唯一配置点（2026-08-24 收敛，见 [ADR-0004](./adr/0004-timeout-retry-budget.md) R1） |
@@ -937,6 +938,7 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 | `failureThreshold` | int | 5 | 连续**逻辑读取失败**（预算耗尽）次数 → 熔断打开 |
 | `cooldownMs` | int | 10000 | 熔断打开持续时长；期间请求直接 `CircuitOpen` 快速失败，不发起 I/O |
 | `halfOpenProbes` | int | 1 | 半开态探测次数；成功 → 闭合，失败 → 重新打开 |
+| `disableAfterDegraded` | int | 10 | 连续 `Degraded` 轮次达到该值后设备固定为 `Disabled`（会话内终态，需热重载恢复）；`0` = 不自动禁用。一轮 = 一次真实的 `* → Degraded` 迁移，`Connected` 清零 |
 
 **退避公式**：第 k 次重试前等待 = `min(backoffMaxMs, backoffBaseMs × 2^(k-1))` + 抖动。
 
@@ -949,7 +951,7 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 
 **最坏耗时**：`worst_case = min(deadline, maxAttempts × device.requestTimeoutMs + Σ backoff(k))`。轮询场景被 `scanRateMs` 封顶，按需场景被 10000ms 封顶。
 
-**校验**（归 §7 设备级顶层，不另编号）：`maxAttempts ≥ 1`、`backoffBaseMs ≥ 0`、`backoffMaxMs ≥ backoffBaseMs`、`failureThreshold ≥ 1`、`cooldownMs ≥ 0`、`halfOpenProbes ≥ 1`；越界报 Error。`DeviceConfig.resilience` 字段集须为全局块子集（未知字段报名称错误）。
+**校验**（归 §7 设备级顶层，不另编号）：`maxAttempts ≥ 1`、`backoffBaseMs ≥ 0`、`backoffMaxMs ≥ backoffBaseMs`、`failureThreshold ≥ 1`、`cooldownMs ≥ 0`、`halfOpenProbes ≥ 1`、`disableAfterDegraded ≥ 0`；越界报 Error。`DeviceConfig.resilience` 字段集须为全局块子集（未知字段报名称错误）。
 
 ```jsonc
 // ConfigRoot 顶层
@@ -960,7 +962,8 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
     "backoffMaxMs": 1000,
     "failureThreshold": 5,
     "cooldownMs": 10000,
-    "halfOpenProbes": 1
+    "halfOpenProbes": 1,
+    "disableAfterDegraded": 10
   },
   "devices": [ /* ... */ ],
   "tags": [ /* ... */ ]

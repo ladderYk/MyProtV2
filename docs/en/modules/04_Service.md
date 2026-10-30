@@ -380,13 +380,15 @@ enum class DeviceLifecycleState {
     New = 0,        // registered, never connected
     Connecting = 1, // physical connect / handshake in progress
     Connected = 2,  // physical channel + handshake both established, business-ready
-    Degraded = 3,   // channel dead or reconnecting, permanent-disable threshold not reached
-    Disabled = 4    // permanently disabled (unrecoverable errors such as protocol/handshake BuildError)
+    Degraded = 3,   // channel dead or reconnecting, consecutive-Degraded threshold not reached
+    Disabled = 4    // permanently disabled (config enabled=false / protocol-handshake BuildError /
+                    // accumulation threshold); terminal within a session, recoverable only by hot reload
 };
 
 // added to SessionContext:
 void SetLifecycle(DeviceLifecycleState s);            // idempotent: no transition when unchanged
 DeviceLifecycleState GetLifecycle() const;
+int GetDegradedStreak() const;                        // consecutive Degraded rounds (diagnostics/tests)
 }}
 ```
 
@@ -403,9 +405,10 @@ New --(GOC)--> Connecting --(handshake + connect ok)--> Connected
                                                        |
                                      (reconnect ok)----> Connected
 
-* --> Disabled   unrecoverable errors such as protocol/handshake BuildError
-  Disabled --> Connecting  requires a config hot reload to recover (the `enabled` field is not
-                            enabled this round; ResetDevices recreating the channel reconnects naturally)
+* --> Disabled   config enabled=false / protocol-handshake BuildError /
+  |              consecutive Degraded rounds reaching resilience.disableAfterDegraded
+  Disabled --> (new session)  config hot reload: ResetDevices rebuilds SessionContext
+  (Disabled is terminal within a session: the next GOC's Connecting cannot revive it)
 ```
 
 ### Trigger table
@@ -418,7 +421,16 @@ New --(GOC)--> Connecting --(handshake + connect ok)--> Connected
 | Connected -> Degraded | `PollingEngine` GOC failure / budget exhausted / retries exhausted on a connection-level error |
 | Degraded -> Connecting | the next timer round triggers GOC |
 | Degraded -> Connected | GOC completes successfully |
-| * -> Disabled | protocol/handshake `BuildError` (pending the "accumulate N times" policy) |
+| * -> Disabled | protocol/handshake `BuildError` (immediate); or consecutive `Degraded` rounds >= `resilience.disableAfterDegraded`; or `device.enabled=false` at construction |
+| Disabled -> (new session) | config hot reload only: `ChannelManager::ResetDevices` rebuilds `SessionContext` |
+
+### Auto-disable and recovery (KI-04)
+
+- **Counting granularity**: `SetLifecycle(Degraded)` counts 1 round per real transition (previous state != `Degraded`); repeated same-state calls are idempotent and never double-count. `Connected` resets the counter, so a flapping device that occasionally connects is not falsely disabled.
+- **Threshold**: `resilience.disableAfterDegraded` (global block or per-device override, default `10`, `0` = never auto-disable). The transition that reaches the threshold lands directly on `Disabled` and emits a `WARN` log.
+- **Administrative disable**: `device.enabled=false` pins the state to `Disabled` at construction; polling builds no group and collects none of its tags, southbound creates no subscription and takes no port, and writes return `ConfigError("device disabled")` immediately.
+- **Recovery**: `Disabled` is **terminal within a session**; the only recovery path is a config hot reload (set `enabled=true` or adjust the threshold and save), where `ResetDevices` rebuilds `SessionContext` and re-enters `New`. No dedicated API exists, so a broken device cannot be revived with one call into another reconnect storm.
+- **Compatibility**: both fields are optional additions (`enabled` defaults to `true`, `disableAfterDegraded` to `10`), legacy configs behave unchanged, and `schemaVersion` is not bumped.
 
 ### Fault classification (`Core::IsLifecycleDegrading`)
 | Error code | Category | Triggers Degraded |
@@ -447,16 +459,8 @@ myprot_device_lifecycle_transitions_total{device="PLC-001",from="New",to="Connec
 myprot_device_lifecycle_transitions_total{device="PLC-001",from="Connecting",to="Connected"} 1
 ```
 
-### Open items
-
-- **`Disabled` trigger condition**: currently only protocol/handshake `BuildError` triggers it immediately; the "N repeated `Degraded` -> `Disabled`" accumulation policy is not enabled, and neither N nor the counting window has been decided.
-- **`DeviceConfig.enabled` field**: not added yet (the current config scope is closed).
-
-> Registered in [ADR-0003 open issues](../../adr/0003-known-issues.md) *zh*.
-
----
-
 > §4.6 device lifecycle is orthogonal to the circuit breaker (§4.5); the trigger table and the fault
-> classification are consistent with each other.
+> classification are consistent with each other. Adjudicated: the `enabled` switch + `Degraded`
+> accumulation (default 10 rounds) + recovery via hot reload, see "Auto-disable and recovery" above.
 > **Previous**: [Transport module](./03_Transport.md)
 > **Next**: [Gateway module](./05_Gateway.md)

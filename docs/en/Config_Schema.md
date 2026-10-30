@@ -696,6 +696,7 @@ Device-level variables may also be referenced from `handshake[].requestTemplate`
 |------|------|:--:|------|------|
 | `id` | string | ✓ | — | Globally unique |
 | `protocol` | string | ✓ | — | References a `protocolName` |
+| `enabled` | bool | ✗ | `true` | **Administrative enable switch** (KI-04). `false` = no polling / no connect / no `ingest`, lifecycle pinned to `Disabled`; a hot reload setting it back to `true` restores the device. Optional additive field, no `schemaVersion` bump |
 | `connection` | object | ✓ | — | See below; its `timeoutMs` is the **connection-establishment** timeout only |
 | `requestTimeoutMs` | int | ✗ | 3000 | **Single request-response** timeout (one send, one receive, one parse); shared by all of the device's operations, the sole configuration point (converged 2026-08-24, see [ADR-0004](../adr/0004-timeout-retry-budget.md) *zh* R1) |
 | `username` | string | ✗ | null | Protocol-level auth credential (e.g. the S7 CPU password) |
@@ -916,6 +917,7 @@ If a module doc conflicts with this schema, **this document wins** (the schema i
 | `failureThreshold` | int | 5 | Consecutive **logical-read failures** (budget exhausted) count → circuit opens |
 | `cooldownMs` | int | 10000 | Circuit-open duration; during it requests fail fast with `CircuitOpen` and issue no I/O |
 | `halfOpenProbes` | int | 1 | Half-open probe count; success → close, failure → reopen |
+| `disableAfterDegraded` | int | 10 | Consecutive `Degraded` rounds reaching this value pin the device to `Disabled` (terminal within a session; recover via hot reload); `0` = never auto-disable. One round = one real `* -> Degraded` transition; `Connected` resets the counter |
 
 **Backoff formula**: wait before the k-th retry = `min(backoffMaxMs, backoffBaseMs × 2^(k-1))` + jitter.
 
@@ -928,7 +930,7 @@ If a module doc conflicts with this schema, **this document wins** (the schema i
 
 **Worst case**: `worst_case = min(deadline, maxAttempts × device.requestTimeoutMs + Σ backoff(k))`. Poll scenarios are capped by `scanRateMs`; on-demand scenarios are capped at 10000ms.
 
-**Validation** (belongs to §7 device-level top, not separately numbered): `maxAttempts ≥ 1`, `backoffBaseMs ≥ 0`, `backoffMaxMs ≥ backoffBaseMs`, `failureThreshold ≥ 1`, `cooldownMs ≥ 0`, `halfOpenProbes ≥ 1`; out of range = Error. `DeviceConfig.resilience`'s field set must be a subset of the global block (an unknown field reports a naming error).
+**Validation** (belongs to §7 device-level top, not separately numbered): `maxAttempts ≥ 1`, `backoffBaseMs ≥ 0`, `backoffMaxMs ≥ backoffBaseMs`, `failureThreshold ≥ 1`, `cooldownMs ≥ 0`, `halfOpenProbes ≥ 1`, `disableAfterDegraded ≥ 0`; out of range = Error. `DeviceConfig.resilience`'s field set must be a subset of the global block (an unknown field reports a naming error).
 
 ```jsonc
 // ConfigRoot top level
@@ -939,7 +941,8 @@ If a module doc conflicts with this schema, **this document wins** (the schema i
     "backoffMaxMs": 1000,
     "failureThreshold": 5,
     "cooldownMs": 10000,
-    "halfOpenProbes": 1
+    "halfOpenProbes": 1,
+    "disableAfterDegraded": 10
   },
   "devices": [ /* ... */ ],
   "tags": [ /* ... */ ]

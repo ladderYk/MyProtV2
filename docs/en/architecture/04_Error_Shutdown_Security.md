@@ -77,7 +77,7 @@ channel->SendReceive(request, frameCfg, timeoutMs,
 
 **Retry/backoff**: triggered only by the four `IsRetryable` read-error classes; `maxAttempts` defaults to 3 (read), 1 (write; writes are non-idempotent and never retry); backoff = `min(backoffMaxMs, backoffBaseMs × 2^(k-1))` + jitter.
 
-**Circuit breaker**: counts **logical-read failures** (budget exhausted); `failureThreshold` (default 5) consecutive → open; within `cooldownMs` (default 10000) requests return `CircuitOpen` directly and **issue no actual I/O** (the second anti-starvation gate on a shared bus); then `halfOpenProbes` (default 1) probes — success closes, failure reopens. Circuit-breaker state-machine wiring is still tracked in [ADR-0003](../../adr/0003-known-issues.md) *zh* KI-04/KI-05.
+**Circuit breaker**: counts **logical-read failures** (budget exhausted); `failureThreshold` (default 5) consecutive → open; within `cooldownMs` (default 10000) requests return `CircuitOpen` directly and **issue no actual I/O** (the second anti-starvation gate on a shared bus); then `halfOpenProbes` (default 1) probes — success closes, failure reopens. The breaker state machine is implemented in `SessionContext` (`Closed/Open/HalfOpen`, see [modules/04_Service.md §4.5](../modules/04_Service.md) *zh*); the device lifecycle (`Degraded` accumulation disable, `enabled` switch) is in §4.6 of the same document.
 
 ### 7.5 Quality-code mapping (Error → QualityCode)
 

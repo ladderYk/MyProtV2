@@ -11,8 +11,9 @@
 //
 // State-machine transition table (modules/04_Service.md §3, ADR-0004 §6):
 //
-//                  ┌────────── Disabled (disabled immediately on protocol/handshake BuildError;
-//                  │            "N cumulative Degraded -> disable" not implemented - KI-04)
+//                  ┌────────── Disabled (enabled=false at construction, handshake BuildError,
+//                  │            or N consecutive Degraded rounds reaching
+//                  │            resilience.disableAfterDegraded)
 //                  ▲
 //   New ──(GOC)──► Connecting ──(handshake+connect OK)──► Connected
 //                    │                                │
@@ -33,10 +34,12 @@
 //                                (network/timeout/channel dead) - protocol-level does not transition
 //   Degraded -> Connecting       the next-round timer triggers GOC
 //   Degraded -> Connected        GOC completes successfully
-//   * -> Disabled                protocol/handshake BuildError (immediate)
-//                                Note: DeviceConfig has no enabled field yet, no config-level
-//                                disable switch (KI-04 pending item)
-//   Disabled -> Connecting       config hot reload (ResetDevices rebuild)
+//   * -> Disabled                protocol/handshake BuildError (immediate, unrecoverable)
+//                                or consecutive Degraded rounds >= resilience.disableAfterDegraded
+//                                (0 = never auto-disable)
+//   Disabled -> (new session)    config hot reload (ResetDevices rebuild); Disabled is terminal
+//                                within one session so a still-broken device cannot flap back
+//   (config) -> Disabled         DeviceConfig.enabled = false (constructor pins the state)
 //
 // Fault classification (on the PollingEngine side):
 //   Connection-level (-> Degraded): ConnectFailure / Timeout / NetworkError /
@@ -60,7 +63,8 @@ enum class DeviceLifecycleState {
     Connecting = 1, // physical connection/handshake in progress
     Connected = 2,  // physical channel + handshake both established, business usable
     Degraded = 3,   // channel dead or reconnecting, not yet at the permanent-disable threshold
-    Disabled = 4    // permanently disabled (unrecoverable build error; enabled config switch KI-04 pending)
+    Disabled = 4    // permanently disabled (enabled=false, unrecoverable build error, or degradation threshold;
+                    // recovery only via config hot reload)
 };
 
 /// State name (for metric labels / logging)

@@ -407,10 +407,12 @@ struct ResilienceConfig {
     int failureThreshold;      // consecutive logical-read failures (budget exhausted) -> breaker opens
     int cooldownMs;            // breaker-open duration; during it, CircuitOpen fails fast
     int halfOpenProbes;        // half-open probe count
+    int disableAfterDegraded;  // consecutive Degraded rounds before the device is pinned Disabled; 0 = never (KI-04)
 
     ResilienceConfig()
         : maxAttempts(3), backoffBaseMs(100), backoffMaxMs(1000)
-        , failureThreshold(5), cooldownMs(10000), halfOpenProbes(1) {}
+        , failureThreshold(5), cooldownMs(10000), halfOpenProbes(1)
+        , disableAfterDegraded(10) {}
 };
 
 /// Management-plane security (Config_Schema §12 / ADR-0008). An optional top-level block in ConfigRoot; nullopt = all defaults.
@@ -484,6 +486,9 @@ struct IngestConfig {
 struct DeviceConfig {
     std::string id;
     std::string protocol;
+    // Administrative switch (KI-04): false = never connect/poll/ingest, lifecycle pinned to Disabled
+    // until a config hot reload re-creates the session. Default true (no behaviour change).
+    bool enabled;
     ConnectionConfig connection;
     int requestTimeoutMs;                  // single request-response timeout (ms); shared by all operations of this device - the sole config point (converged 2026-08-24)
     Optional<std::string> username;  // protocol-level auth credentials: injected as a template variable during handshake, masked in logs
@@ -493,7 +498,7 @@ struct DeviceConfig {
     // device-level template-variable defaults (§4): merged at load time into each tag's effective variable set, with the tag's explicit declaration taking precedence
     std::map<std::string, uint32_t> variables;
 
-    DeviceConfig() : requestTimeoutMs(3000) {}
+    DeviceConfig() : enabled(true), requestTimeoutMs(3000) {}
 };
 
 // ────────── protocol-family convention key names (the engine <-> protocol-template interface contract) ──────────

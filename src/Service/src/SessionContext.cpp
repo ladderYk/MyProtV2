@@ -26,14 +26,21 @@ SessionContext::SessionContext(const Core::DeviceConfig& config)
     , _consecutiveFailures(0)
     , _halfOpenProbes(0)
     , _openedAt()
-    , _lifecycle(DeviceLifecycleState::New) {
+    , _lifecycle(config.enabled ? DeviceLifecycleState::New
+                               : DeviceLifecycleState::Disabled)
+    , _degradedStreak(0) {
     // 熔断状态 gauge 从设备创建起即有序列 (0=Closed), 避免监控面板缺口
     Core::metrics::GaugeSet(Core::metrics::kCircuitState,
                             Core::metrics::Device(_config.id), 0.0);
-    // 设备生命周期 gauge 从设备创建起即有序列 (0=New), 监控面板无缺口
-    // (KI-04: 真正不可用者 (协议/握手 BuildError 等) 由 ChannelManager 迁入 Disabled)
+    // 设备生命周期 gauge 从设备创建起即有序列 (enabled=false 直接即 Disabled),
+    // 监控面板无缺口, 运维可直接看到「配置停用」与「自动停用」是同一状态。
     Core::metrics::GaugeSet(Core::metrics::kDeviceLifecycleState,
-                            Core::metrics::Device(_config.id), 0.0);
+                            Core::metrics::Device(_config.id),
+                            static_cast<double>(DeviceLifecycleGaugeValue(_lifecycle)));
+    if (!_config.enabled) {
+        LOG_INFO("Lifecycle", "设备 %s 配置停用 (enabled=false), 生命周期 = Disabled",
+                 _config.id.c_str());
+    }
 }
 
 Core::Optional<std::string> SessionContext::GetSessionVar(const std::string& name) const {
@@ -141,33 +148,62 @@ CircuitState SessionContext::GetCircuitState() const {
 
 void SessionContext::SetLifecycle(DeviceLifecycleState s) {
     DeviceLifecycleState from;
+    DeviceLifecycleState target = s;
+    bool autoDisabled = false;
+    int degradedStreak = 0;
     {
         std::lock_guard<std::mutex> lock(_mutex);
+        // Disabled 是会话内的终态: 只有热重载重建 SessionContext 才能恢复,
+        // 否则下一轮 GOC 的 Connecting 会把自动禁用又“救活”。
+        if (_lifecycle == DeviceLifecycleState::Disabled) return;
         if (_lifecycle == s) return;  // 幂等: 无变化不计转换
+
         from = _lifecycle;
-        _lifecycle = s;
+        if (s == DeviceLifecycleState::Connected) {
+            _degradedStreak = 0;      // 真正连上过一次 → 累积清零
+        } else if (s == DeviceLifecycleState::Degraded) {
+            ++_degradedStreak;
+            if (_resilience.disableAfterDegraded > 0
+                    && _degradedStreak >= _resilience.disableAfterDegraded) {
+                target = DeviceLifecycleState::Disabled;   // KI-04: 累积达到阈值 → 固定禁用
+                autoDisabled = true;
+            }
+        }
+        _lifecycle = target;
+        degradedStreak = _degradedStreak;
     }
     // 锁外做 IO (metric / log), 避免持锁开销
     const std::string deviceId = _config.id;
     Core::metrics::GaugeSet(Core::metrics::kDeviceLifecycleState,
                             Core::metrics::Device(deviceId),
-                            static_cast<double>(DeviceLifecycleGaugeValue(s)));
+                            static_cast<double>(DeviceLifecycleGaugeValue(target)));
     // 转换 counter: 三标签 (device, from, to), 用 MakeKey 路径直接走 Registry
     Core::MetricsRegistry::Labels lbl;
     lbl.push_back(std::make_pair(std::string("device"), deviceId));
     lbl.push_back(std::make_pair(std::string("from"), DeviceLifecycleName(from)));
-    lbl.push_back(std::make_pair(std::string("to"), DeviceLifecycleName(s)));
+    lbl.push_back(std::make_pair(std::string("to"), DeviceLifecycleName(target)));
     Core::MetricsRegistry::Instance().CounterAdd(
         Core::metrics::kDeviceLifecycleTransitionsTotal, lbl, 1.0);
     // INFO 级日志 (转换非高频, 一设备一状态变化一次)
     LOG_INFO("Lifecycle", "设备 %s 生命周期 %s → %s",
              deviceId.c_str(),
-             DeviceLifecycleName(from), DeviceLifecycleName(s));
+             DeviceLifecycleName(from), DeviceLifecycleName(target));
+    if (autoDisabled) {
+        LOG_WARN("Lifecycle",
+                 "设备 %s 连续 %d 轮 Degraded 达到阈值, 已固定禁用 "
+                 "(修改配置或热重载后恢复)",
+                 deviceId.c_str(), degradedStreak);
+    }
 }
 
 DeviceLifecycleState SessionContext::GetLifecycle() const {
     std::lock_guard<std::mutex> lock(_mutex);
     return _lifecycle;
+}
+
+int SessionContext::GetDegradedStreak() const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _degradedStreak;
 }
 
 }} // namespace MyProt::Service

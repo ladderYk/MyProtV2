@@ -40,11 +40,16 @@ public:
     CircuitState GetCircuitState() const;
 
     /// Set the device lifecycle state (KI-04; triggered by ChannelManager / PollingEngine)
-    /// On a state change, record the metric gauge + transition counter + log
+    /// On a state change, record the metric gauge + transition counter + log.
+    /// Degraded entries are counted; reaching resilience.disableAfterDegraded pins the device to
+    /// Disabled. Disabled is terminal for this session (only a hot reload re-creates it).
     void SetLifecycle(DeviceLifecycleState s);
 
     /// Get the current lifecycle state
     DeviceLifecycleState GetLifecycle() const;
+
+    /// Consecutive Degraded rounds since the last Connected (diagnostics / tests)
+    int GetDegradedStreak() const;
 
 private:
     Core::DeviceConfig _config;
@@ -62,6 +67,7 @@ private:
     // Device lifecycle (KI-04) - orthogonal to the circuit breaker: describes "whether the device is usable",
     // not "whether a request is let through". See DeviceLifecycle.hpp for details
     DeviceLifecycleState _lifecycle;
+    int _degradedStreak;   // consecutive Degraded rounds; reset on Connected
 };
 
 }} // namespace MyProt::Service

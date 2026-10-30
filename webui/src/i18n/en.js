@@ -234,6 +234,17 @@ export const EN = {
   '协议级仿真节; listenPort=0 即未启用。报文格式知识仍来自 transport/framing/operations':
     'Protocol-level simulation section; listenPort=0 disables it. Frame format knowledge still comes from transport/framing/operations',
   '全局韧性策略; 未设置 = 全取默认': 'Global resilience policy; unset = all defaults',
+  '设备启用开关; false = 不轮询/不建连/不订阅, 生命周期直置 Disabled, 热重载改回 true 即恢复':
+    'Device enable switch; false = no polling / no connect / no ingest, lifecycle pinned to Disabled, set back to true and hot reload to recover',
+  '连续 Degraded 轮数达到该值后设备固定为 Disabled (需热重载恢复), >=0; 0 = 不自动禁用':
+    'Consecutive Degraded rounds that pin the device to Disabled (recover via hot reload), >=0; 0 = never auto-disable',
+  '启用设备': 'Device enabled',
+  '关闭后不轮询/不建连/不订阅; 保存即热重载生效':
+    'When off: no polling / no connect / no ingest; saving hot-reloads it',
+  '降级禁用阈值': 'Degraded disable threshold',
+  '轮': 'rounds',
+  '0 = 不自动禁用; 连续 Degraded 达到该值后需热重载恢复':
+    '0 = never auto-disable; once consecutive Degraded rounds reach it, only a hot reload recovers',
   '管理面安全配置; 未设置 = 全取默认': 'Management-plane security settings; unset = all defaults',
   '设备列表, 见 device 节': 'Device list; see the device section',
   '标签定义列表, 见 tag 节': 'Tag definition list; see the tag section',

@@ -384,13 +384,16 @@ enum class DeviceLifecycleState {
     New = 0,        // 已注册, 从未连接
     Connecting = 1, // 物理连接/握手中
     Connected = 2,  // 物理通道+握手均已建立, 业务可用
-    Degraded = 3,   // 通道死了或正在重连, 未到永久禁用门槛
-    Disabled = 4    // 永久禁用 (协议/握手 BuildError 等不可恢复错误)
-};
+    Degraded = 3,   // 通道死了或正在重连, 连续 Degraded 轮次未达禁用阈值
+    Disabled = 4    // 永久禁用 (配置 enabled=false / 协议握手 BuildError / 累积达阈值);
+                    // 会话内终态, 仅配置热重载可恢复
+```
 
+```cpp
 // SessionContext 增设:
 void SetLifecycle(DeviceLifecycleState s);            // 幂等: 无变化不计转换
 DeviceLifecycleState GetLifecycle() const;
+int GetDegradedStreak() const;                        // 连续 Degraded 轮次 (诊断/测试)
 }}
 ```
 
@@ -406,9 +409,10 @@ New ──(GOC)──► Connecting ──(握手+连接成功)──► Connect
                                             │
                           (重连成功)────────► Connected
 
-* ──► Disabled   协议/握手 BuildError 等不可恢复错误
-  Disabled ──► Connecting  需配置热重载恢复 (本轮未启用 enabled 字段,
-                              ResetDevices 重建通道即可自然重连)
+* ──► Disabled   配置 enabled=false / 协议或握手 BuildError /
+  │              连续 Degraded 轮次达到 resilience.disableAfterDegraded
+  Disabled ──► (新会话)  配置热重载: ResetDevices 重建 SessionContext 即恢复
+  (会话内 Disabled 为终态: 下一轮 GOC 的 Connecting 不会把它"救活")
 ```
 
 ### 触发者表
@@ -421,7 +425,16 @@ New ──(GOC)──► Connecting ──(握手+连接成功)──► Connect
 | Connected → Degraded | `PollingEngine` GOC 失败 / 预算耗尽 / 重试耗尽且属连接级错误 |
 | Degraded → Connecting | 下一轮 timer 触发 GOC |
 | Degraded → Connected | GOC 成功完成 |
-| * → Disabled | 协议/握手 `BuildError`（待后续"重复 N 次累积策略"启用） |
+| * → Disabled | 协议/握手 `BuildError`（即时）；或连续 `Degraded` 轮次 ≥ `resilience.disableAfterDegraded`；或构造时 `device.enabled=false` |
+| Disabled → (新会话) | 仅配置热重载：`ChannelManager::ResetDevices` 重建 `SessionContext` |
+
+### 自动禁用与恢复（KI-04）
+
+- **累积粒度**：`SetLifecycle(Degraded)` 每次真实迁移（前一状态非 `Degraded`）计 1 轮；同状态重复设置幂等不计。`Connected` 将计数清零，因此"抖动但偶发连上"的设备不会被误禁用。
+- **阈值**：`resilience.disableAfterDegraded`（全局块或设备覆盖，默认 `10`，`0` = 永不自动禁用）。达到阈值的那次迁移直接落到 `Disabled`，并打 `WARN` 日志。
+- **配置停用**：`device.enabled=false` 在构造时即钉为 `Disabled`；轮询侧不建组、不 collect 其标签，南向侧不建订阅/不占端口，写请求直接返回 `ConfigError("device disabled")`。
+- **恢复**：`Disabled` 是**会话内终态**；唯一恢复路径是配置热重载（改回 `enabled=true` 或调整阈值后保存），`ResetDevices` 重建 `SessionContext` 并重新进入 `New`。无独立 API，避免误操作把故障设备的无限重连风暴"一键复活"。
+- **兼容性**：两个字段均为可选增量（`enabled` 默认 `true`、`disableAfterDegraded` 默认 `10`），旧配置行为不变，`schemaVersion` 不升代。
 
 ### 故障分类（`Core::IsLifecycleDegrading`）
 | 错误码 | 类别 | 是否触发 Degraded |
@@ -450,12 +463,7 @@ myprot_device_lifecycle_transitions_total{device="PLC-001",from="New",to="Connec
 myprot_device_lifecycle_transitions_total{device="PLC-001",from="Connecting",to="Connected"} 1
 ```
 
-### 仍待定项
-
-- **`Disabled` 触发条件**：当前仅协议/握手 `BuildError` 即时触发；"重复 N 次 `Degraded` 自动 → `Disabled`" 的累积策略未启用，N 的取值与计数窗口未定。
-- **`DeviceConfig.enabled` 字段**：尚未添加（当前 Config 范围封闭）。
-
-> 登记在 [ADR-0003 未决问题登记](../adr/0003-known-issues.md)。
+> §4.6 设备生命周期状态机与断路器（§4.5）正交，触发者表与故障分类一致。已裁决项：`enabled` 开关 + `Degraded` 累积禁用（默认 10 轮）+ 热重载恢复，见上文"自动禁用与恢复"。
 
 ---
 

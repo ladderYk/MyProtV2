@@ -444,7 +444,8 @@ bool ParseFramingDoc(const json& j, Core::FramingConfig& f, std::string& err) {
 bool ParseResilienceDoc(const json& j, Core::ResilienceConfig& res, std::string& err) {
     static const char* const kKnown[] = {
         "maxAttempts", "backoffBaseMs", "backoffMaxMs",
-        "failureThreshold", "cooldownMs", "halfOpenProbes"
+        "failureThreshold", "cooldownMs", "halfOpenProbes",
+        "disableAfterDegraded"
     };
     for (json::const_iterator it = j.begin(); it != j.end(); ++it) {
         bool known = false;
@@ -458,7 +459,8 @@ bool ParseResilienceDoc(const json& j, Core::ResilienceConfig& res, std::string&
         && OptInt(j, "backoffMaxMs", res.backoffMaxMs, err)
         && OptInt(j, "failureThreshold", res.failureThreshold, err)
         && OptInt(j, "cooldownMs", res.cooldownMs, err)
-        && OptInt(j, "halfOpenProbes", res.halfOpenProbes, err);
+        && OptInt(j, "halfOpenProbes", res.halfOpenProbes, err)
+        && OptInt(j, "disableAfterDegraded", res.disableAfterDegraded, err);
 }
 
 /// §12 管理面块解析 (webRoot 为本机扩展字段, 不入 §12 校验范围)
@@ -1309,7 +1311,8 @@ bool ParseRootDocImpl(const json& doc, int defaultVer,
             if (!dj.is_object()) { err = "devices[" + std::to_string(i) + "] 须为对象"; return false; }
             Core::DeviceConfig dev;
             if (!OptStr(dj, "id", dev.id, err)
-                    || !OptStr(dj, "protocol", dev.protocol, err)) {
+                    || !OptStr(dj, "protocol", dev.protocol, err)
+                    || !OptBool(dj, "enabled", dev.enabled, err)) {
                 return false;
             }
             // username/password 为可选字符串 (Optional<string>)

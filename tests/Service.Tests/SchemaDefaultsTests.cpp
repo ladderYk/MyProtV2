@@ -131,6 +131,8 @@ TEST(SchemaDefaultsTest, RootSectionMatchesConfigPoco) {
     ExpectDefault(root, "resilience", "failureThreshold", IntStr(res.failureThreshold));
     ExpectDefault(root, "resilience", "cooldownMs", IntStr(res.cooldownMs));
     ExpectDefault(root, "resilience", "halfOpenProbes", IntStr(res.halfOpenProbes));
+    ExpectDefault(root, "resilience", "disableAfterDegraded",
+                  IntStr(res.disableAfterDegraded));
 
     ExpectDefault(root, "webApi", "bindAddress", web.bindAddress);
     ExpectDefault(root, "webApi", "certFile", web.certFile);
@@ -200,8 +202,11 @@ TEST(SchemaDefaultsTest, DeviceSectionMatchesConfigPoco) {
     ExpectDefault(d, "connection", "port", UIntStr(conn.port));
     ExpectDefault(d, "connection", "timeoutMs", IntStr(conn.timeoutMs));
     ExpectDefault(d, "requestTimeoutMs", IntStr(dev.requestTimeoutMs));
+    ExpectDefault(d, "enabled", BoolStr(dev.enabled));
     ExpectDefault(d, "resilience", "maxAttempts", IntStr(res.maxAttempts));
     ExpectDefault(d, "resilience", "cooldownMs", IntStr(res.cooldownMs));
+    ExpectDefault(d, "resilience", "disableAfterDegraded",
+                  IntStr(res.disableAfterDegraded));
 }
 
 // ── 标签层: 采集/写能力默认值 ──

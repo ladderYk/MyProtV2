@@ -124,7 +124,7 @@ TCP 帧      ──┘                              │
 
 配置位于 `tags.json` 的**设备段** `ingest`（[Config_Schema §4.1](../Config_Schema.md#41-ingest南向推送接入设备级)）与**标签段** `source`（[§5](../Config_Schema.md#5-标签配置-tagdefinition)）：
 
-1. 设备 `ingest` 缺省 = 仅轮询；配置了 `ingest` 但无 `source=push` 标签 = 跳过并 WARN（不占端口/连接）
+1. 设备 `ingest` 缺省 = 仅轮询；配置了 `ingest` 但无 `source=push` 标签 = 跳过并 WARN（不占端口/连接）；`device.enabled=false`（KI-04）时整个设备跳过入站绑定，热重载改回 `true` 后随 `Apply` 重建
 2. `ingest.type` 只接受 `mqtt` / `tcp`；其余在加载期报错
 3. 热重载：任一配置保存 → `ConfigStore` 重载 → `RuntimeGlue::ApplyRuntimeSync` → `ctx.southbound->Apply(devices, tags)`，与轮询/北向同一入口、同一代生效
 4. `Apply` 无条件重建适配器（当前实现不做配置相等短路）；连接会短暂中断后恢复

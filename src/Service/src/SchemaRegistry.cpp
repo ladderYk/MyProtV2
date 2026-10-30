@@ -52,7 +52,9 @@ Fields ResilienceFields() {
         Plain("backoffMaxMs", "int", true, "1000", "单次退避上限(ms), >= backoffBaseMs"),
         Plain("failureThreshold", "int", true, "5", "连续逻辑读取失败阈值, >=1; 达到即熔断打开"),
         Plain("cooldownMs", "int", true, "10000", "熔断打开持续时长(ms), >=0"),
-        Plain("halfOpenProbes", "int", true, "1", "半开态探测次数, >=1")
+        Plain("halfOpenProbes", "int", true, "1", "半开态探测次数, >=1"),
+        Plain("disableAfterDegraded", "int", true, "10",
+              "连续 Degraded 轮数达到该值后设备固定为 Disabled (需热重载恢复), >=0; 0 = 不自动禁用")
     };
 }
 
@@ -332,6 +334,8 @@ const Fields& SchemaRegistry::DeviceFields() {
     static const Fields kFields = Fields{
         Plain("id", "string", true, "", "设备 ID, 全局唯一"),
         Plain("protocol", "string", true, "", "引用的协议名, 须存在于协议文件集"),
+        Plain("enabled", "bool", false, "true",
+              "设备启用开关; false = 不轮询/不建连/不订阅, 生命周期直置 Disabled, 热重载改回 true 即恢复"),
         ObjF("connection", true, "连接参数 (按协议 transport 类型取用)", ConnectionFields()),
         Plain("requestTimeoutMs", "int", false, "3000",
               "单次请求-应答超时(ms); 该设备所有操作共用 — 唯一配置点 (2026-08-24 收敛)"),

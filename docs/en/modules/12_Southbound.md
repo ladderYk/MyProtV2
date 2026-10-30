@@ -124,7 +124,7 @@ TCP frame    --+                              |
 
 Configuration lives in the **device section** `ingest` of `tags.json` ([Config_Schema §4.1](../Config_Schema.md) *zh*) and the **tag section** `source` ([§5](../Config_Schema.md#5-tag-config-tagdefinition)):
 
-1. Device `ingest` missing = polling only; `ingest` configured but no `source=push` tag = skipped with a WARN (no port/connection taken)
+1. Device `ingest` missing = polling only; `ingest` configured but no `source=push` tag = skipped with a WARN (no port/connection taken); with `device.enabled=false` (KI-04) the whole device skips inbound binding and is rebuilt by `Apply` after a hot reload sets it back to `true`
 2. `ingest.type` accepts only `mqtt` / `tcp`; anything else fails at load time
 3. Hot reload: any config save -> `ConfigStore` reload -> `RuntimeGlue::ApplyRuntimeSync` -> `ctx.southbound->Apply(devices, tags)`, the same entry and the same generation as polling/northbound
 4. `Apply` rebuilds the adapters unconditionally (the current implementation has no config-equality short-circuit); connections are briefly interrupted and then restored

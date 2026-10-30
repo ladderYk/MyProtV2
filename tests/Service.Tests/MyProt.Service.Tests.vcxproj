@@ -154,12 +154,18 @@
     <ClCompile Include="ConfigCommentTests.cpp" />
     <ClCompile Include="TrialPreviewTests.cpp" />
     <ClCompile Include="ResponsePreviewTests.cpp" />
+    <ClCompile Include="SessionContextTests.cpp" />
     <ClCompile Include="..\..\src\Service\src\SchemaRegistry.cpp" />
     <ClCompile Include="..\..\src\Service\src\ValidationIssue.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Service\MyProt.Service.vcxproj">
       <Project>{A1B2C3D4-5555-4000-8000-000000000005}</Project>
+      <Private>false</Private>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="..\..\src\Core\MyProt.Core.vcxproj">
+      <Project>{A1B2C3D4-0000-4000-8000-000000000000}</Project>
       <Private>false</Private>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>

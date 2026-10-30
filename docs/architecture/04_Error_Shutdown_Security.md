@@ -74,7 +74,7 @@ channel->SendReceive(request, frameCfg, timeoutMs,
 
 **重试/退避**：仅 `IsRetryable` 的四类读错误触发；`maxAttempts` 默认 3（读），1（写，写非幂等恒不重试）；退避 = `min(backoffMaxMs, backoffBaseMs × 2^(k-1))` + 抖动。
 
-**熔断**：以**逻辑读取失败**（预算耗尽）为计数单位，连续 `failureThreshold`（默认 5）次 → 打开；`cooldownMs`（默认 10000）内请求直接返回 `CircuitOpen`，**不发实际 I/O**（共享总线第二道防饥饿闸门）；随后 `halfOpenProbes`（默认 1）次探测，成功闭合、失败重开。熔断状态机接线仍跟踪于 [ADR-0003](../adr/0003-known-issues.md) KI-04/KI-05。
+**熔断**：以**逻辑读取失败**（预算耗尽）为计数单位，连续 `failureThreshold`（默认 5）次 → 打开；`cooldownMs`（默认 10000）内请求直接返回 `CircuitOpen`，**不发实际 I/O**（共享总线第二道防饥饿闸门）；随后 `halfOpenProbes`（默认 1）次探测，成功闭合、失败重开。熔断状态机已实装于 `SessionContext`（`Closed/Open/HalfOpen`，见 [modules/04_Service.md §4.5](../modules/04_Service.md)）；设备生命周期（`Degraded` 累积禁用、`enabled` 开关）见同文 §4.6。
 
 ### 7.5 质量码映射（Error → QualityCode）
 

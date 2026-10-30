@@ -205,6 +205,7 @@ if(MYPROT_BUILD_TESTS)
         tests/Service.Tests/ConfigCommentTests.cpp
         tests/Service.Tests/TrialPreviewTests.cpp
         tests/Service.Tests/ResponsePreviewTests.cpp
+        tests/Service.Tests/SessionContextTests.cpp
     )
     target_link_libraries(MyProt.Service.Tests PRIVATE myprot_test_main myprot_service)
 

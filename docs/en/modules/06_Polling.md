@@ -82,6 +82,7 @@ private:
 ### Lifecycle and scheduling
 
 - **`Start`**: sets `_running=true`, increments `_generation`, clears and rebuilds `_groups`. Groups are keyed by `(scanRateMs, deviceId)` (independent timer and deadline budget per device, ADR-0004 R2); each group gets one `steady_timer` and an immediate `ScheduleNext`. Tags with `direction="write"` **do not participate in polling**.
+- **Disabled devices (KI-04)**: `device.enabled=false` builds no group and keeps its tags (non-`write`, non-`push`) out of `pollTags`; at start the device's `myprot_device_lifecycle_state` is pinned to `Disabled` with an INFO log. Setting it back to `true` and hot reloading lets the next `Start` build the group normally.
 - **`Stop`**: sets `_stopping=true` and `_running=false`, cancels every group timer and clears `_groups`.
 - **`OnTimerFire`**: returns immediately when `_stopping`, when the generation does not match, or when `ec` is set (cancelled); if `group->busy` it **skips this round** (backpressure), otherwise sets `busy=true`, `batchDeadline = now + scanRateMs` and enters `ProcessDevice`.
 

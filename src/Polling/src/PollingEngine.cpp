@@ -11,6 +11,7 @@
 #include "MyProt/Service/SessionContext.hpp"
 #include "MyProt/Service/DeviceLifecycle.hpp"
 #include "MyProt/Core/Metrics.hpp"
+#include "MyProt/Core/Log.hpp"
 #include "MyProt/Core/Expected.hpp"
 #include <algorithm>
 #include <map>
@@ -43,6 +44,8 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
 
     // 构建 deviceId → protocolName / requestTimeoutMs / 生效韧性 映射
     // (超时收敛: 2026-08-24; 韧性解析: 设备级覆盖 > 全局 > 内置默认)
+    // KI-04: enabled=false 的设备不参与轮询, 生命周期固定 Disabled (需热重载恢复)。
+    std::map<std::string, bool> deviceEnabled;
     for (const auto& dev : devices) {
         _deviceProtocolMap[dev.id] = dev.protocol;
         _deviceTimeoutMap[dev.id] = dev.requestTimeoutMs;
@@ -53,6 +56,17 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
         } else {
             _deviceResilienceMap[dev.id] = Core::ResilienceConfig();
         }
+        deviceEnabled[dev.id] = dev.enabled;
+        if (!dev.enabled) {
+            Core::metrics::GaugeSet(
+                Core::metrics::kDeviceLifecycleState,
+                Core::metrics::Device(dev.id),
+                static_cast<double>(Service::DeviceLifecycleGaugeValue(
+                    Service::DeviceLifecycleState::Disabled)));
+            LOG_INFO("Lifecycle",
+                     "设备 %s 配置停用 (enabled=false), 跳过轮询",
+                     dev.id.c_str());
+        }
     }
 
     // 按 scanRateMs 分组 (TagGrouper::GroupByScanRate)
@@ -62,7 +76,12 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
     std::vector<Core::TagDefinition> pollTags;
     pollTags.reserve(tags.size());
     for (size_t i = 0; i < tags.size(); ++i) {
-        if (tags[i].direction != "write" && tags[i].source != "push") pollTags.push_back(tags[i]);
+        if (tags[i].direction != "write" && tags[i].source != "push") {
+            std::map<std::string, bool>::const_iterator en =
+                deviceEnabled.find(tags[i].deviceId);
+            if (en != deviceEnabled.end() && !en->second) continue;  // KI-04: 停用设备
+            pollTags.push_back(tags[i]);
+        }
     }
 
     auto tagGroups = _gateway.GetTagGrouper().GroupByScanRate(pollTags);

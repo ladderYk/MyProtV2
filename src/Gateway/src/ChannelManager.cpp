@@ -260,6 +260,16 @@ void ChannelManager::GetOrCreateChannel(
 
     auto it = _devices.find(deviceId);
 
+    // KI-04: Disabled 是会话内终态 (enabled=false 或连续 Degraded 达阈值)。
+    // 直接拒绝且不发起任何 IO —— 避免坏设备每轮重连形成风暴。
+    if (it != _devices.end() && it->second.session
+            && it->second.session->GetLifecycle()
+                   == Service::DeviceLifecycleState::Disabled) {
+        handler(Core::Unexpected(Core::Error::Code::ConfigError,
+            "device disabled", "device=" + deviceId));
+        return;
+    }
+
     // 冷却期短路: 上次连接失败后 2s 内的 GetOrCreateChannel 直接拒绝,
     // 避免多 PollGroup × 短轮询周期在断线期间并发 Connect 形成风暴。
     // (失败信息透传, PollingEngine 端按 IsRetryable → 走退避 → 自然消化)
@@ -476,11 +486,14 @@ void ChannelManager::PerformConnect(
                             self->_endpointCache.erase(endpointKey);
                         }
                         channel->Disconnect();
-                        // KI-04: 握手失败 (BuildError/InvalidResponse/ParseError) → Degraded
-                        // (通道可重建后重试, 非永久禁用; 若属协议模板变量缺失等不可恢复
-                        //  错误, 由 PollingEngine 重复失败累积时再考虑 Disabled)
+                        // KI-04: 握手模板 BuildError 属配置级不可恢复 → 立即 Disabled
+                        // (重建通道无用, 必须改配置/热重载); 其余握手失败 → Degraded
+                        // (通道可重建后重试)。
                         if (session) {
-                            session->SetLifecycle(Service::DeviceLifecycleState::Degraded);
+                            session->SetLifecycle(
+                                hsResult.error().code == Core::Error::Code::BuildError
+                                    ? Service::DeviceLifecycleState::Disabled
+                                    : Service::DeviceLifecycleState::Degraded);
                         }
                         handler(Core::UnexpectedType{hsResult.error()});
                         return;

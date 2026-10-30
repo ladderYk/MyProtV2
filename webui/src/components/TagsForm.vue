@@ -894,6 +894,14 @@ function onEditSource({ varName, layerKey }) {
                 {{ t('暂无协议 — 请先在左侧「协议配置」创建协议') }}
               </div>
             </el-form-item>
+            <el-form-item>
+              <template #label>{{ t('启用设备') }}<FieldHelp section="device" field="enabled" /></template>
+              <el-switch
+                :model-value="curDev.enabled !== false"
+                @change="v => { curDev.enabled = v; emitDoc() }"
+              />
+              <div class="field-hint">{{ t('关闭后不轮询/不建连/不订阅; 保存即热重载生效') }}</div>
+            </el-form-item>
           </el-form>
         </el-card>
 
@@ -1302,6 +1310,15 @@ function onEditSource({ varName, layerKey }) {
                   @update:model-value="v => { local.resilience.halfOpenProbes = v; emitDoc() }"
                 />
                 <span class="unit">{{ t('次') }}</span>
+              </el-form-item>
+              <el-form-item>
+                <template #label>{{ t('降级禁用阈值') }}<FieldHelp :text="'连续 Degraded 轮数达到该值后设备固定为 Disabled (需热重载恢复), >=0; 0 = 不自动禁用'" /></template>
+                <el-input-number
+                  :model-value="local.resilience.disableAfterDegraded ?? 10" :min="0"
+                  @update:model-value="v => { local.resilience.disableAfterDegraded = v; emitDoc() }"
+                />
+                <span class="unit">{{ t('轮') }}</span>
+                <div class="field-hint">{{ t('0 = 不自动禁用; 连续 Degraded 达到该值后需热重载恢复') }}</div>
               </el-form-item>
             </el-form>
           </el-collapse-item>
