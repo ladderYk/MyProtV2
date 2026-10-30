@@ -9,6 +9,7 @@
 #include "MyProt/Engine/MiniExpression.hpp"
 #include "MiniTest.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
@@ -197,4 +198,153 @@ TEST(MiniExpressionTest, InvalidExpressionReturnsError) {
     EXPECT_FALSE(TryEval("bogus[0] == 1", resp, unused));
     EXPECT_FALSE(TryEval("resp[1] == 0x03 &&", resp, unused));
     EXPECT_FALSE(TryEval("", resp, unused));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 优先级矩阵 (KI-13)
+//
+// 递归下降的层序即语义契约, 从低到高共 11 级 (与 C 对齐):
+//   || → && → | → ^ → & → ==/!= → >/</>=/<= → <</>> → +/- → *//% → 一元
+// 每行矩阵只改一个相邻层级, 让"层序错误"直接指向具体分支
+// (例如 relational 层被漏掉时, `1 == 2 > 1` 会返回 0 而不是 1)。
+// ═══════════════════════════════════════════════════════════════════
+
+namespace {
+
+struct PrecedenceCase {
+    const char* expr;
+    std::uint64_t expected;
+};
+
+/// 表驱动求值: 失败时打印表达式 (MiniTest 无 SCOPED_TRACE)
+void ExpectExpr(ByteView resp, const char* expr, std::uint64_t expected) {
+    std::uint64_t out = 0;
+    const bool ok = TryEval(expr, resp, out);
+    if (!ok || out != expected) {
+        std::printf("      expr: %s -> %s%llu (期望 %llu)\n",
+                    expr, ok ? "" : "求值失败 ",
+                    static_cast<unsigned long long>(out),
+                    static_cast<unsigned long long>(expected));
+    }
+    EXPECT_TRUE(ok);
+    if (ok) EXPECT_EQ(out, expected);
+}
+
+void RunMatrix(ByteView resp, const PrecedenceCase* cases, std::size_t n) {
+    for (std::size_t i = 0; i < n; ++i) {
+        ExpectExpr(resp, cases[i].expr, cases[i].expected);
+    }
+}
+
+} // namespace
+
+// ── 逐层比较: 低优先级运算符晚结合, 高优先级先算 ──
+TEST(MiniExpressionTest, PrecedenceMatrixAllLevels) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    const PrecedenceCase cases[] = {
+        // || 低于 &&
+        { "1 || 0 && 0", 1u },
+        // && 低于 | (1 && (0|2) = 1; 若反了会得 (1&&0)|2 = 2)
+        { "1 && 0 | 2", 1u },
+        // | 低于 ^ ((2^3)=1 → 1|1 = 1; 若反了 (1|2)^3 = 0)
+        { "1 | 2 ^ 3", 1u },
+        // ^ 低于 & ((1&1)=1 → 3^1 = 2; 若反了 (3^1)&1 = 0)
+        { "3 ^ 1 & 1", 2u },
+        // & 低于 == ((1==0)=0 → 2&0 = 0; 若反了 (2&1)==0 = 1)
+        { "2 & 1 == 0", 0u },
+        // != 与 == 同级, 低于 relational ((2>1)=1 → 1!=1 = 0)
+        { "1 != 2 > 1", 0u },
+        // == 低于 relational ((2>1)=1 → 1==1 = 1; 若漏 relational 层会得 0)
+        { "1 == 2 > 1", 1u },
+        // relational 低于 shift ((1<<2)=4 → 4>1 = 1; 若反了 1<<(2>1) = 2)
+        { "1 << 2 > 1", 1u },
+        // shift 低于 + ((16>>(1+1))=4)
+        { "16 >> 1 + 1", 4u },
+        // + 低于 * ((1+1)<<2 = 8; 若反了 1+(1<<2) = 5)
+        { "1 + 1 << 2", 8u },
+        // 算术: * 先于 +
+        { "2 + 3 * 4", 14u },
+        // 一元先于乘法 (-2 * -3 = 6)
+        { "-2 * -3", 6u },
+    };
+    RunMatrix(resp, cases, sizeof(cases) / sizeof(cases[0]));
+}
+
+// ── 同级左结合: 连续同优先级运算符从左边开始计算 ──
+TEST(MiniExpressionTest, AssociativityIsLeftToRight) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    const PrecedenceCase cases[] = {
+        { "10 - 3 - 2", 5u },          // 右结合会得 9
+        { "20 / 5 / 2", 2u },          // 右结合会得 10
+        { "100 / 10 * 2", 20u },       // 右结合会得 5
+        { "8 % 5 % 2", 1u },           // 右结合会得 8%(5%2=1)=0
+        { "1 << 1 << 2", 8u },         // 右结合会得 1<<(1<<2)=16
+        { "16 >> 2 >> 1", 2u },        // 右结合会得 16>>(2>>1)=8
+        { "3 > 2 > 1", 0u },           // (3>2)=1 → 1>1=0; 右结合会得 3>(2>1)=1
+        { "2 == 2 == 1", 1u },         // (2==2)=1 → 1==1=1; 右结合会得 2==(2==1)=0
+    };
+    RunMatrix(resp, cases, sizeof(cases) / sizeof(cases[0]));
+}
+
+// ── 一元运算: 绑定最紧, 且可叠加/穿透括号 ──
+TEST(MiniExpressionTest, UnaryOperatorsBindTightest) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    const PrecedenceCase cases[] = {
+        { "-3 + 5", 2u },              // (-3)+5, 不是 -(3+5)
+        { "-2 + 3", 1u },              // 无符号回绕后仍是 1
+        { "1 - -3", 4u },              // 减号与一元负号共存
+        { "+5", 5u },                  // 一元 + 透传
+        { "!0", 1u },
+        { "!5", 0u },
+        { "!!7", 1u },                 // 双重逻辑非回到 0/1 语义
+        { "!1 + 1", 1u },              // (!1)+1 = 1, 不是 !(1+1) = 0
+        { "~0 & 0xFF", 255u },         // (~0)&0xFF
+        { "~1 & 0xFF", 254u },
+        { "~(1 + 2) & 0xFF", 252u },   // 括号让 ~ 作用于整个和
+    };
+    RunMatrix(resp, cases, sizeof(cases) / sizeof(cases[0]));
+}
+
+// ── 括号可覆盖任意层序 (含 resp 索引表达式) ──
+TEST(MiniExpressionTest, ParenthesesOverridePrecedence) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    const PrecedenceCase cases[] = {
+        { "(1 | 2) * 3", 9u },          // 对比未加括号的 1 | 2 * 3 = 7
+        { "(1 || 0) && 0", 0u },        // 对比未加括号的 1 || 0 && 0 = 1
+        { "1 + (1 << 2)", 5u },         // 对比未加括号的 1 + 1 << 2 = 8
+        { "(2 + 3) * 4", 20u },
+        { "(16 >> 1) + 1", 9u },
+        { "((((7))))", 7u },
+        { "-(1 + 2) + 4", 1u },         // -3+4
+        { "resp[1 + 1]", 0x10u },       // 索引内是完整算术表达式
+        { "resp[(1 + 1)]", 0x10u },
+        { "resp[1] << (1 + 1) | resp[3]", 12u },   // (3<<2)|0
+    };
+    RunMatrix(resp, cases, sizeof(cases) / sizeof(cases[0]));
+}
+
+// ── 真实 validCondition 形态: 组合所有层级仍可读且结果确定 ──
+TEST(MiniExpressionTest, CompositeConditionCombinesAllLevels) {
+    const Bytes frame = SampleFrame();
+    const ByteView resp(frame);
+
+    const PrecedenceCase cases[] = {
+        // resp[1]==3 && (((resp[2]>>4)&0xF)==1)
+        { "resp[1] == 3 && ((resp[2] >> 4) & 0xF) == 1", 1u },
+        // 同上但取低半字节 (0) → 比较失败
+        { "resp[1] == 3 && ((resp[2] >> 0) & 0xF) == 1", 0u },
+        // 或分支: 前半失败, 后半命中
+        { "resp[1] == 9 || resp[2] != 0", 1u },
+        // 位拼字 + 比较: ((3<<8)|0x10) == 0x310
+        { "(resp[1] << 8 | resp[2]) == 0x310", 1u },
+    };
+    RunMatrix(resp, cases, sizeof(cases) / sizeof(cases[0]));
 }

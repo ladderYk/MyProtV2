@@ -19,34 +19,18 @@
 
 ## 总览
 
-| 编号 | 问题 | 严重级 | 状态 |
-|:--:|------|:--:|:--:|
-| [KI-04](#ki-04) | 设备生命周期：`Disabled` 触发条件与累积策略未定 | 高 | **开放** |
-| [KI-13](#ki-13) | 表达式优先级已对齐 C，但缺测试用例 | 语义 | 待补测试 |
+当前无未决项。
 
+> 已销账（2026-10-30）：
+> - ~~KI-04 设备生命周期~~ — `DeviceConfig.enabled`（可选，默认 `true`）与 `resilience.disableAfterDegraded`（默认 10，`0` = 不自动禁用）已实装；`Disabled` 为会话内终态，恢复路径 = 配置热重载（`ResetDevices` 重建 `SessionContext`）。见 [modules/04_Service.md §4.6](../modules/04_Service.md)、[Config_Schema.md §4/§11](../Config_Schema.md)。
+> - ~~KI-13 表达式优先级缺测试~~ — 层序与 C 一致且共 11 级（含原文档漏写的 relational 层），已由 `tests/Engine.Tests/MiniExpressionTests.cpp` 的优先级矩阵锁定（逐层相邻对、左结合、一元、括号覆盖、组合条件）。
+>
 > 已销账（2026-09-16，编号留空不复用）：
 > - ~~写互斥~~ — per-device 显式写互斥已实装（`TagReader` `_writingInFlight` per-device atomic，写与写互斥且不依赖 io 线程模型；per-bus strand 有意撤回），见 [ADR-0011](./0011-p1cd-write-mutex-and-per-bus-strand.md) §3.1/§3.2。
 > - ~~变长 read-back~~ — 读回已改为调用方以读操作构建（`WriteBackCheck` 携带独立读 op + 期望字节，`RunReadBack` 逐字节比较；变长写读回经 E2E Test 20f 闭环回归），见 [modules/05_Gateway.md](../modules/05_Gateway.md)。
 >
 > 已销账（2026-10-24）：
 > - ~~无响应写（单向 RTU）~~ — 操作级 `expectResponse=false` 已交付（`IChannel::Send` + `TagReader::WriteOneWay`）：发完即成功，不读取/不成帧/不做 echo 校验；读标签引用与 `readBack=true` 分别在语义校验期与运行时拒绝，见 [ADR-0018](./0018-one-way-send-operation.md)。
-
----
-
-## KI-04
-
-### 设备生命周期：`Disabled` 触发条件与累积策略未定
-
-`DeviceLifecycle` 的 5 态（`New` / `Connecting` / `Connected` / `Degraded` / `Disabled`）、迁移触发者与故障分类已实装，状态机契约与迁移表见 [modules/04_Service.md §4.6](../modules/04_Service.md)。以下语义仍待定：
-
-| 待定项 | 现状 / 待决点 |
-|------|------|
-| `Disabled` 触发条件 | 当前仅协议/握手 `BuildError` 即时触发；**"重复 N 次 `Degraded` 自动 → `Disabled`" 的累积策略未启用**，N 的取值与计数窗口未定 |
-| `Disabled` 恢复路径 | 需配置热重载恢复；是否还需人工介入（如显式 API）未定 |
-| `DeviceConfig.enabled` 字段 | **尚无此字段**（当前 Config 范围封闭）。是否需要配置级"停用设备"开关待定 |
-
-- **严重级**：`高`
-- **状态**：**开放**
 
 ---
 
@@ -58,18 +42,6 @@
 - **问题**：当前**所有**写操作都要求应答并做 echo 校验（`responseParser.validCondition`）。部分单向 RTU 写协议发完即完成、无从站应答，现有契约无法表达——配上 `validCondition` 必失败，不配则语义不明。
 - **严重级**：`高`
 - **状态**：**已销账 2026-10-24** — 操作级 `expectResponse=false`（只发）已实装：`IChannel::Send` 发出即成功，`TagReader::WriteOneWay` 跳过应答校验与 read-back；读标签引用在校验期报 Error，`readBack=true` 在运行时报 `ConfigError`。见 [ADR-0018](./0018-one-way-send-operation.md)。残留风险：设备若实际回包，未被读走的字节会污染同通道后续请求，已在 Schema 与 ADR 中标注。
-
----
-
-## KI-13
-
-### 表达式优先级：缺测试用例
-
-- **位置**：`modules/02_Engine` §2.1 EBNF；实现见 `Engine::MiniExpression`。
-- **现状**：优先级已对齐 C（`||` < `&&` < `|` < `^` < `&` < `==` < `<<` < `+` < `*` < 一元）；按位组合后再比较须显式加括号。
-- **待办**：补优先级测试用例，覆盖上述各级组合（当前 E2E 套件无对应用例，仅有实现侧注释）。
-- **严重级**：`语义`
-- **状态**：**待补测试**
 
 ---
 

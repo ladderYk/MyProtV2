@@ -43,7 +43,8 @@ NUMBER        := [0-9]+
 HEX_NUM       := "0x" [0-9a-fA-F]+
 ```
 
-> **Precedence is aligned with C (KI-13)**: from loosest to tightest, `||` < `&&` < `|` < `^` < `&` < `== !=` < `< > <= >=` < `<< >>` < `+ -` < unary `! - ~`.
+> **Precedence is aligned with C (11 levels)**: from loosest to tightest, `||` < `&&` < `|` < `^` < `&` < `== !=` < `< > <= >=` < `<< >>` < `+ -` < unary `! - ~`.
+> The chain is locked by the precedence matrix in `tests/Engine.Tests/MiniExpressionTests.cpp` (adjacent-level pairs + left associativity + unary + parenthesis overrides).
 > Note: `==` binds tighter than `|`/`&` (as in C), so "combine bits first, then compare" **requires explicit parentheses**, e.g. `((resp[0]<<8)|resp[1])==0x0016`; writing `(resp[0]<<8)|resp[1]==0x0016` parses as `(resp[0]<<8)|(resp[1]==0x0016)`, which is wrong.
 >
 > **v1 scope**: only the `resp` byte-stream scope is supported; session variables cannot be referenced.
