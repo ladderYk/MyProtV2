@@ -16,7 +16,7 @@ const props = defineProps({
   title: { type: String, default: '' },
   // v4.5: 呈现方式 —
   //   'cards' 卡片网格 (默认: 全局变量/操作变量共用; 字段数随来源/策略变化, 卡片比等宽列更合适)
-  //   'table' 四列等宽表格 (保留给窄容器场景)
+  //   'table' 四列等宽表格 (全局变量段可切换; 变量多时更紧凑)
   layout: { type: String, default: 'cards' }
 })
 const emit = defineEmits(['change'])
@@ -669,6 +669,8 @@ function removeEnum(name, idx) {
 }
 @media (max-width: 720px) {
   .vt-row { grid-template-columns: 1fr; }
+  /* 单列堆叠时表头四段会各占一行、与下方字段错位 — 直接隐藏, 靠控件标签识别 */
+  .vt-head-row { display: none; }
   .vt-cards .c-body { grid-template-columns: 1fr; }
 }
 </style>

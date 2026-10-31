@@ -14,6 +14,10 @@ import {
 } from '../api'
 import { t, locale } from '../i18n'
 import { parseConfigJson } from '../jsonText'
+// 新建协议的起点直接复用仓库内配置, 避免前端再维护一份模板 (v1.30)
+import modbusTcpDoc from '../../../configs/protocols/modbus-tcp.json'
+import s7Doc from '../../../configs/protocols/s7-1200.json'
+import seerDoc from '../../../configs/protocols/seer.json'
 
 const props = defineProps({
   scope: { type: String, required: true },
@@ -292,146 +296,16 @@ async function onDelete(name) {
 
 // ── 新建协议模板 ──
 
-// v5 (C5): S7-1200 模板 — 与 configs/protocols/s7-1200.json 对齐
-// (握手 COTP_CR/S7_Setup + ReadVar/WriteVar; 精简为读 + 写操作核心集)
-function s7Template(name) {
-  return {
-    schemaVersion: 2,
-    protocolName: name,
-    transport: { type: 'Tcp', defaultPort: 102 },
-    framing: {
-      type: 'LengthField',
-      lengthFieldOffset: 0,
-      lengthFieldLength: 2,
-      lengthIncludesHeader: false,
-      byteOrder: 'BigEndian',
-      headerLength: 4,
-      lengthAdjustment: 0,
-      maxFrameSize: 1024
-    },
-    dataByteOrder: 'BigEndian',
-    inputs: {
-      StartByteAddress: { source: 'static', value: 0, label: '起始字节地址', unit: '字节' },
-      ByteCount:        { source: 'static', value: 2, label: '数据字节跨度', unit: '字节' },
-      DBNumber:         { source: 'static', value: 1, label: 'DB 块号' },
-      Area:             { source: 'static', value: 132, label: '区域 (0x84=DB)' }
-    },
-    outputs: {},
-    operations: {
-      ReadVar: {
-        kind: 'read',
-        requestTemplate: [
-          '03 00 00 1F', '02 F0 80', '32 01 00 00',
-          '{TransactionID:X4}', '00 0E', '00 00',
-          '04 01', '12 0A 10', '04',
-          '{Length:X4}', '{DBNumber:X4}', '{Area:X2}',
-          '{AddrHi:X2}', '{AddrMid:X2}', '{AddrLo:X2}'
-        ],
-        inputs: {},
-        outputs: {
-          TransactionID: { source: 'auto', strategy: 'autoIncrement', params: { seed: 1 }, label: 'TPKT 序号' },
-          Length:        { source: 'auto', strategy: 'derivedLength', expr: 'ByteCount', label: '读取字节数' },
-          AddrHi:        { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 8192 % 256', label: '地址高字节 (含字节位)' },
-          AddrMid:       { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 256 % 32', label: '地址中字节' },
-          AddrLo:        { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress % 256', label: '地址低字节' }
-        },
-        responseParser: { validCondition: 'resp[21] == 0x04', dataStartIndex: 25, dataLengthExpr: '' }
-      },
-      WriteVar: {
-        kind: 'write',
-        requestTemplate: [
-          '03 00', '{PDULength:X4}', '02 F0 80', '32 01 00 00',
-          '{TransactionID:X4}', '00 0E', '{DataLen:X4}',
-          '05 01', '12 0A 10', '04',
-          '{ItemLength:X4}', '{DBNumber:X4}', '{Area:X2}',
-          '{AddrHi:X2}', '{AddrMid:X2}', '{AddrLo:X2}',
-          '00', '04', '{DataBits:X4}', '{WriteValue:raw}'
-        ],
-        inputs: { WriteValue: { source: 'static', label: '写入载荷' } },
-        outputs: {
-          TransactionID: { source: 'auto', strategy: 'autoIncrement', params: { seed: 1 }, label: 'TPKT 序号' },
-          PDULength:     { source: 'auto', strategy: 'derivedLength', expr: '{Frame:fixed} - 4 + {WriteValue:len}', label: 'PDU 长度' },
-          DataLen:       { source: 'auto', strategy: 'derivedLength', expr: '{WriteValue:len} + 16', label: '参数+数据长度' },
-          ItemLength:    { source: 'auto', strategy: 'derivedLength', expr: '{WriteValue:len} + 4', label: '项长度' },
-          DataBits:      { source: 'auto', strategy: 'derivedLength', expr: '{WriteValue:len} * 8', label: '数据位数' },
-          AddrHi:        { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 8192 % 256', label: '地址高字节' },
-          AddrMid:       { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 256 % 32', label: '地址中字节' },
-          AddrLo:        { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress % 256', label: '地址低字节' }
-        },
-        responseParser: { validCondition: '', dataStartIndex: 0, dataLengthExpr: '' }
-      }
-    },
-    handshake: [
-      {
-        name: 'COTP_CR',
-        requestTemplate: [
-          '03 00 00 16', '11 E0 00 00 00 01 00',
-          'C1 02 01 00', 'C2 02 01 02', 'C0 01 0A'
-        ],
-        validCondition: 'resp[5] == 0xD0',
-        timeoutMs: 3000
-      },
-      {
-        name: 'S7_Setup',
-        requestTemplate: [
-          '03 00 00 19', '02 F0 80', '32 01 00 00 00 01 00 08 00 00',
-          'F0 00 00 08 00 01 03 C0'
-        ],
-        validCondition: 'resp[8] == 0x03',
-        timeoutMs: 3000
-      }
-    ]
-  }
-}
+// 内置起点 = configs/protocols/*.json 深拷贝; 新建时只改名并关闭仿真端口,
+// 避免与内置协议同名/同端口。空白骨架保留为通用最小示例。
+const BUILT_IN_TEMPLATES = { modbus: modbusTcpDoc, s7: s7Doc, seer: seerDoc }
 
-// v5 (C5): SEER (仙工 AGV) 模板 — 与 configs/protocols/seer.json 对齐
-// (魔数 5A 01 + 自增 Seq + JSON 正文 hex 编码; 文本行原语落地前的标准表达)
-function seerTemplate(name) {
-  return {
-    schemaVersion: 2,
-    protocolName: name,
-    transport: { type: 'Tcp', defaultPort: 11500 },
-    framing: {
-      type: 'LengthField',
-      lengthFieldOffset: 4,
-      lengthFieldLength: 4,
-      lengthIncludesHeader: false,
-      byteOrder: 'BigEndian',
-      headerLength: 8,
-      lengthAdjustment: 0,
-      maxFrameSize: 4096
-    },
-    dataByteOrder: 'BigEndian',
-    inputs: {
-      Seq: { source: 'auto', strategy: 'autoIncrement', params: { seed: 1 }, label: '请求序号 (2 字节)' }
-    },
-    outputs: {},
-    operations: {
-      GetRobotStatus: {
-        kind: 'read',
-        requestTemplate: [
-          '5A 01', '{Seq:X4}', '00 00 00 18', '07 D0',
-          '00 00 00 00 00 00',
-          '7B 22 63 6D 64 22 3A 22 73 74 61 74 75 73 22 7D'
-        ],
-        inputs: {},
-        outputs: {},
-        responseParser: { validCondition: 'resp[0] == 0x5A', dataStartIndex: 16, dataLengthExpr: '' }
-      },
-      GetBattery: {
-        kind: 'read',
-        requestTemplate: [
-          '5A 01', '{Seq:X4}', '00 00 00 19', '07 D3',
-          '00 00 00 00 00 00',
-          '7B 22 63 6D 64 22 3A 22 62 61 74 74 65 72 79 22 7D'
-        ],
-        inputs: {},
-        outputs: {},
-        responseParser: { validCondition: 'resp[0] == 0x5A', dataStartIndex: 16, dataLengthExpr: '' }
-      }
-    },
-    handshake: []
-  }
+function builtInTemplate(kind, name) {
+  const doc = JSON.parse(JSON.stringify(BUILT_IN_TEMPLATES[kind]))
+  doc.protocolName = name
+  delete doc._provenance          // 来源说明属于内置配置, 不随副本继承
+  if (doc.simulation && typeof doc.simulation === 'object') doc.simulation.listenPort = 0
+  return doc
 }
 
 // 空白骨架: 通用 LengthField + Tcp + 一个示例读操作 (可过深度校验)
@@ -474,70 +348,6 @@ function blankTemplate(name) {
   }
 }
 
-// Modbus TCP 完整模板 (精简版: 核心读/写操作, 新手首选)
-// 与 configs/protocols/modbus-tcp.json 同构 — 契约名 / 派生方式 / 响应解析全部对齐,
-// 避免模板产出的协议与内置协议行为不一致。
-function modbusTcpTemplate(name) {
-  return {
-    schemaVersion: 2,
-    protocolName: name,
-    transport: { type: 'Tcp', defaultPort: 502 },
-    framing: {
-      type: 'LengthField',
-      lengthFieldOffset: 4,
-      lengthFieldLength: 2,
-      lengthIncludesHeader: false,
-      byteOrder: 'BigEndian',
-      headerLength: 6,
-      lengthAdjustment: 0,
-      maxFrameSize: 260
-    },
-    dataByteOrder: 'WordBigByteLittle',
-    // 注: 协议级 writeOperation / writeBytesOperation 已删除 — 写能力在标签层声明
-    // 协议级 inputs: 引擎按 StartByteAddress / ByteCount 查表 (跨协议字节单位);
-    // 变长写载荷由模板 {Name:raw} 占位符自动识别, expr 用 {name:len} 引用字节数。
-    inputs: {
-      UnitID:           { source: 'static', value: 1, label: '从站地址', enum: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
-      ProtocolID:       { source: 'static', value: 0, label: '协议标识' },
-      StartByteAddress: { source: 'static', value: 0, label: '起始字节地址', unit: '字节' },
-      ByteCount:        { source: 'static', value: 2, label: '数据字节跨度', unit: '字节' },
-      BitOffset:        { source: 'static', value: 0, label: '字节内位偏移', unit: '位' },
-      TransactionID:    { source: 'auto', strategy: 'autoIncrement', params: { seed: 1 }, label: '事务ID' }
-    },
-    outputs: {},
-    operations: {
-      ReadHoldingRegisters: {
-        kind: 'read',
-        requestTemplate: [
-          '{TransactionID:X4}', '{ProtocolID:X4}', '00 06',
-          '{UnitID:X2}', '03', '{StartAddress:X4}', '{RegisterCount:X4}'
-        ],
-        // FC03 命令字用寄存器号/数量 → 由字节单位 derivedLength 派生
-        inputs: {},
-        outputs: {
-          StartAddress:  { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 2', label: '起始地址', unit: '寄存器号' },
-          RegisterCount: { source: 'auto', strategy: 'derivedLength', expr: 'ByteCount / 2',        label: '读取数量', unit: '个' }
-        },
-        responseParser: { validCondition: 'resp[7] == 0x03', dataStartIndex: 9, dataLengthExpr: 'resp[8]' }
-      },
-      WriteSingleRegister: {
-        kind: 'write',
-        requestTemplate: [
-          '{TransactionID:X4}', '{ProtocolID:X4}', '00 06',
-          '{UnitID:X2}', '06', '{StartAddress:X4}', '{WriteValue:X4}'
-        ],
-        // WriteValue 由标签 writeVariable 在运行时注入, 无需在 inputs 声明
-        inputs: {},
-        outputs: {
-          StartAddress: { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 2', label: '起始地址', unit: '寄存器号' }
-        },
-        responseParser: { validCondition: 'resp[7] == 0x06', dataStartIndex: 12, dataLengthExpr: null }
-      }
-    },
-    handshake: []
-  }
-}
-
 async function onCreate() {
   const name = newName.value.trim()
   if (!/^[A-Za-z0-9_-]+$/.test(name)) {
@@ -563,10 +373,8 @@ async function onCreate() {
     doc.protocolName = name
     // 两份协议共用同一个仿真端口会启动失败: 复制时默认关闭仿真
     if (doc.simulation && typeof doc.simulation === 'object') doc.simulation.listenPort = 0
-  } else if (newTemplate.value === 'modbus') doc = modbusTcpTemplate(name)
-  else if (newTemplate.value === 's7') doc = s7Template(name)
-  else if (newTemplate.value === 'seer') doc = seerTemplate(name)
-  else doc = blankTemplate(name)
+  } else if (newTemplate.value === 'blank') doc = blankTemplate(name)
+  else doc = builtInTemplate(newTemplate.value, name)
   const content = JSON.stringify(doc, null, 2)
   try {
     await saveConfig(props.scope, name, content)
@@ -1171,13 +979,21 @@ watch(() => props.scope, () => {
 /* 窄屏降级: 协议列表转为顶部横排 */
 @media (max-width: 720px) {
   .edit-pane { flex-direction: column; }
+  /* 高度交给内容: 固定 38vh 时, 头部+搜索+列表+新建区之和会溢出并压住编辑区 */
   .cfg-list {
     width: auto;
-    max-height: 38vh;
+    max-height: none;
     border-right: 0;
     border-bottom: 1px solid var(--mp-border);
   }
-  .cfg-items { flex: none; max-height: 22vh; }
+  .cfg-items { flex: none; max-height: 18vh; }
+  /* 新建区改两行网格: 模板占一行, 名称+按钮占一行, 少占 36px 纵向空间 */
+  .create-area.stacked {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+  }
+  .create-area.stacked select { grid-column: 1 / -1; }
   .file-name { max-width: 100%; }
 }
 </style>

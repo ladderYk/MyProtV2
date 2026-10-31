@@ -11,7 +11,7 @@ import { getSchema } from '../api'
 import {
   ElForm, ElFormItem, ElInput, ElInputNumber, ElSelect, ElOption,
   ElSwitch, ElCard, ElButton, ElCollapse, ElCollapseItem, ElAlert,
-  ElTabs, ElTabPane, ElDivider
+  ElTabs, ElTabPane, ElDivider, ElRadioGroup, ElRadioButton
 } from 'element-plus'
 import VariableTable from './VariableTable.vue'
 import HandshakeEditor from './HandshakeEditor.vue'
@@ -32,64 +32,8 @@ const OP_KINDS = [
   { value: 'write', label: '写 (write)' }
 ]
 
-// 常见操作模板 (Modbus TCP, 新增操作时可选) — v1.29: 与 configs/protocols/modbus-tcp.json 同构。
-// 关键: 协议族单位 (StartAddress/RegisterCount/RegByteCount) 由协议级字节单位
-//   (StartByteAddress/ByteCount) 经 outputs.derivedLength 派生, 不再作 inputs 声明 —
-//   引擎 (TagGrouper) 只按跨协议字节单位查表, 声明错位置会让标签合并地址恒为 0。
-const OP_TEMPLATES = {
-  ReadHoldingRegisters: {
-    kind: 'read',
-    requestTemplate: ['{TransactionID:X4}', '{ProtocolID:X4}', '00 06', '{UnitID:X2}', '03', '{StartAddress:X4}', '{RegisterCount:X4}'],
-    inputs: {},
-    outputs: {
-      StartAddress:  { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 2', label: '起始地址', unit: '寄存器号' },
-      RegisterCount: { source: 'auto', strategy: 'derivedLength', expr: 'ByteCount / 2',        label: '读取数量', unit: '个' }
-    },
-    responseParser: { validCondition: 'resp[7] == 0x03', dataStartIndex: 9, dataLengthExpr: 'resp[8]' }
-  },
-  ReadCoils: {
-    kind: 'read',
-    requestTemplate: ['{TransactionID:X4}', '{ProtocolID:X4}', '00 06', '{UnitID:X2}', '01', '{StartAddress:X4}', '{RegisterCount:X4}'],
-    inputs: {},
-    outputs: {
-      StartAddress:  { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress * 8', label: '起始线圈位址', unit: '位' },
-      RegisterCount: { source: 'auto', strategy: 'derivedLength', expr: 'ByteCount * 8',        label: '读取线圈数', unit: '个' }
-    },
-    responseParser: { validCondition: 'resp[7] == 0x01', dataStartIndex: 9, dataLengthExpr: 'resp[8]' }
-  },
-  ReadInputRegisters: {
-    kind: 'read',
-    requestTemplate: ['{TransactionID:X4}', '{ProtocolID:X4}', '00 06', '{UnitID:X2}', '04', '{StartAddress:X4}', '{RegisterCount:X4}'],
-    inputs: {},
-    outputs: {
-      StartAddress:  { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 2', label: '起始地址', unit: '寄存器号' },
-      RegisterCount: { source: 'auto', strategy: 'derivedLength', expr: 'ByteCount / 2',        label: '读取数量', unit: '个' }
-    },
-    responseParser: { validCondition: 'resp[7] == 0x04', dataStartIndex: 9, dataLengthExpr: 'resp[8]' }
-  },
-  WriteSingleRegister: {
-    kind: 'write',
-    requestTemplate: ['{TransactionID:X4}', '{ProtocolID:X4}', '00 06', '{UnitID:X2}', '06', '{StartAddress:X4}', '{WriteValue:X4}'],
-    // WriteValue 由标签 writeVariable 运行时注入, 不作 inputs 声明
-    inputs: {},
-    outputs: {
-      StartAddress: { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 2', label: '起始地址', unit: '寄存器号' }
-    },
-    responseParser: { validCondition: 'resp[7] == 0x06', dataStartIndex: 12, dataLengthExpr: null }
-  },
-  WriteMultipleRegisters: {
-    kind: 'write',
-    requestTemplate: ['{TransactionID:X4}', '{ProtocolID:X4}', '{PDULength:X4}', '{UnitID:X2}', '10', '{StartAddress:X4}', '{RegisterCount:X4}', '{RegByteCount:X2}', '{WriteValue:raw}'],
-    inputs: {},
-    outputs: {
-      StartAddress:  { source: 'auto', strategy: 'derivedLength', expr: 'StartByteAddress / 2',               label: '起始地址', unit: '寄存器号' },
-      RegisterCount: { source: 'auto', strategy: 'derivedLength', expr: '{WriteValue:len} / 2',               label: '写入数量', unit: '个' },
-      RegByteCount:  { source: 'auto', strategy: 'derivedLength', expr: '{WriteValue:len}',                   label: '字节数', unit: '字节' },
-      PDULength:     { source: 'auto', strategy: 'derivedLength', expr: '{Frame:fixed} - 6 + {WriteValue:len}', label: 'PDU 长度 (含 UnitID 起算)' }
-    },
-    responseParser: { validCondition: 'resp[7] == 0x10', dataStartIndex: 12, dataLengthExpr: null }
-  }
-}
+// 新增操作不再内置硬编码模板: 可选「空白」或克隆当前协议已有操作 (含 operationProfiles 引用),
+// 避免前端模板与 configs/protocols/*.json 双份维护 (v1.30)。
 
 // ── 本地工作副本 (父级以 key 强制重建来同步, 故不 watch props) ──
 // setup 阶段同步初始化: onMounted 晚于首次渲染, 空 local 会让模板
@@ -103,6 +47,17 @@ const activeOutputTab = ref('visual')    // 输出编辑模式：visual | form
 // v4.9 改: 五段并为三段 — 基础信息(含传输与成帧/握手, 段内 divider 分节) / 全局变量 / 操作定义
 const activeSection = ref('basic')   // 区块 tab: basic | vars | ops
 const fbRef = ref(null)   // FrameBuilder 实例 (chips 点击插入占位符)
+
+// 全局变量呈现方式: cards = 卡片网格 (字段随来源/策略变化, 默认) / table = 紧凑四列表格
+// 选择记在本地, 刷新/切换协议后保持用户习惯
+const VAR_LAYOUT_KEY = 'mp.protocol.varLayout'
+const varLayout = ref(readVarLayout())
+function readVarLayout() {
+  try { return localStorage.getItem(VAR_LAYOUT_KEY) === 'table' ? 'table' : 'cards' } catch (_) { return 'cards' }
+}
+watch(varLayout, v => {
+  try { localStorage.setItem(VAR_LAYOUT_KEY, v) } catch (_) { /* 忽略 */ }
+})
 
 // v3 增: 右栏全局变量提示条 — 协议级 inputs + 当前操作派生 outputs
 // v4.6: 变量提示 (移入操作定义段内) — 全局 = 协议级 inputs/派生 outputs; 局部 = 当前操作 outputs
@@ -164,9 +119,138 @@ selOp.value = opNames.value[0] || ''   // 默认选中首个操作 (同步, 早�
 const opNameDraft = ref(selOp.value)
 watch(selOp, name => { opNameDraft.value = name || '' }, { immediate: true })
 
+// ── operationProfiles (操作原型) ──
+// 原型承载可复用的 outputs/responseParser, 支持 extends 单继承;
+// 合并顺序固定为 父原型 → 子原型 → 操作显式字段 (与 C++ 解析器一致)。
+const profileNames = computed(() => Object.keys(local.operationProfiles || {}))
+const profilesDraft = ref(JSON.stringify((props.modelValue && props.modelValue.operationProfiles) || {}, null, 2))
+const profilesError = ref('')
+
+const resolvedProfiles = computed(() => {
+  const raw = local.operationProfiles || {}
+  const out = {}
+  const visiting = new Set()
+  function resolve(name) {
+    if (out[name]) return out[name]
+    if (!hasOwn(raw, name) || visiting.has(name)) return null
+    visiting.add(name)
+    const p = raw[name] || {}
+    const base = p.extends ? resolve(p.extends) : null
+    visiting.delete(name)
+    const merged = {
+      description: p.description || (base && base.description) || '',
+      outputs: Object.assign({}, (base && base.outputs) || {}, p.outputs || {}),
+      responseParser: Object.assign({}, (base && base.responseParser) || {}, p.responseParser || {})
+    }
+    out[name] = merged
+    return merged
+  }
+  for (const n of Object.keys(raw)) resolve(n)
+  return out
+})
+
+function profileOf(op) {
+  return (op && op.profile && resolvedProfiles.value[op.profile]) || null
+}
+function profileSummary(name) {
+  const p = resolvedProfiles.value[name]
+  if (!p) return ''
+  const outs = Object.keys(p.outputs || {}).length
+  const rp = Object.keys(p.responseParser || {}).length
+  return [p.description, outs ? t('{n} 个派生输出', { n: outs }) : '', rp ? t('{n} 个应答字段', { n: rp }) : '']
+    .filter(Boolean).join(' · ')
+}
+function setProfile(op, name) {
+  if (!name) delete op.profile
+  else op.profile = name
+  emitDoc()
+}
+
+/// 原型 JSON 编辑器: 合法即写回, 非法仅提示不落盘 (避免打字途中破坏文档)
+function onProfilesText(text) {
+  profilesDraft.value = text
+  try {
+    const v = JSON.parse(text)
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(t('须为对象 ({ 原型名: { ... } })'))
+    for (const [name, p] of Object.entries(v)) {
+      if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error(t('原型 {name} 须为对象', { name }))
+    }
+    profilesError.value = ''
+    local.operationProfiles = v
+    emitDoc()
+  } catch (e) {
+    profilesError.value = String((e && e.message) || e)
+  }
+}
+
+/// 继承的派生输出 (协议级 + 原型展开, 已被本操作覆盖的不列) — 只读, 可一键覆盖。
+const inheritedOutputs = computed(() => {
+  const op = curOp.value
+  if (!op) return []
+  const merged = {}
+  for (const [n, d] of Object.entries(local.outputs || {})) merged[n] = { def: d, src: t('协议') }
+  const p = profileOf(op)
+  if (p) {
+    for (const [n, d] of Object.entries(p.outputs || {})) {
+      merged[n] = { def: d, src: t('原型') + ' ' + op.profile }
+    }
+  }
+  for (const n of Object.keys(op.outputs || {})) delete merged[n]
+  return Object.entries(merged).map(([name, x]) => ({ name, def: x.def, src: x.src }))
+})
+function overrideOutput(name) {
+  const item = inheritedOutputs.value.find(x => x.name === name)
+  if (!item || !curOp.value) return
+  if (!curOp.value.outputs) curOp.value.outputs = {}
+  curOp.value.outputs[name] = clone(item.def)
+  emitDoc()
+}
+
+// ── responseParser 稀疏编辑 ──
+// 只有用户确实改过的字段才写出; 未改字段展示原型/协议提供的值并标记继承。
+function rpIsSet(op, field) {
+  return !!(op && op._rpSet && op._rpSet[field])
+}
+function rpInherited(op, field) {
+  const p = profileOf(op)
+  const rp = (p && p.responseParser) || {}
+  return hasOwn(rp, field) ? rp[field] : undefined
+}
+function rpView(op, field, fallback) {
+  if (!op) return fallback
+  if (rpIsSet(op, field)) {
+    const v = (op.responseParser || {})[field]
+    return v === undefined || v === null ? fallback : v
+  }
+  const v = rpInherited(op, field)
+  return v === undefined || v === null ? fallback : v
+}
+function rpSource(op, field) {
+  if (rpIsSet(op, field)) return t('本操作覆盖')
+  if (profileOf(op) && rpInherited(op, field) !== undefined) return t('继承自原型 {name}', { name: op.profile })
+  return ''
+}
+function setRp(op, field, value) {
+  if (!op) return
+  if (value === null || value === undefined) { restoreRp(op, field); return }
+  if (!op.responseParser || typeof op.responseParser !== 'object') op.responseParser = {}
+  op.responseParser[field] = value
+  op._rpSet = op._rpSet || {}
+  op._rpSet[field] = true
+  emitDoc()
+}
+function restoreRp(op, field) {
+  if (!op) return
+  if (op.responseParser) delete op.responseParser[field]
+  if (op._rpSet) op._rpSet[field] = false
+  emitDoc()
+}
+
 function clone(v) {
   return JSON.parse(JSON.stringify(v))
 }
+
+function hasOwn(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k) }
 
 // ── 旧 schema → v1.20 迁移 ──
 // 旧三段 (defaultVariables + autoCompute + metadata.placeholderHints) 或统一 variables 段
@@ -276,7 +360,7 @@ function migrateOpVars(op) {
   delete op.variables; delete op.placeholderHints
 }
 
-// 半成品文档补全骨架, 保证表单可安全绑定; 每个 operation 附带 _rows (模板段的编辑态)
+// 半成品文档补全骨架, 保证表单可安全绑定; 每个 operation 附带 _rows/_rpSet (编辑态)
 function ensureShape(src) {
   const d = clone(src)
   if (!d.transport || typeof d.transport !== 'object') d.transport = {}
@@ -285,7 +369,7 @@ function ensureShape(src) {
   migrateVars(d)
   for (const op of Object.values(d.operations)) {
     migrateOpVars(op)
-    syncTplRows(op)
+    prepareOp(op)
   }
   if (!Array.isArray(d.handshake)) d.handshake = []
   // builtInFunctions 自 v1.19 移除 (模板函数为内置能力), 不再补默认值 —
@@ -293,16 +377,41 @@ function ensureShape(src) {
   return d
 }
 
+/// 操作编辑态: requestTemplate → _rows; responseParser → _rpSet (字段是否显式声明)。
+/// _rpSet 是稀疏落盘的关键: 引用原型的操作只写出自己真正覆盖的字段,
+/// 否则表单默认值 0/'' 会在保存时变成对原型的意外覆盖。
+function prepareOp(op) {
+  if (!op.inputs || typeof op.inputs !== 'object') op.inputs = {}
+  if (!op.outputs || typeof op.outputs !== 'object') op.outputs = {}
+  const rp = (op.responseParser && typeof op.responseParser === 'object') ? op.responseParser : {}
+  op._rpSet = {
+    validCondition: hasOwn(rp, 'validCondition'),
+    dataStartIndex: hasOwn(rp, 'dataStartIndex'),
+    dataLengthExpr: hasOwn(rp, 'dataLengthExpr')
+  }
+  syncTplRows(op)
+}
+
 function emitDoc() {
   const out = clone(local)
   for (const op of Object.values(out.operations)) {
     delete op._rows   // 剔除编辑态字段
+    const rpSet = op._rpSet || {}
+    delete op._rpSet
+    const src = (op.responseParser && typeof op.responseParser === 'object') ? op.responseParser : {}
+    const rp = {}
+    if (rpSet.validCondition) rp.validCondition = src.validCondition == null ? '' : src.validCondition
+    if (rpSet.dataStartIndex) rp.dataStartIndex = Number(src.dataStartIndex) || 0
+    if (rpSet.dataLengthExpr) rp.dataLengthExpr = src.dataLengthExpr == null ? '' : src.dataLengthExpr
+    if (Object.keys(rp).length) op.responseParser = rp
+    else delete op.responseParser
     // 空 map 不落盘 (与现有配置风格一致: 无派生/无输入的操作不写空对象)
     if (op.inputs && Object.keys(op.inputs).length === 0) delete op.inputs
     if (op.outputs && Object.keys(op.outputs).length === 0) delete op.outputs
   }
   if (out.inputs && Object.keys(out.inputs).length === 0) delete out.inputs
   if (out.outputs && Object.keys(out.outputs).length === 0) delete out.outputs
+  if (out.operationProfiles && Object.keys(out.operationProfiles).length === 0) delete out.operationProfiles
   emit('update:modelValue', out)
 }
 
@@ -332,24 +441,45 @@ function moveTplRow(op, i, dir) {
 
 // ── operations 增删改 ──
 
+function uniqueOpName(base) {
+  const stem = base || 'NewOperation'
+  let name = stem
+  let i = 1
+  while (local.operations[name]) { name = stem + i; i++ }
+  return name
+}
+
+/// 新增: 空白操作 或 克隆本协议已有操作 (含 profile 引用, 不再复制前端硬编码模板)
 function addOperation() {
   const tplName = opTemplate.value
-  const tpl = tplName ? OP_TEMPLATES[tplName] : null
-  const base = tplName || 'NewOperation'
-  let name = base
-  let i = 1
-  while (local.operations[name]) { name = base + i; i++ }
-  local.operations[name] = tpl
-    ? clone(tpl)
-    : {
-        kind: 'read',
-        requestTemplate: [],
-        inputs: {},
-        outputs: {},
-        responseParser: { validCondition: '', dataStartIndex: 0, dataLengthExpr: '' }
-      }
-  syncTplRows(local.operations[name])
+  let name
+  let op
+  if (tplName && local.operations[tplName]) {
+    name = uniqueOpName(tplName)
+    op = clone(local.operations[tplName])
+    delete op._rows
+    delete op._rpSet
+  } else {
+    name = uniqueOpName('NewOperation')
+    op = { kind: 'read', requestTemplate: [], inputs: {}, outputs: {} }
+  }
+  local.operations[name] = op
+  prepareOp(op)
   selOp.value = name   // v1.23: 新增后自动选中
+  emitDoc()
+}
+
+/// 复制当前操作 (保留模板/原型/显式覆盖, 仅换名)
+function duplicateOperation(name) {
+  const src = local.operations[name]
+  if (!src) return
+  const newName = uniqueOpName(name)
+  const copy = clone(src)
+  delete copy._rows
+  delete copy._rpSet
+  local.operations[newName] = copy
+  prepareOp(copy)
+  selOp.value = newName
   emitDoc()
 }
 
@@ -625,12 +755,7 @@ onMounted(async () => {
       <el-form size="default" class="form-grid">
         <el-form-item>
           <template #label>{{ t('协议名') }}<FieldHelp section="protocol" field="protocolName" /></template>
-          <el-input
-            :model-value="local.protocolName"
-            class="mono-input"
-            disabled
-            style="max-width: 280px"
-          />
+          <div class="ro-name">{{ local.protocolName }}</div>
           <div class="field-hint">{{ t('设备按此名引用协议 (不可修改, 修改会断开引用); 新建时确定') }}</div>
         </el-form-item>
         <el-form-item>
@@ -666,7 +791,7 @@ onMounted(async () => {
         <el-form-item :label="t('默认端口')">
         <el-input-number
           :model-value="local.transport.defaultPort"
-          :min="1" :max="65535" controls-position="right" style="width: 130px"
+          :min="1" :max="65535" controls-position="right" style="width: 150px"
           :placeholder="t('协议缺省')"
           @update:model-value="v => { if (v == null) { delete local.transport.defaultPort } else { local.transport.defaultPort = v } ; emitDoc() }"
         />
@@ -802,7 +927,7 @@ onMounted(async () => {
     </el-card>
       </el-tab-pane>
 
-      <!-- ④ 全局变量 (v4.2: 卡片呈现 — 字段数随来源/策略变化, 等宽列反而难对齐) -->
+      <!-- ④ 全局变量 (v4.2: 默认卡片呈现 — 字段数随来源/策略变化; 可在卡头切换为紧凑表格) -->
       <el-tab-pane :label="t('全局变量')" name="vars">
   <div id="vars-head"></div>
     <el-card shadow="never" class="blk vars-card">
@@ -810,6 +935,10 @@ onMounted(async () => {
         <div class="blk-head">
           <span class="blk-title">{{ t('全局变量') }}</span>
           <span class="blk-desc">{{ t('协议级 inputs 为默认值, outputs 为派生量; 操作与标签可覆盖') }}</span>
+          <el-radio-group v-model="varLayout" size="small" class="vars-layout">
+            <el-radio-button value="cards">{{ t('卡片') }}</el-radio-button>
+            <el-radio-button value="table">{{ t('表格') }}</el-radio-button>
+          </el-radio-group>
         </div>
       </template>
       <div v-if="aliasEntries.length" class="alias-note">
@@ -819,8 +948,8 @@ onMounted(async () => {
         </span>
         <span class="alias-hint">{{ t('模板与变量名可用别名书写, 加载期改写为契约名 (只读, JSON 模式编辑)') }}</span>
       </div>
-      <VariableTable :model-value="local.inputs" mode="inputs" :title="t('inputs · 全局共享')" @change="emitDoc" />
-      <VariableTable :model-value="local.outputs" mode="outputs" :title="t('outputs · 全局派生')" @change="emitDoc" />
+      <VariableTable :model-value="local.inputs" mode="inputs" :title="t('inputs · 全局共享')" :layout="varLayout" @change="emitDoc" />
+      <VariableTable :model-value="local.outputs" mode="outputs" :title="t('outputs · 全局派生')" :layout="varLayout" @change="emitDoc" />
       <div class="field-hint" style="margin-top: 8px">
         <code>static</code>{{ t('=默认值/提示') }}, <code>auto</code>{{ t('=运行时生成') }}; {{ t('派生长度声明为') }} <code>derivedLength</code>, <code>expr</code> {{ t('用') }} <code>{name:len}</code> {{ t('取变量字节长度。') }}
       </div>
@@ -829,6 +958,35 @@ onMounted(async () => {
 
       <!-- ⑤ 操作定义 (操作 tabs + 详情) — v4.8: 去掉外层卡片壳, 与其他 tab 的单卡布局统一 -->
       <el-tab-pane :label="t('操作定义')" name="ops" class="pane-ops">
+      <el-collapse class="profiles-collapse">
+        <el-collapse-item name="profiles">
+          <template #title>
+            <span class="profiles-title">{{ t('操作原型 (operationProfiles)') }}</span>
+            <span class="profiles-count">{{ profileNames.length }}</span>
+            <span class="profiles-tip">{{ t('原型提供 outputs/responseParser 默认值; 支持 extends 单继承; 操作显式字段优先') }}</span>
+          </template>
+          <div class="profiles-body">
+            <div v-if="profileNames.length" class="profiles-list">
+              <div v-for="name in profileNames" :key="name" class="profile-item">
+                <code>{{ name }}</code>
+                <el-tag v-if="local.operationProfiles[name] && local.operationProfiles[name].extends" size="small" type="info" effect="plain">
+                  extends {{ local.operationProfiles[name].extends }}
+                </el-tag>
+                <span class="profile-desc">{{ profileSummary(name) }}</span>
+              </div>
+            </div>
+            <el-input
+              type="textarea" :autosize="{ minRows: 4, maxRows: 14 }"
+              :model-value="profilesDraft" spellcheck="false" class="mono-input"
+              @update:model-value="onProfilesText"
+            />
+            <div v-if="profilesError" class="profiles-error">{{ profilesError }}</div>
+            <div v-else class="field-hint">
+              {{ t('JSON 对象: { 原型名: { extends?, description?, outputs?, responseParser? } }') }}
+            </div>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
       <el-alert
         v-if="!opNames.length"
         type="info" :closable="false"
@@ -850,9 +1008,9 @@ onMounted(async () => {
           </el-tab-pane>
         </el-tabs>
         <div class="op-create">
-          <select v-model="opTemplate" class="op-tpl-select" :title="t('操作模板')">
+          <select v-model="opTemplate" class="op-tpl-select" :title="t('克隆已有操作作为起点')">
             <option value="">{{ t('空白操作') }}</option>
-            <option v-for="(_, name) in OP_TEMPLATES" :key="name" :value="name">{{ name }}</option>
+            <option v-for="name in opNames" :key="name" :value="name">{{ t('克隆') }} {{ name }}</option>
           </select>
           <el-button type="primary" size="small" plain @click="addOperation">{{ t('新增操作') }}</el-button>
         </div>
@@ -866,6 +1024,9 @@ onMounted(async () => {
                   @update:model-value="v => opNameDraft = v"
                   @change="commitOpName"
                 />
+                <el-button size="small" plain @click="duplicateOperation(selOp)">
+                  {{ t('复制') }}
+                </el-button>
                 <el-button type="danger" size="small" plain @click="removeOperation(selOp)">
                   {{ t('删除') }}
                 </el-button>
@@ -882,6 +1043,22 @@ onMounted(async () => {
                   <el-option v-for="k in OP_KINDS" :key="k.value" :label="t(k.label)" :value="k.value" />
                 </el-select>
                 <div class="field-hint">{{ t('read = 只读标签; write = 可作写请求模板') }}</div>
+              </el-form-item>
+              <el-form-item>
+                <template #label>{{ t('操作原型') }}<FieldHelp :text="t('operationProfiles: 可复用的 outputs/responseParser; 支持 extends 单继承; 本操作显式字段优先')" /></template>
+                <el-select
+                  :model-value="curOp.profile || ''" clearable filterable style="width: 220px" class="profile-select"
+                  :placeholder="t('不使用原型')"
+                  @change="v => setProfile(curOp, v)"
+                >
+                  <el-option v-for="name in profileNames" :key="name" :label="name" :value="name">
+                    <span class="profile-opt-name">{{ name }}</span>
+                  </el-option>
+                </el-select>
+                <div class="field-hint">
+                  <template v-if="curOp.profile && !profileOf(curOp)">{{ t('原型 {name} 未定义', { name: curOp.profile }) }}</template>
+                  <template v-else>{{ t('原型提供默认值; 下方继承项只读, 点「覆盖」可改写') }}</template>
+                </div>
               </el-form-item>
               <el-form-item>
                 <template #label>{{ t('应答模式') }}<FieldHelp :text="t('请求-应答 = 发送后等待并校验响应帧; 只发 = 设备不应答, 写出即成功 (不读取/不成帧/不校验 echo); 设备若实际回包, 残留字节会污染同通道后续请求')" /></template>
@@ -958,6 +1135,19 @@ onMounted(async () => {
                 <VariableTable :model-value="curOp.inputs" mode="inputs" :title="t('操作变量 (inputs · 本操作)')" @change="emitDoc" />
               </div>
               <div class="op-vars">
+                <div v-if="inheritedOutputs.length" class="inherited-out">
+                  <div class="inherited-head">
+                    <span class="chips-group">{{ t('继承的派生输出') }}</span>
+                    <span class="field-hint">{{ t('来自协议或操作原型, 只读; 需要改写时点「覆盖」') }}</span>
+                  </div>
+                  <div v-for="it in inheritedOutputs" :key="it.name" class="inherited-row">
+                    <code>{{ it.name }}</code>
+                    <el-tag size="small" type="info" effect="plain">{{ it.src }}</el-tag>
+                    <el-tag v-if="it.def.label" size="small" effect="plain">{{ it.def.label }}</el-tag>
+                    <code class="inherited-expr">{{ it.def.expr }}</code>
+                    <el-button size="small" text type="primary" @click="overrideOutput(it.name)">{{ t('覆盖') }}</el-button>
+                  </div>
+                </div>
                 <el-tabs v-model="activeOutputTab" class="template-tabs">
                   <el-tab-pane :label="t('可视化表达式')" name="visual">
                     <div v-for="[outName, outDef] in Object.entries(curOp.outputs || {})" :key="outName" class="output-expr-row">
@@ -972,7 +1162,9 @@ onMounted(async () => {
                         :context-vars="opContextVars"
                       />
                     </div>
-                    <div v-if="!Object.keys(curOp.outputs || {}).length" class="text-muted">{{ t('暂无派生输出, 可在下方表单添加') }}</div>
+                    <div v-if="!Object.keys(curOp.outputs || {}).length" class="text-muted">
+                      {{ inheritedOutputs.length ? t('本操作未覆盖任何派生输出, 直接使用上方继承项') : t('暂无派生输出, 可在下方表单添加') }}
+                    </div>
                   </el-tab-pane>
                   <el-tab-pane :label="t('表单编辑')" name="form">
                     <VariableTable :model-value="curOp.outputs" mode="outputs" :title="t('派生输出 (outputs · 本操作)')" @change="emitDoc" />
@@ -982,24 +1174,45 @@ onMounted(async () => {
 
               <el-form-item :label="t('有效条件')">
                 <el-input
-                  :model-value="curOp.responseParser?.validCondition"
+                  :model-value="rpView(curOp, 'validCondition', '')"
                   :placeholder="t('如 resp[7] == 0x03, 留空跳过校验')"
-                  @update:model-value="v => { curOp.responseParser.validCondition = v; emitDoc() }"
+                  @update:model-value="v => setRp(curOp, 'validCondition', v)"
                 />
+                <div class="field-hint rp-hint">
+                  <span>{{ rpSource(curOp, 'validCondition') }}</span>
+                  <el-button
+                    v-if="rpIsSet(curOp, 'validCondition') && curOp.profile"
+                    size="small" text type="primary" @click="restoreRp(curOp, 'validCondition')"
+                  >{{ t('恢复继承') }}</el-button>
+                </div>
               </el-form-item>
               <el-form-item :label="t('数据起始下标')">
                 <el-input-number
-                  :model-value="curOp.responseParser?.dataStartIndex" :min="0"
-                  @update:model-value="v => { curOp.responseParser.dataStartIndex = v; emitDoc() }"
+                  :model-value="rpView(curOp, 'dataStartIndex', 0)" :min="0" controls-position="right"
+                  @update:model-value="v => setRp(curOp, 'dataStartIndex', v)"
                 />
                 <span class="unit">{{ t('字节') }}</span>
+                <div class="field-hint rp-hint">
+                  <span>{{ rpSource(curOp, 'dataStartIndex') }}</span>
+                  <el-button
+                    v-if="rpIsSet(curOp, 'dataStartIndex') && curOp.profile"
+                    size="small" text type="primary" @click="restoreRp(curOp, 'dataStartIndex')"
+                  >{{ t('恢复继承') }}</el-button>
+                </div>
               </el-form-item>
               <el-form-item :label="t('数据长度表达式')">
                 <el-input
-                  :model-value="curOp.responseParser?.dataLengthExpr"
+                  :model-value="rpView(curOp, 'dataLengthExpr', '')"
                   :placeholder="t('如 resp[8], 留空取整帧剩余')"
-                  @update:model-value="v => { curOp.responseParser.dataLengthExpr = v; emitDoc() }"
+                  @update:model-value="v => setRp(curOp, 'dataLengthExpr', v)"
                 />
+                <div class="field-hint rp-hint">
+                  <span>{{ rpSource(curOp, 'dataLengthExpr') }}</span>
+                  <el-button
+                    v-if="rpIsSet(curOp, 'dataLengthExpr') && curOp.profile"
+                    size="small" text type="primary" @click="restoreRp(curOp, 'dataLengthExpr')"
+                  >{{ t('恢复继承') }}</el-button>
+                </div>
               </el-form-item>
             </el-form>
           </el-card>
@@ -1085,6 +1298,19 @@ onMounted(async () => {
   box-shadow: none;
 }
 .mono-input.is-disabled :deep(.el-input__inner) { color: var(--mp-muted); }
+/* 协议名不可变: 用文本展示, 避免禁用态输入框在栅格中留下半截灰块 */
+.ro-name {
+  width: 100%;
+  min-height: var(--mp-control-h);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-base);
+  color: var(--mp-ink-2);
+}
 /* v4.9: 基础信息段内小节分隔 (传输与成帧 / 握手) */
 .sec-divider {
   margin: var(--mp-sp-5) 0 var(--mp-sp-3);
@@ -1120,6 +1346,8 @@ onMounted(async () => {
 }
 /* v4.3: 全局变量段铺满宽度 (卡片网格按宽度自适应列数), 两段之间留间距 */
 .vars-card .vt + .vt { margin-top: var(--mp-sp-4); }
+/* 呈现方式切换: 贴右侧, 与标题基线对齐 */
+.vars-layout { margin-left: auto; }
 /* v4.10: variableAliases 只读映射条 */
 .alias-note {
   display: flex;
@@ -1372,4 +1600,82 @@ onMounted(async () => {
   border-radius: 3px;
 }
 /* v5: 操作详情 label 统一走全局 token (原 90px 局部覆盖已移除) */
+
+/* v1.30: 操作原型 (operationProfiles) + 继承派生输出 + 稀疏 responseParser */
+.profiles-collapse {
+  flex-shrink: 0;
+  margin-bottom: 8px;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface-2);
+}
+.profiles-collapse :deep(.el-collapse-item__header) {
+  height: 34px;
+  line-height: 34px;
+  padding: 0 10px;
+  gap: 8px;
+  border-bottom: none;
+  background: transparent;
+}
+.profiles-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+  background: transparent;
+}
+.profiles-collapse :deep(.el-collapse-item__content) { padding: 0 10px 10px; }
+.profiles-title { font-size: var(--mp-fs-sm); font-weight: 600; color: var(--mp-ink-2); }
+.profiles-count {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--mp-surface-3);
+  color: var(--mp-muted);
+}
+.profiles-tip {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--mp-muted-2);
+  margin-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profiles-body { display: flex; flex-direction: column; gap: 6px; }
+.profiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 110px;
+  overflow: auto;
+}
+.profile-item { display: flex; align-items: center; gap: 8px; font-size: var(--mp-fs-xs); }
+.profile-item code,
+.inherited-row code {
+  font-family: var(--mp-font-mono);
+  color: var(--mp-accent-hover);
+  background: var(--mp-accent-soft);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.profile-desc { color: var(--mp-muted); }
+.profiles-error { font-size: var(--mp-fs-xs); color: #dc2626; }
+.profile-opt-name { font-family: var(--mp-font-mono); }
+.inherited-out {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface-2);
+}
+.inherited-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.inherited-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 3px 0;
+  font-size: var(--mp-fs-xs);
+}
+.inherited-expr { background: var(--mp-surface-3) !important; color: var(--mp-ink-2) !important; }
+.rp-hint { display: flex; align-items: center; gap: 6px; width: 100%; }
+.rp-hint .el-button { margin-left: auto; }
 </style>

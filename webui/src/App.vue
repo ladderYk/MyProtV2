@@ -1,7 +1,7 @@
 <script setup>
 // 应用骨架 — 顶部导航 (品牌 / 分组菜单 / 全局状态 / 热重载与帮助)
 // 页面为组件内状态 (无路由); 默认落地「总览」, 之后记住上次页面。
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElConfigProvider } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import enLocale from 'element-plus/es/locale/lang/en'
@@ -56,6 +56,47 @@ const reloadBusy = ref(false)
 const navIntent = ref(null)
 // 配置工作台未保存修改标记 — 顶栏切页时据此拦一道 (此前切页会静默丢弃编辑)
 const configDirty = ref(false)
+// 窄屏顶栏导航可横向滚动: 用两端渐隐提示「还有未显示项」
+const navEl = ref(null)
+const navFade = ref({ left: false, right: false })
+
+function updateNavFade() {
+  const el = navEl.value
+  if (!el) {
+    navFade.value = { left: false, right: false }
+    return
+  }
+  navFade.value = {
+    left: el.scrollLeft > 1,
+    right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+  }
+}
+
+function scrollNav(dir) {
+  const el = navEl.value
+  if (!el) return
+  el.scrollLeft += dir * Math.max(120, el.clientWidth * 0.6)
+}
+
+// 窄屏切页时把当前项完整滚入可视区, 避免高亮项被边缘渐隐截断
+function revealActiveNavItem() {
+  const el = navEl.value
+  if (!el) return
+  const active = el.querySelector('.nav-item.active')
+  if (!active) return
+  const box = el.getBoundingClientRect()
+  const item = active.getBoundingClientRect()
+  // 留出 24px 余量, 让高亮项避开两端 20px 的渐隐区
+  const pad = 24
+  if (item.right > box.right - pad) el.scrollLeft += item.right - box.right + pad
+  else if (item.left < box.left + pad) el.scrollLeft += item.left - box.left - pad
+}
+
+watch([authed, locale, activeView], async () => {
+  await nextTick()
+  updateNavFade()
+  revealActiveNavItem()
+})
 
 // ── 顶栏导航 ──
 // Element Plus 组件文案随顶栏语言切换 (分页/空态/下拉等)
@@ -79,6 +120,7 @@ async function probeAuthRequired() {
 
 // 启动探测: 先问 /health 是否启用认证, 再用已存 token 试探一次受保护端点
 onMounted(async () => {
+  window.addEventListener('resize', updateNavFade)
   const saved = localStorage.getItem(VIEW_KEY)
   if (saved && NAV.some(g => g.items.some(i => i.key === saved))) activeView.value = saved
   // 任意请求 401 → 统一切回登录页 (此前各组件只各自报错, 用户被困在全按钮报错界面)
@@ -110,6 +152,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', updateNavFade)
   stopRuntimeStatus()
 })
 
@@ -192,7 +235,12 @@ async function onConfigChanged() {
           <span class="brand-sub">{{ t('管理控制台') }}</span>
         </div>
 
-        <nav class="nav">
+        <button v-if="navFade.left" class="nav-arrow" aria-label="previous" @click="scrollNav(-1)">‹</button>
+        <nav
+          ref="navEl" class="nav"
+          :class="{ 'fade-left': navFade.left, 'fade-right': navFade.right }"
+          @scroll="updateNavFade"
+        >
           <template v-for="(g, gi) in NAV" :key="g.group">
             <span v-if="gi > 0" class="nav-sep" aria-hidden="true"></span>
             <button
@@ -202,8 +250,7 @@ async function onConfigChanged() {
             >{{ t(it.label) }}</button>
           </template>
         </nav>
-
-        <span class="spacer"></span>
+        <button v-if="navFade.right" class="nav-arrow" aria-label="next" @click="scrollNav(1)">›</button>
 
         <div class="tb-status" :title="runtimeState.lastUpdate ? t('采集快照时间 {time}', { time: new Date(runtimeState.lastUpdate).toLocaleTimeString() }) : t('尚无采集值')">
           <span class="dot" :class="goodCount > 0 ? 'ok' : 'off'"></span>{{ statusText }}
@@ -310,10 +357,41 @@ async function onConfigChanged() {
   align-items: center;
   gap: 2px;
   min-width: 0;
+  flex: 1;
   overflow-x: auto;
   scrollbar-width: none;
 }
+/* 溢出时在导航两端显示箭头, 明确“还能横向滚动”; 箭头占位不遮挡菜单项 */
+.nav-arrow {
+  flex-shrink: 0;
+  width: 22px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .10);
+  color: var(--mp-topbar-ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.nav-arrow:hover { background: rgba(255, 255, 255, .20); }
 .nav::-webkit-scrollbar { display: none; }
+/* 可横向滚动时两端渐隐, 避免隐藏滚动条后看不出还有内容 */
+.nav.fade-left {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 20px);
+  mask-image: linear-gradient(to right, transparent, #000 20px);
+}
+.nav.fade-right {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+.nav.fade-left.fade-right {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 20px, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 20px, #000 calc(100% - 20px), transparent);
+}
 .nav-sep {
   width: 1px;
   height: 18px;
@@ -339,7 +417,6 @@ async function onConfigChanged() {
   color: var(--mp-topbar-active-ink);
   font-weight: 600;
 }
-.spacer { flex: 1; }
 
 .tb-status {
   display: inline-flex;

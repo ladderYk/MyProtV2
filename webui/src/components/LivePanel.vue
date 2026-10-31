@@ -1,29 +1,36 @@
 <script setup>
 // 实时监控 — SSE 推送采集最新值快照展示
-// 数据流: EventSource(/api/data/stream) 服务端每 3s 推全量快照 → onmessage 更新;
+// 数据流: EventSource(/api/data/stream) 服务端每 3s 推全量快照 → 增量并入共享 rows;
 //        断流由浏览器自动重连; 手动刷新兜底走 latestValues() 快照接口
-//        变化行高亮 (changed), 质量徽标 Good/Bad/Uncertain
-import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
+//        值变化行短亮 (changed), 质量徽标 Good/Bad/Uncertain
+// 共享: rows 由 useRuntimeStatus 维护 (总览页 / 顶栏状态条同源), 推送期间
+//       REST 快照轮询自动暂停, 避免同一个 /api/data/latest 被两路重复拉取
+import { ref, computed, reactive, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import PageHeader from './PageHeader.vue'
 import StatusBadge from './StatusBadge.vue'
 import EmptyState from './EmptyState.vue'
 import { latestValues, dataStreamUrl, writeTag, listConfigs, getConfig } from '../api'
+import {
+  runtimeState, applySnapshot, holdValuePolling, releaseValuePolling
+} from '../composables/useRuntimeStatus'
 import { t } from '../i18n'
 import { parseConfigJson } from '../jsonText'
 
-const rows = ref([])          // [{name, device, value, quality, timestamp, changed}]
+// 共享快照 (只读视图): 合并/去重/高亮逻辑都在 useRuntimeStatus.applySnapshot
+const rows = computed(() => runtimeState.rows)
 const emit = defineEmits(['navigate'])   // 空状态里的跳转按钮 (去添加标签 / 去启动仿真)
 const keyword = ref('')       // 按标签名/设备过滤
 const deviceFilter = ref('')  // 设备筛选 ('' = 全部)
 const collapsed = reactive({}) // 设备分组折叠状态 (设备名 → bool)
-const lastUpdate = ref(0)     // 最近一次收到快照时间戳 (ms)
 const message = ref('')
 const busy = ref(false)
 const streaming = ref(false)  // 是否开启 SSE 实时推送
 // v1.1 增: sparkline 历史 (tagName → 最近 30 个数值点; 滚动窗口; 仅 Good 入列)
 const SPARK_LEN = 30
 const history = ref({})       // { 'PLC-001.Temperature': [12.3, 12.5, ...], ... }
+const histTs = {}             // key → 已入列的采样时间戳 (同一采样不重复入列)
 let es = null
+let pollHeld = false          // 是否已暂停 REST 快照轮询 (与 holdValuePolling 成对)
 
 const filtered = computed(() => {
   const k = keyword.value.trim().toLowerCase()
@@ -109,18 +116,29 @@ function formatFloat(value) {
   return String(value)
 }
 
-// v1.1 增: 把当前快照中所有 Good 数值标签的 value 推入滚动窗口
-function pushHistory(rows) {
+// v1.1 增: 把本帧中「有新采样」的 Good 数值标签推入滚动窗口
+// SSE 每 3s 推全量快照, 而慢周期标签的 timestamp 不会变 — 按 timestamp
+// 去重, 否则趋势线会把同一个采样点重复计入 (旧实现每帧全量 push)。
+function pushHistory(list) {
   const h = history.value
-  for (const r of rows) {
+  for (const r of list) {
     if (r.quality !== 'Good') continue
     const num = Number(r.value)
     if (!Number.isFinite(num)) continue
     const key = r.device + '.' + r.name
+    const ts = Number(r.timestamp) || 0
+    if (histTs[key] !== undefined && ts <= histTs[key]) continue
+    histTs[key] = ts
     if (!h[key]) h[key] = []
     h[key].push(num)
     if (h[key].length > SPARK_LEN) h[key].shift()
   }
+}
+
+/// 一帧快照 (SSE 推送或手动刷新): 先并入共享 rows, 再补趋势采样
+function applyFrame(list) {
+  applySnapshot(list)
+  pushHistory(list)
 }
 
 // v1.1 增: 把 values 数组映射到 SVG polyline 的 'x,y x,y ...' 字符串
@@ -150,10 +168,7 @@ async function refresh(silent) {
   busy.value = true
   try {
     const r = await latestValues()
-    const tagRows = r.tags || []
-    rows.value = tagRows
-    pushHistory(tagRows)
-    lastUpdate.value = Date.now()
+    applyFrame(r.tags || [])
     message.value = ''
   } catch (e) {
     if (!silent) message.value = e.status === 404 ? t('数据面不可用 (引擎未运行或版本过旧)') : e.message
@@ -169,10 +184,7 @@ function startStream() {
     es.onmessage = ev => {
       try {
         const r = JSON.parse(ev.data)
-        const tagRows = r.tags || []
-        rows.value = tagRows
-        pushHistory(tagRows)
-        lastUpdate.value = Date.now()
+        applyFrame(r.tags || [])
         message.value = ''
       } catch (_) { /* 忽略坏帧 */ }
     }
@@ -191,6 +203,8 @@ function startStream() {
       }
     }
     streaming.value = true
+    // 推送已接管快照更新 — 让 5s 的 REST 轮询让位 (离开页面/停推时恢复)
+    if (!pollHeld) { pollHeld = true; holdValuePolling() }
   } catch (_) {
     es = null
     streaming.value = false
@@ -199,10 +213,12 @@ function startStream() {
 }
 
 function stopStream() {
-  if (!es) return
-  es.close()
-  es = null
+  if (es) {
+    es.close()
+    es = null
+  }
   streaming.value = false
+  if (pollHeld) { pollHeld = false; releaseValuePolling() }
 }
 
 // ── v1.2 增: 写数据 (POST /api/data/write) ──
@@ -222,6 +238,21 @@ const writeTagSel = ref('')     // 当前选中的写标签名 (一行可配多�
 const writeIndexReady = ref(false) // 写标签索引是否已成功加载 (失败时保留 legacy 全量写入入口)
 const tagMeta = ref({})         // 标签名 → { label, unit } (配置中的展示元数据)
 let writeIndexTimer = null
+
+// ── 行内写: 双击数值单元格 → 输入 → Enter 提交 / Esc 或失焦取消 ──
+// 抽屉仍保留: 字节 (hex)、多写标签切换、非标量类型等高级场景走抽屉
+const INLINE_RB_KEY = 'mp.inline.readback'
+const inlineReadBack = ref(readInlineReadBack())
+const inlineEdit = ref(null)    // { key, tagName, step, text, busy, err }
+const inlineFlash = ref('')     // 写入成功后短亮标记的行 key
+let inlineFlashTimer = null
+
+function readInlineReadBack() {
+  try { return localStorage.getItem(INLINE_RB_KEY) === '1' } catch (_) { return false }
+}
+watch(inlineReadBack, v => {
+  try { localStorage.setItem(INLINE_RB_KEY, v ? '1' : '0') } catch (_) { /* 忽略 */ }
+})
 
 // 写标签 finalType → 数值输入约束 (Float/Double 允许小数)
 function writeTagFloat(ft) { return ft === 'Float' || ft === 'Double' }
@@ -270,6 +301,73 @@ async function loadWriteTagIndex() {
 /// 该行是否提供写入入口: 索引已就绪时仅可写标签 (writeOperation / 写标签) 可写
 function canWrite(r) {
   return !writeIndexReady.value || (writeTagIndex.value[r.name] || []).length > 0
+}
+
+/// 行内写的目标标签: 索引就绪时取该行第一个写标签, 否则走 legacy 数值路径
+function inlineTarget(r) {
+  const list = writeTagIndex.value[r.name] || []
+  return list.length ? list[0] : null
+}
+/// 行内只支持标量; String/ByteArray 需要抽屉里的字节输入
+function inlineSupported(r) {
+  if (!canWrite(r)) return false
+  const wt = inlineTarget(r)
+  if (!wt) return !writeIndexReady.value
+  return wt.finalType !== 'String' && wt.finalType !== 'ByteArray'
+}
+function inlineKey(r) { return r.device + '.' + r.name }
+function startInline(r) {
+  // 已在编辑同一行: 保留用户输入 (dblclick 会在输入框内冒泡到单元格)
+  if (inlineEdit.value && inlineEdit.value.key === inlineKey(r)) return
+  if (!inlineSupported(r)) {
+    if (canWrite(r)) openWrite(r)
+    return
+  }
+  const wt = inlineTarget(r)
+  // Bool 的实时值是 true/false, 后端 value 只收数值 → 行内用 1/0 表示
+  const boolText = (r.value === true || r.value === 1) ? '1'
+    : (r.value === false || r.value === 0 ? '0' : '')
+  inlineEdit.value = {
+    key: inlineKey(r),
+    tagName: wt ? wt.name : r.name,
+    step: wt && writeTagFloat(wt.finalType) ? 'any' : '1',
+    text: r.value === null || r.value === undefined ? ''
+      : (wt && wt.finalType === 'Bool' ? boolText : String(r.value)),
+    busy: false,
+    err: ''
+  }
+  nextTick(() => {
+    const el = document.querySelector('.live-table input.inline-input')
+    if (el) { el.focus(); if (el.select) el.select() }
+  })
+}
+function cancelInline() {
+  if (inlineEdit.value && inlineEdit.value.busy) return
+  inlineEdit.value = null
+}
+async function submitInline() {
+  const ed = inlineEdit.value
+  if (!ed || ed.busy) return
+  const raw = String(ed.text == null ? '' : ed.text).trim()
+  if (!raw) { ed.err = t('请输入数值'); return }
+  const num = Number(raw)
+  if (!Number.isFinite(num)) { ed.err = t('请输入有效数值'); return }
+  ed.busy = true
+  ed.err = ''
+  try {
+    const body = { tag: ed.tagName, value: num }
+    if (inlineReadBack.value) body.readBack = true
+    await writeTag(body)
+    const key = ed.key
+    inlineEdit.value = null
+    inlineFlash.value = key
+    clearTimeout(inlineFlashTimer)
+    inlineFlashTimer = setTimeout(() => { inlineFlash.value = '' }, 1500)
+    refresh(true)
+  } catch (e) {
+    ed.err = e.message
+    ed.busy = false
+  }
 }
 
 /// 配置中的显示名称 / 工程单位 (未配置 → 空串, 展示时回退标签名 / 不显示单位)
@@ -334,7 +432,8 @@ async function submitWrite() {
 }
 
 onMounted(() => {
-  refresh(false)
+  // App 启动时已拉过一轮快照: 有数据就直接等推送, 不重复打 /api/data/latest
+  if (!runtimeState.lastUpdate) refresh(false)
   startStream()
   // 写标签索引错开首屏请求: App 启动 + 快照 + SSE 已占用限流突发额度,
   // 立即再发 list/get 两个请求会触发 5 rps 限流 (429)
@@ -342,17 +441,18 @@ onMounted(() => {
 })
 onUnmounted(() => {
   clearTimeout(writeIndexTimer)
+  clearTimeout(inlineFlashTimer)
   stopStream()
 })
 </script>
 
 <template>
   <div class="live">
-    <PageHeader :title="t('实时监控')" :desc="t('采集值快照与标签写入; 名称优先显示配置的中文名, 数值后为单位。')">
+    <PageHeader :title="t('实时监控')" :desc="t('采集值快照与标签写入; 双击数值可快速写入 (Enter 提交 / Esc 取消); 名称优先显示配置的中文名, 数值后为单位。')">
       <template #meta>
         <StatusBadge :kind="streaming ? 'ok' : 'off'" :text="streaming ? t('推送中') : t('已暂停')" />
         <span>{{ t('{n} 标签 · {good} Good', { n: rows.length, good: goodCount }) }}</span>
-        <span v-if="lastUpdate">· {{ t('更新于 {time}', { time: fmtTime(lastUpdate) }) }}</span>
+        <span v-if="runtimeState.lastUpdate">· {{ t('更新于 {time}', { time: fmtTime(runtimeState.lastUpdate) }) }}</span>
       </template>
     </PageHeader>
 
@@ -370,6 +470,9 @@ onUnmounted(() => {
         <option v-for="d in devices" :key="d" :value="d">{{ d }}</option>
       </select>
       <span class="bar-spacer"></span>
+      <label class="inline-rb" :title="t('行内写入时附带 readBack 校验')">
+        <input v-model="inlineReadBack" type="checkbox" /> {{ t('写后读回') }}
+      </label>
       <button class="btn small" :class="{ polling: streaming }" @click="streaming ? stopStream() : startStream()">
         {{ streaming ? t('停止推送') : t('实时推送') }}
       </button>
@@ -416,11 +519,39 @@ onUnmounted(() => {
               <div v-if="labelOf(r)" class="tag-label">{{ labelOf(r) }}</div>
               <div :class="['tag-name', { sub: !!labelOf(r) }]">{{ r.name }}</div>
             </td>
-            <td class="mono value">
-              {{ fmtValue(r.value) }}<span
-                v-if="unitOf(r) && r.value !== null && r.value !== undefined"
-                class="unit"
-              >{{ unitOf(r) }}</span>
+            <td
+              class="mono value"
+              :class="{ editable: inlineSupported(r) }"
+              :title="inlineSupported(r) ? t('双击写入') : ''"
+              @dblclick="startInline(r)"
+            >
+              <template v-if="inlineEdit && inlineEdit.key === r.device + '.' + r.name">
+                <input
+                  v-model="inlineEdit.text"
+                  class="inline-input"
+                  type="number"
+                  :step="inlineEdit.step"
+                  :disabled="inlineEdit.busy"
+                  @keydown.enter.prevent="submitInline"
+                  @keydown.esc.prevent="cancelInline"
+                  @blur="cancelInline"
+                />
+                <div
+                  v-if="inlineEdit.err"
+                  class="inline-err"
+                  :title="inlineEdit.err"
+                >{{ inlineEdit.err }}</div>
+                <div v-else class="inline-tip">
+                  {{ inlineEdit.busy ? t('写入中…') : t('Enter 写入 · Esc 取消') }}
+                </div>
+              </template>
+              <template v-else>
+                {{ fmtValue(r.value) }}<span
+                  v-if="unitOf(r) && r.value !== null && r.value !== undefined"
+                  class="unit"
+                >{{ unitOf(r) }}</span>
+                <span v-if="inlineFlash === r.device + '.' + r.name" class="inline-ok">✓</span>
+              </template>
             </td>
             <td>
               <StatusBadge :kind="qualityKind(r.quality)" :text="r.quality" />
@@ -671,6 +802,43 @@ th:nth-child(2) { text-align: right; }
 .tag-name.sub { font-size: var(--mp-fs-xs); font-weight: 400; color: var(--mp-muted-2); margin-top: 1px; }
 .value { font-size: var(--mp-fs-md); text-align: right; font-variant-numeric: tabular-nums; }
 .unit { margin-left: 4px; font-size: var(--mp-fs-sm); font-weight: 400; color: var(--mp-muted); }
+
+/* 行内写: 双击数值 → 输入框; 抽屉仍负责字节/多写标签等高级场景 */
+.value.editable { cursor: text; }
+.value.editable:hover { background: var(--mp-accent-soft); }
+.inline-input {
+  width: 100%;
+  min-width: 72px;
+  height: 26px;
+  padding: 0 6px;
+  text-align: right;
+  font: inherit;
+  color: var(--mp-ink);
+  background: var(--mp-surface);
+  border: 1px solid var(--mp-accent);
+  border-radius: var(--mp-radius-sm);
+  outline: none;
+}
+.inline-tip, .inline-err {
+  max-width: 220px;
+  margin-top: 2px;
+  font-size: var(--mp-fs-xs);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inline-tip { color: var(--mp-muted); }
+.inline-err { color: var(--mp-err-ink); }
+.inline-ok { margin-left: 4px; font-size: var(--mp-fs-xs); color: var(--mp-ok); }
+.inline-rb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted);
+  white-space: nowrap;
+}
 tr.changed td { background: var(--mp-warn-soft); }
 tbody tr:nth-child(even) td { background: var(--mp-surface-2); }
 tbody tr:hover td { background: var(--mp-accent-soft); }

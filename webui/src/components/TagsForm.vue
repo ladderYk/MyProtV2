@@ -592,9 +592,11 @@ function simpleBitOnly(tag) {
   return mode === 'bit' || (mode === 'byte' && tag.finalType === 'Bool')
 }
 
-function setSimpleAddr(tag, v) {
+/// 按当前协议的地址单位写入 StartByteAddress / bitOffset (不含 emitDoc)
+/// 表单、批量新增、复制标签共用同一套换算, 避免两处口径漂移
+function applySimpleAddr(tag, v) {
   const n = Number(v)
-  if (!Number.isFinite(n) || n < 0) return
+  if (!Number.isFinite(n) || n < 0) return false
   tag.variables = tag.variables || {}
   const mode = simpleAddrMode(tag)
   if (mode === 'word') {
@@ -607,6 +609,11 @@ function setSimpleAddr(tag, v) {
     tag.variables.StartByteAddress = Math.round(n)
     if (tag.finalType === 'Bool') tag.variables.ByteCount = 1
   }
+  return true
+}
+
+function setSimpleAddr(tag, v) {
+  if (!applySimpleAddr(tag, v)) return
   syncRows(tag)
   emitDoc()
 }
@@ -686,6 +693,327 @@ function removeTag(i) {
   local.tags.splice(i, 1)
   if (!local.tags.length) selMode.value = 'dev'   // 已无标签 → 回到设备视图
   emitDoc()
+}
+
+// ── v1.32: 批量新增 / 复制 (减少重复建标签) ─────────────────────
+// 典型场景: 一台 PLC 有 12 个连续寄存器点位, 原先要重复「新增标签 → 切地址页 → 填地址」
+// 12 次。这里提供两条捷径: ① 区间生成 (起始地址 + 数量 + 步长); ② 从 Excel 粘贴表格。
+// 生成结果仍逐个写回 tags, 保存时走既有完整校验。
+
+/// 一个值占用的地址步长 (按当前协议的地址单位):
+/// word = 字/寄存器 → ceil(字节宽/2); bit = 线圈 → 1; byte/raw → 字节宽
+function typeAddrStep(tag) {
+  const size = typeSizeOf(tag.finalType) || 1
+  const mode = simpleAddrMode(tag)
+  if (mode === 'word') return Math.max(1, Math.ceil(size / 2))
+  if (mode === 'bit') return 1
+  return size
+}
+
+/// 名称去重: 已存在 base 时依次尝试 base_2 / base_3 …; used 可传入批量内部的占用集合
+function uniqueNameAmong(base, used) {
+  let name = base
+  let i = 2
+  while (used.has(name)) { name = base + '_' + i; i++ }
+  used.add(name)
+  return name
+}
+function existingTagNames() {
+  const s = new Set()
+  for (const tag of (local.tags || [])) s.add(tag.name)
+  return s
+}
+function hasOwn(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key)
+}
+function uniqueTagName(base) {
+  return uniqueNameAmong(base, existingTagNames())
+}
+
+/// 复制标签: 名称追加 _copy, 地址顺延一个类型步长, 其余字段原样保留
+function copyTag(i) {
+  const src = local.tags[i]
+  if (!src) return
+  const tag = clone(src)
+  tag.name = uniqueTagName((src.name || 'Tag') + '_copy')
+  bumpTagAddress(tag)
+  syncRows(tag)
+  local.tags.splice(i + 1, 0, tag)   // 紧跟原标签, 便于对照修改
+  selectTag(i + 1)
+  tagTab.value = 'def'
+  openDevs[devIndexById(tag.deviceId)] = true
+  treeKw.value = ''
+  emitDoc()
+  ElMessage.success(t('已复制标签「{name}」', { name: tag.name }))
+}
+
+/// 地址顺延: 能走简易地址映射时按协议单位 + 一步; 否则按字节地址 + ByteCount
+/// (没有 StartByteAddress 的文本协议 — 如 SEER — 不改变量)
+function bumpTagAddress(tag) {
+  if (!hasOwn(tag.variables, 'StartByteAddress')) return
+  if (simpleSupported(tag)) {
+    applySimpleAddr(tag, simpleAddr(tag) + typeAddrStep(tag))
+    return
+  }
+  const bc = Number(tag.variables.ByteCount) || typeSizeOf(tag.finalType) || 1
+  tag.variables.StartByteAddress = (Number(tag.variables.StartByteAddress) || 0) + bc
+}
+
+/// 设备 ID 顺延: 末尾数字 +1 (PLC-001 → PLC-002); 无数字后缀则追加 _copy
+function uniqueDeviceId(base) {
+  const ids = new Set((local.devices || []).map(d => d.id))
+  const m = /^(.*?)(\d+)$/.exec(base || '')
+  if (m) {
+    const stem = m[1]
+    const width = m[2].length
+    let n = Number(m[2])
+    let id
+    do {
+      n++
+      id = stem + String(n).padStart(width, '0')
+    } while (ids.has(id))
+    return id
+  }
+  const stem = (base || 'DEV') + '_copy'
+  let id = stem
+  let i = 2
+  while (ids.has(id)) { id = stem + i; i++ }
+  return id
+}
+
+/// 复制设备: 连接参数原样保留, 其下标签一并复制 (改 deviceId + 名称前缀)
+function copyDevice(i) {
+  const src = local.devices[i]
+  if (!src) return
+  const id = uniqueDeviceId(src.id)
+  const dev = clone(src)
+  dev.id = id
+  const oldPrefix = (src.id || '') + '.'
+  const used = existingTagNames()
+  const copies = (local.tags || []).filter(tag => tag.deviceId === src.id).map(tag => {
+    const nt = clone(tag)
+    nt.deviceId = id
+    const base = (tag.name || 'Tag').indexOf(oldPrefix) === 0
+      ? id + '.' + tag.name.slice(oldPrefix.length)
+      : (tag.name || 'Tag') + '_copy'
+    nt.name = uniqueNameAmong(base, used)
+    syncRows(nt)
+    return nt
+  })
+  local.devices.splice(i + 1, 0, dev)
+  local.tags.push(...copies)
+  selDev.value = i + 1
+  selMode.value = 'dev'
+  openDevs[selDev.value] = true
+  treeKw.value = ''
+  emitDoc()
+  ElMessage.success(copies.length
+    ? t('已复制设备「{name}」及其 {n} 个标签', { name: id, n: copies.length })
+    : t('已复制设备「{name}」', { name: id }))
+}
+
+// ── 批量新增标签 ──
+const batchOpen = ref(false)
+const batchTab = ref('range')        // range = 区间生成 | paste = 表格粘贴
+const batchDev = ref('')
+const batchOp = ref('')
+const batchFinalType = ref('UInt16')
+const batchScanRate = ref(1000)
+const batchStart = ref(0)
+const batchCount = ref(8)
+const batchStep = ref(1)
+const batchNameTpl = ref('{dev}.Tag{addr}')
+const batchPaste = ref('')
+const batchErr = ref('')
+
+function batchProbe() {
+  return { deviceId: batchDev.value, operation: batchOp.value, finalType: batchFinalType.value }
+}
+function batchAddrMode() { return simpleAddrMode(batchProbe()) }
+function batchAddrLabel() {
+  return t({ word: '起始字地址', byte: '起始字节地址', bit: '位地址 (线圈号)' }[batchAddrMode()] || '起始地址')
+}
+function batchOpCandidates() {
+  const dev = local.devices.find(d => d.id === batchDev.value)
+  return (dev && opsByProtocol[dev.protocol]) || []
+}
+/// 首个 read 类操作 (未标 kind 时回退到全部)
+function firstReadOp(devId) {
+  const dev = local.devices.find(d => d.id === devId)
+  const all = (dev && opsByProtocol[dev.protocol]) || []
+  const kinds = (dev && opsKindByProtocol[dev.protocol]) || {}
+  return all.find(o => kinds[o] === 'read') || all[0] || ''
+}
+/// 点类型 (线圈) 默认 Bool, 否则 UInt16
+function defaultBatchTypeFor(op, devId) {
+  const mode = simpleAddrMode({ deviceId: devId, operation: op, finalType: 'UInt16' })
+  return mode === 'bit' ? 'Bool' : 'UInt16'
+}
+/// 默认起点 = 同设备同操作现有标签的最大地址 + 一步 (无地址语义时 0)
+function nextBatchStart(devId, op, type) {
+  const probe = { deviceId: devId, operation: op, finalType: type }
+  if (!simpleAddrMode(probe)) return 0
+  let max = -1
+  for (const tag of (local.tags || [])) {
+    if (tag.deviceId !== devId || tag.operation !== op) continue
+    if (!simpleSupported(tag)) continue
+    max = Math.max(max, simpleAddr(tag))
+  }
+  return max < 0 ? 0 : max + typeAddrStep(probe)
+}
+function openBatch() {
+  if (!local.devices.length) {
+    ElMessage.warning(t('请先新增设备, 再批量新增标签'))
+    return
+  }
+  const devId = (selMode.value === 'tag' && curTag.value && curTag.value.deviceId)
+    || (local.devices[selDev.value] && local.devices[selDev.value].id)
+    || local.devices[0].id
+  batchDev.value = devId
+  // 选中标签时沿用它的操作/类型; 否则取首个读操作, 并根据地址单位选 Bool/UInt16
+  if (selMode.value === 'tag' && curTag.value) {
+    batchOp.value = curTag.value.operation || firstReadOp(devId)
+    batchFinalType.value = curTag.value.finalType || 'UInt16'
+  } else {
+    batchOp.value = firstReadOp(devId)
+    batchFinalType.value = defaultBatchTypeFor(batchOp.value, devId)
+  }
+  batchScanRate.value = 1000
+  batchStart.value = nextBatchStart(devId, batchOp.value, batchFinalType.value)
+  batchCount.value = 8
+  batchStep.value = typeAddrStep(batchProbe())
+  batchNameTpl.value = devId + '.Tag{addr}'
+  batchPaste.value = ''
+  batchErr.value = ''
+  batchTab.value = 'range'
+  batchOpen.value = true
+}
+
+// 设备切换后操作名可能不属于新协议 → 回退到首个读操作, 并按新操作修正默认类型
+watch(batchDev, () => {
+  const list = batchOpCandidates()
+  if (list.indexOf(batchOp.value) < 0) {
+    batchOp.value = firstReadOp(batchDev.value)
+    batchFinalType.value = defaultBatchTypeFor(batchOp.value, batchDev.value)
+  }
+})
+// 类型/协议变化会改变地址单位 → 步长跟随类型宽度 (仍可手改)
+watch([batchDev, batchOp, batchFinalType], () => {
+  batchStep.value = typeAddrStep(batchProbe())
+})
+
+/// 命名模板: 支持 {dev} 设备 ID / {addr} 地址 / {i} 序号 (1 起)
+function expandNameTpl(tpl, devId, addr, index) {
+  return String(tpl || '{dev}.Tag{addr}')
+    .replace(/\{dev\}/g, devId)
+    .replace(/\{addr\}/g, String(addr))
+    .replace(/\{i\}/g, String(index))
+    .trim()
+}
+
+const batchRangeRows = computed(() => {
+  const devId = batchDev.value
+  const count = Math.floor(Number(batchCount.value) || 0)
+  const start = Number(batchStart.value)
+  const step = Number(batchStep.value)
+  if (!devId || count < 1 || count > 500) return []
+  if (!Number.isFinite(start) || start < 0 || !Number.isFinite(step) || step < 1) return []
+  const used = existingTagNames()
+  const rows = []
+  for (let i = 0; i < count; i++) {
+    const addr = start + i * step
+    const base = expandNameTpl(batchNameTpl.value, devId, addr, i + 1)
+    if (!base) return []
+    rows.push({
+      name: uniqueNameAmong(base, used),
+      addr,
+      finalType: batchFinalType.value,
+      unit: ''
+    })
+  }
+  return rows
+})
+
+/// 解析粘贴表格: 每行「名称, 地址[, 类型[, 单位]]」; 首行含 名称/name 与 地址/address 时视为表头
+function parsePasteRows(text) {
+  const rows = []
+  let headerChecked = false
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.indexOf('#') === 0 || line.indexOf('//') === 0) continue
+    const cells = line.split(/[\t,;，]+/).map(s => s.trim())
+    if (cells.length < 2) continue
+    if (!headerChecked && /name|名称/i.test(cells[0]) && /addr|地址/i.test(cells[1])) {
+      headerChecked = true
+      continue
+    }
+    headerChecked = true
+    rows.push(cells)
+  }
+  return rows
+}
+
+function normalizeFinalType(v) {
+  const hit = FINAL_TYPES.value.find(x => String(x).toLowerCase() === String(v || '').toLowerCase())
+  return hit || ''
+}
+
+const batchPasteRows = computed(() => {
+  const used = existingTagNames()
+  const rows = []
+  for (const cells of parsePasteRows(batchPaste.value)) {
+    const addr = Number(cells[1])
+    if (!Number.isFinite(addr) || addr < 0) continue
+    const ft = (cells[2] && normalizeFinalType(cells[2])) || batchFinalType.value
+    const base = cells[0] || expandNameTpl(batchNameTpl.value, batchDev.value, addr, rows.length + 1)
+    if (!base) continue
+    rows.push({
+      name: uniqueNameAmong(base, used),
+      addr,
+      finalType: ft,
+      unit: cells[3] || ''
+    })
+  }
+  return rows
+})
+
+const batchRows = computed(() => (batchTab.value === 'paste' ? batchPasteRows.value : batchRangeRows.value))
+
+function applyBatch() {
+  const rows = batchRows.value
+  if (!batchDev.value || !batchOp.value) { batchErr.value = t('请选择设备与操作名'); return }
+  if (!rows.length) { batchErr.value = t('没有可生成的标签'); return }
+  if (rows.length > 500) { batchErr.value = t('单次最多生成 500 个标签'); return }
+  const tags = rows.map(r => {
+    const vars = defaultVariablesFor(batchDev.value)
+    const tag = {
+      name: r.name,
+      deviceId: batchDev.value,
+      operation: batchOp.value,
+      scanRateMs: Number(batchScanRate.value) || 1000,
+      finalType: r.finalType || batchFinalType.value
+    }
+    if (Object.keys(vars).length) tag.variables = vars
+    if (r.unit) tag.unit = r.unit
+    // 只有协议声明了 StartByteAddress 才写地址 (SEER 这类文本协议没有地址语义)
+    const hasAddr = hasOwn(vars, 'StartByteAddress')
+    if (hasAddr) applySimpleAddr(tag, r.addr)
+    const size = typeSizeOf(tag.finalType)
+    if (size && hasAddr) {
+      tag.variables.ByteCount = simpleAddrMode(tag) === 'bit' ? 1 : size
+    }
+    syncRows(tag)
+    return tag
+  })
+  const first = local.tags.length
+  local.tags.push(...tags)
+  batchOpen.value = false
+  selectTag(first)
+  tagTab.value = 'def'
+  openDevs[devIndexById(batchDev.value)] = true
+  treeKw.value = ''
+  emitDoc()
+  ElMessage.success(t('已新增 {n} 个标签', { n: tags.length }))
 }
 
 // v1.1 增: 标签名重命名时的重名 / 重复检查 (前端即时反馈; 后端会再深度校验)
@@ -832,6 +1160,7 @@ function onEditSource({ varName, layerKey }) {
       <div class="dt-actions">
         <button class="dt-add" @click="addDevice">{{ t('+ 新增设备') }}</button>
         <button class="dt-add" :disabled="!local.devices.length" @click="addTag">{{ t('+ 新增标签') }}</button>
+        <button class="dt-add" :disabled="!local.devices.length" @click="openBatch">{{ t('批量新增') }}</button>
       </div>
     </aside>
 
@@ -852,6 +1181,14 @@ function onEditSource({ varName, layerKey }) {
         </template>
         <span v-else class="ctx-empty">{{ t('左侧选择设备或标签') }}</span>
         <span class="ctx-spacer"></span>
+        <el-button
+          v-if="selMode === 'tag' && curTag"
+          size="small" @click="copyTag(selTag)"
+        >{{ t('复制标签') }}</el-button>
+        <el-button
+          v-else-if="curDev"
+          size="small" @click="copyDevice(selDev)"
+        >{{ t('复制设备') }}</el-button>
         <el-button
           v-if="selMode === 'tag' && curTag"
           type="danger" size="small" plain @click="removeTag(selTag)"
@@ -917,6 +1254,7 @@ function onEditSource({ varName, layerKey }) {
             <el-form-item :label="t('端口')">
               <el-input-number
                 :model-value="curDev.connection.port" :min="1" :max="65535"
+                style="width: 180px"
                 @update:model-value="v => { curDev.connection.port = v; emitDoc() }"
               />
               <span class="unit">{{ t('端口 (1-65535)') }}</span>
@@ -1358,6 +1696,91 @@ function onEditSource({ varName, layerKey }) {
         </el-collapse>
       </el-drawer>
     </section>
+
+    <!-- v1.32: 批量新增标签 — 区间生成 / 表格粘贴; 生成前先预览 -->
+    <el-dialog v-model="batchOpen" :title="t('批量新增标签')" width="680px" class="batch-dialog">
+      <el-form size="default" label-width="96px" class="form-grid">
+        <el-form-item :label="t('设备')">
+          <el-select v-model="batchDev" style="width: 200px">
+            <el-option v-for="d in local.devices" :key="d.id" :label="d.id" :value="d.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="t('操作名')">
+          <el-select v-model="batchOp" filterable style="width: 200px">
+            <el-option v-for="o in batchOpCandidates()" :key="o" :label="o" :value="o" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="t('采集周期')">
+          <el-input-number v-model="batchScanRate" :min="100" />
+          <span class="unit">ms</span>
+        </el-form-item>
+      </el-form>
+
+      <el-tabs v-model="batchTab" class="batch-tabs">
+        <el-tab-pane :label="t('区间生成')" name="range">
+          <el-form size="default" label-width="96px" class="form-grid">
+            <el-form-item :label="batchAddrLabel()">
+              <el-input-number v-model="batchStart" :min="0" :step="batchStep" />
+            </el-form-item>
+            <el-form-item :label="t('数量')">
+              <el-input-number v-model="batchCount" :min="1" :max="500" />
+              <span class="unit">{{ t('个') }}</span>
+            </el-form-item>
+            <el-form-item :label="t('步长')">
+              <el-input-number v-model="batchStep" :min="1" />
+              <div class="field-hint">{{ t('按当前地址单位递增 (默认按数据类型宽度)') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('数据类型')">
+              <el-select v-model="batchFinalType" filterable style="width: 160px">
+                <el-option v-for="ft in FINAL_TYPES" :key="ft" :label="ft" :value="ft" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="t('命名模板')" class="span2">
+              <el-input v-model="batchNameTpl" style="width: 300px" />
+              <div class="field-hint">{{ t('可用占位符: {dev} 设备 ID / {addr} 地址 / {i} 序号') }}</div>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+        <el-tab-pane :label="t('表格粘贴')" name="paste">
+          <el-input
+            v-model="batchPaste" type="textarea" :rows="7"
+            :placeholder="t('从 Excel 直接粘贴: 名称<TAB>地址<TAB>类型<TAB>单位 (类型/单位可省)')"
+          />
+          <div class="field-hint">{{ t('名称重复时自动追加 _2/_3; 地址单位与上方设备/操作对应') }}</div>
+        </el-tab-pane>
+      </el-tabs>
+
+      <div class="batch-preview">
+        <div class="batch-preview-head">
+          {{ t('预览: 共 {n} 个标签', { n: batchRows.length }) }}
+          <span v-if="batchRows.length > 10">{{ t('(仅显示前 10 条)') }}</span>
+        </div>
+        <table v-if="batchRows.length" class="batch-table">
+          <thead>
+            <tr><th>#</th><th>{{ t('名称') }}</th><th>{{ t('地址') }}</th><th>{{ t('类型') }}</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="(r, i) in batchRows.slice(0, 10)" :key="i">
+              <td>{{ i + 1 }}</td>
+              <td class="mono">{{ r.name }}</td>
+              <td class="mono">{{ r.addr }}</td>
+              <td>{{ r.finalType }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="field-hint">
+          {{ batchTab === 'paste' ? t('粘贴内容为空或格式不符') : t('请填写有效的起始地址/数量/步长') }}
+        </div>
+      </div>
+      <div v-if="batchErr" class="batch-err">{{ batchErr }}</div>
+
+      <template #footer>
+        <el-button @click="batchOpen = false">{{ t('取消') }}</el-button>
+        <el-button type="primary" :disabled="!batchRows.length" @click="applyBatch">
+          {{ t('生成 {n} 个标签', { n: batchRows.length }) }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1652,6 +2075,8 @@ function onEditSource({ varName, layerKey }) {
   margin-top: 2px;
 }
 .field-hint.warn { color: var(--mp-warn-ink); }
+/* 设备卡片里的说明另起一行, 窄屏时不与开关挤在一行 */
+.dev-pane .field-hint { flex-basis: 100%; }
 
 /* v1.31: 简易地址映射区 */
 .simple-map {
@@ -1828,4 +2253,35 @@ function onEditSource({ varName, layerKey }) {
 @media (max-width: 1100px) {
   .form-grid-wide.el-form { --el-form-label-width: 120px; }
 }
+
+/* v1.32: 批量新增标签 — 生成前预览 */
+.batch-dialog :deep(.el-dialog__body) { padding-top: 8px; }
+.batch-tabs :deep(.el-tabs__header) { margin-bottom: 8px; }
+.batch-preview {
+  margin-top: 4px;
+  max-height: 232px;
+  overflow: auto;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface-2);
+}
+.batch-preview-head {
+  position: sticky;
+  top: 0;
+  padding: 6px 10px;
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-muted);
+  background: var(--mp-surface-2);
+  border-bottom: 1px solid var(--mp-border);
+}
+.batch-table { width: 100%; border-collapse: collapse; font-size: var(--mp-fs-xs); }
+.batch-table th, .batch-table td {
+  padding: 4px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--mp-border);
+}
+.batch-table th { font-weight: 600; color: var(--mp-muted); }
+.batch-table tr:last-child td { border-bottom: none; }
+.batch-table td.mono { font-family: var(--mp-font-mono); }
+.batch-err { margin-top: 6px; font-size: var(--mp-fs-xs); color: var(--mp-err-ink); }
 </style>

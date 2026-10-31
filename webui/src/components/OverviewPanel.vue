@@ -444,8 +444,14 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 600px) {
-  .stat-row { grid-template-columns: 1fr; }
+  /* 4 张卡竖排会把「开始使用」推出首屏; 2×2 在手机上更紧凑 */
+  .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ready-row { flex-direction: column; align-items: flex-start; gap: var(--mp-sp-2); }
   .ready-spacer { display: none; }
+  /* 收紧单元格内边距, 避免设备表比视口宽 14px 还要横向滚动 */
+  .dev-table th, .dev-table td { padding-left: 8px; padding-right: 8px; }
+}
+@media (max-width: 420px) {
+  .stat-row { grid-template-columns: 1fr; }
 }
 </style>

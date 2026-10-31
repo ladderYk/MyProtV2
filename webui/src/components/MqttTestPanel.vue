@@ -243,7 +243,6 @@ onUnmounted(() => {
     <PageHeader
       :title="t('北向 MQTT 测试')"
       :desc="t('由网关代连 broker 并订阅过滤器，浏览器无需 WebSocket 端口。停止监听或关闭页面即断开。')"
-      icon="📡"
     >
       <template #meta>
         <StatusBadge :kind="statusKind" :text="statusText" />

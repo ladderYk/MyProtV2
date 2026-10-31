@@ -7,7 +7,7 @@
 # What it checks:
 #   shell layout + nav, overview cards/checklist, help drawer, protocol editor
 #   (search / JSON mode / self-check / unsaved-changes guard), tags tree,
-#   live table (search / write drawer / SSE toggle), simulator, breakpoints,
+#   live table (search / inline write / write drawer / SSE toggle), simulator, breakpoints,
 #   and a clean console/network (no JS errors, 429 or failed requests).
 #
 # Requirements: Windows, Microsoft Edge, Node.js (unless -SkipUiBuild),
@@ -609,6 +609,12 @@ true
     Start-Sleep -Milliseconds 400
     Check-Js "clearing live search restores rows" ('document.querySelectorAll(".live-table tbody tr:not(.group-row)").length >= ' + $liveTotal)
 
+    # inline write: double-click the value cell of the first writable row, then cancel with Esc
+    Invoke-Js '(function () { var rows = document.querySelectorAll(".live-table tbody tr:not(.group-row)"); for (var i = 0; i < rows.length; ++i) { if (rows[i].querySelector(".btn.tiny")) { var td = rows[i].querySelector("td.value"); td.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); return true; } } return false; })()' | Out-Null
+    Check-Wait "inline write input opens" '!!document.querySelector(".live-table input.inline-input")' 5
+    Invoke-Js '(function () { var el = document.querySelector(".live-table input.inline-input"); if (!el) return false; el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); return true; })()' | Out-Null
+    Check-Wait "inline write cancels on Esc" '!document.querySelector(".live-table input.inline-input")' 5
+
     Invoke-Js 'document.querySelector(".live-table .btn.tiny").click(); true' | Out-Null
     Check-Wait "write drawer opens" '!!document.querySelector(".el-drawer") && window.__smoke.visible(".el-drawer")' 8
     Check-Js "write drawer is 420px wide" '(function () { var r = window.__smoke.rect(".el-drawer"); return r && Math.abs(r.w - 420) <= 2; })()'
@@ -618,6 +624,13 @@ true
 
     Invoke-Js 'window.__smoke.clickText(".filter-bar .btn", "\u5b9e\u65f6\u63a8\u9001")' | Out-Null
     Check-Wait "SSE stream starts" '!!document.querySelector(".filter-bar .btn.polling")' 10
+    # 推送接管快照后, 5s 的 REST 轮询必须让位: 包住 fetch 记录一个完整轮询周期
+    # 内对 /api/data/latest 的调用 (直接用浏览器侧计数, 避免 CDP 事件排队误差)
+    Invoke-Js '(function () { window.__latestCalls = []; window.__sseAt = performance.now(); var orig = window.fetch; window.fetch = function (input) { var u = typeof input === "string" ? input : ((input && input.url) || ""); if (u.indexOf("/api/data/latest") >= 0) window.__latestCalls.push(Math.round(performance.now() - window.__sseAt)); return orig.apply(window, arguments); }; return true; })()' | Out-Null
+    Start-Sleep -Milliseconds 5600
+    $late = Invoke-Js 'window.__latestCalls.length'
+    $lateAt = Invoke-Js 'window.__latestCalls.join(",")'
+    Check "SSE replaces REST snapshot polling" ([int]$late -eq 0) ("calls at ms: $lateAt")
     Invoke-Js 'document.querySelector(".filter-bar .btn.polling").click(); true' | Out-Null
     Check-Wait "SSE stream stops" '!document.querySelector(".filter-bar .btn.polling")' 8
 

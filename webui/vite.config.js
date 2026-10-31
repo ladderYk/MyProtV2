@@ -10,6 +10,8 @@ export default defineConfig({
   base: './',
   server: {
     port: 5173,
+    // 新建协议模板直接 import 仓库根目录 configs/protocols/*.json (位于 webui 之外)
+    fs: { allow: ['..'] },
     proxy: {
       '/api': 'http://127.0.0.1:8080',
       '/health': 'http://127.0.0.1:8080'
