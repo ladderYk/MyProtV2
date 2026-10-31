@@ -155,6 +155,7 @@
     <ClCompile Include="TrialPreviewTests.cpp" />
     <ClCompile Include="ResponsePreviewTests.cpp" />
     <ClCompile Include="SessionContextTests.cpp" />
+    <ClCompile Include="OperationProfileTests.cpp" />
     <ClCompile Include="..\..\src\Service\src\SchemaRegistry.cpp" />
     <ClCompile Include="..\..\src\Service\src\ValidationIssue.cpp" />
   </ItemGroup>

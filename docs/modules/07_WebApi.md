@@ -327,8 +327,8 @@ store.SetReloadHandler([&configDir, &ctx]() {
 1. **重载配置目录**（`ConfigDirectoryLoader::Load`）——新配置非法即返回错误，运行态保持不变；
 2. **构建新一代快照并收集仿真实例**——加载产物直接 move 入内；逐协议取 `simulation.listenPort > 0`，无协议级配置时回退 `server.json`（承载 0 号协议）；**此阶段不停止旧实例、不发布新快照**；
 3. **端口冲突前置校验**——两个启用实例同端口即返回 `ConfigError`，旧仿真器与旧快照保持不变；校验通过后才停掉旧实例并同步发布 `ctx.snapshot`（管理面读写立即看到新配置），随后逐个启动新实例；
-4. **清空实时快照**（`LatestValueStore::Clear()`）——旧标签集数据作废，由引擎按新一轮轮询重新积累；
-5. **`io.post` 重装配**——`engine.Stop()` / `gateway.Shutdown()` / `ResetDevices()` / `startEngine()` 在 io 线程串行执行。
+4. **实时快照按新标签集收敛**（`LatestValueStore::Retain(keepTagNames)`）——已删除标签立即移除，未变标签保留上次值与变化检测基线（保存瞬间不整表清空）；
+5. **`io.post` 重装配（设备级 diff）**——在 io 线程依次执行：`ChannelManager::ApplyDevices()`（连接身份未变的设备保留通道与会话，`Disabled` 设备重建会话以恢复）→ `latest.Retain()` → `startEngine()`（生产绑定 `PollingEngine::ApplySnapshot`，未变设备保留轮询组）。不再调用 `gateway.Shutdown()` / `ResetDevices()` / `engine.Stop()`。
 
 由此形成"**UI 保存即生效**"闭环：UI 里改协议 JSON 的 `simulation` → PUT 成功 → 自动 reload → 对应仿真器按新端口/初值重启（增加/删除协议级仿真段即增减仿真设备）→ 设备侧立即感知。E2E Test 12 覆盖端口迁移与坏配置保持旧态；Test 16d 覆盖两协议各一实例与旧回退端口关闭。
 

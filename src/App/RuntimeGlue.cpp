@@ -81,7 +81,6 @@ std::string QueryParam(const std::string& path, const std::string& key) {
             std::ostream* log) {
         asio::io_context& io = *ctx.io;
         MyProt::Gateway::ProtocolGateway& gateway = *ctx.gateway;
-        MyProt::Polling::PollingEngine& engine = *ctx.engine;
         const EngineStarter& startEngine = ctx.startEngine;
         MyProt::Core::RuntimeSnapshotHolder& snapshotHolder = *ctx.snapshot;
         SimServerMap& sims = *ctx.sims;
@@ -201,16 +200,25 @@ std::string QueryParam(const std::string& path, const std::string& key) {
             *log << "[OK] 共 " << owners.size() << " 个仿真器在运行" << std::endl;
         }
 
-        // 4. 清空实时快照 — 旧标签集数据作废, 由引擎按新一轮轮询重新积累
-        latest.Clear();
+        // 4. 设备级差异应用 + 引擎重装配 — post 到 io 线程 (与 in-flight 轮询回调串行)。
+        //    热重载不再"全停重建": 设备/标签未变的设备保留物理通道、会话(握手变量/
+        //    熔断/生命周期)与其轮询组, 只有变更的设备重连、重建 PollGroup。
+        //    已退役组的 in-flight 结果按 PollGroup::alive 丢弃, 不会复活陈旧标签值。
+        io.post([snapshot, &gateway, &startEngine, &latest, log]() {
+            // 4.1 通道/会话层设备级 diff (必须在引擎装配之前: 新组的首次 tick
+            //     会按新设备表取 SessionContext)
+            gateway.GetChannelManager().ApplyDevices(snapshot->devices);
 
-        // 5. 引擎侧热重载 — post 到 io 线程 (与 in-flight 轮询回调串行):
-        //    停轮询 → 关通道+重建设备表 → 重启引擎。
-        //    代际号保证 Stop→Start 连续切换时旧组 in-flight 不复活。
-        io.post([snapshot, &gateway, &engine, &startEngine, log]() {
-            engine.Stop();
-            gateway.Shutdown();
-            gateway.GetChannelManager().ResetDevices(snapshot->devices);
+            // 4.2 实时快照按新标签集收敛 — 只剔除已删除的标签; 未变标签保留上次值
+            //     与变化检测基线, 避免保存瞬间实时页整表清空, 也避免恢复后首帧因
+            //     "首次写入"把未变值全部误标为 changed. 与轮询回调同线程串行, 无竞态.
+            std::set<std::string> keepTags;
+            for (size_t i = 0; i < snapshot->tags.size(); ++i) {
+                keepTags.insert(snapshot->tags[i].name);
+            }
+            latest.Retain(keepTags);
+
+            // 4.3 轮询层设备级 diff (未变设备的组零扰动)
             startEngine(snapshot->tags, snapshot->devices, snapshot->resilience);
             if (log)
                 *log << "[OK] 轮询引擎已热重载 (" << snapshot->tags.size()

@@ -184,6 +184,8 @@ The core sub-sections of each op:
 }
 ```
 
+> The shipped `configs/protocols/modbus-tcp.json` hoists the `responseParser` and derived `outputs` shared by all eight operations into protocol-level `operationProfiles` (`readResponse` → `readBits` / `readWords`; `writeResponse` → `writeBits` / `writeWords` / the multi-write variants). Each operation keeps only its `requestTemplate`, `kind`, the differing `validCondition`, and a `profile` reference. After parse-time expansion this is **exactly equivalent** to the per-operation form above; see [Config_Schema §2.7](../Config_Schema.md#27-operationprofileconfig-value-of-operationprofiles) / [ADR-0022](../../adr/0022-operation-profiles.md) *zh*.
+
 ---
 
 ## 3. Per-FC config↔byte mapping

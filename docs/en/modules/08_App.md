@@ -237,10 +237,16 @@ moved straight in), collect per protocol the instances with `simulation.listenPo
 back to `server.json` when no protocol-level config exists) -> **pre-validate port conflicts**
 (on failure the old instances/snapshot stay untouched) -> only then stop the old instances,
 **publish the new snapshot synchronously** to `ctx.snapshot` and start each new simulator -> `io.post`
-to the io thread to run `engine.Stop()` / `gateway.Shutdown()` / `ResetDevices()` / `ctx.startEngine()`
+to the io thread to run the **device-level diff**: `ChannelManager::ApplyDevices()` ->
+`latest.Retain(keepTagNames)` -> `ctx.startEngine()` (production binds `PollingEngine::ApplySnapshot`)
 in order. The first assembly and the hot reload triggered by Save/reload share this function, so both
 paths behave identically; multi-instance semantics are in
 [ADR-0017](../../adr/0017-protocol-scoped-simulation-instances.md) *zh*.
+
+> A hot reload **no longer** stops and rebuilds everything: unchanged devices keep their physical
+> channel, `SessionContext` (handshake variables / circuit breaker / lifecycle) and poll groups; only
+> changed devices reconnect and rebuild. In-flight results of retired groups are dropped by
+> `PollGroup::alive`. See [modules/05 §5.2](./05_Gateway.md) / [modules/06 §6.1](./06_Polling.md).
 
 > The synchronous publish removes the visibility window where "the config was saved but the first
 > write request still uses the old tag"; the FIFO io queue guarantees that reassembly happens before

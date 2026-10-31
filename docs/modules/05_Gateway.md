@@ -81,8 +81,13 @@ public:
 
     void RegisterDevice(const Core::DeviceConfig& device);            // GetOrCreateChannel 前须注册
     void RegisterDevices(const std::vector<Core::DeviceConfig>& devices);
-    /// 重置设备表并按新配置重新注册 (配置热重载；须在 ShutdownAll 之后调用)
+    /// 重置设备表并按新配置重新注册 (全量重置；须在 ShutdownAll 之后调用)
     void ResetDevices(const std::vector<Core::DeviceConfig>& devices);
+
+    /// 按新配置代做设备级 diff (配置热重载)：连接身份未变的设备保留通道、会话
+    /// (握手变量/熔断/生命周期) 与冷却状态；变更设备重建、删除设备移除，
+    /// 不再被任何未变设备引用的物理端点才断链。
+    void ApplyDevices(const std::vector<Core::DeviceConfig>& devices);
 
     /// 获取或创建通道 (首次自动 Connect; 异步回调)
     void GetOrCreateChannel(const std::string& deviceId,
@@ -100,6 +105,10 @@ private:
         std::shared_ptr<Service::SessionContext> session;
         Core::DeviceConfig deviceConfig;
         bool connecting;          // 避免并发创建同一通道
+        int failedStreak;         // 连接连续失败计数 (冷却窗口)
+        std::chrono::steady_clock::time_point lastFailedAt;
+        std::string endpointKey;  // 条目当前指向的物理端点 (defaultPort 已解析)
+        std::uint64_t epoch;      // 重建时自增；在途连接回调不匹配即丢弃状态变更
     };
     // _devices (key=deviceId) + _endpointCache (key=物理端点)
 };
@@ -111,6 +120,12 @@ private:
 
 - **共享总线通道复用**（ADR-0002 §4）：对外以 deviceId 调用，内部以**物理端点**（Tcp/Tls=`host:port`、Serial=`portName`）复用 `IChannel`（`_endpointCache`；`ShutdownAll` 统一断开）。逻辑设备路由（UnitID 等）由模板变量承载。
 - **会话上下文**：`Service::SessionContext`（连接级状态 + 读熔断器 Closed/Open/HalfOpen，见 ADR-0004），握手建立的会话变量存于其中供请求模板引用。
+- **热重载的设备级 diff（`ApplyDevices`）**：
+  - **比对口径 = 连接身份**：`id/protocol/enabled/connection(host、port、portName、timeoutMs)/凭据/设备级 variables/设备级 resilience` + **有效端点**（`port==0` 时按新协议快照的 `defaultPort` 解析后比对）—— 协议文件改默认端口也能检出来；`resilience` 入键是因为熔断/自动禁用策略存在 `SessionContext` 里，阈值改了不重建就会静默保留旧策略。
+  - **未变设备**：通道、`SessionContext`（握手变量、熔断计数、生命周期、冷却窗口）原样保留，配置保存不再拆掉所有物理连接。
+  - **唯一例外 — `Disabled`**：`SessionContext` 把 `Disabled` 视为会话内终态（`SetLifecycle` 拒绝离开），因此**连接身份未变也要重建条目**（新会话 + 新 `epoch`），否则一个因握手模板写错而停用的设备改完协议也恢复不了；该端点不加入保留集合，无其他人引用时被断链。
+  - **变更/新增设备**：重建条目，`epoch` 自增；在途的 `PerformConnect` 回调携带旧 `epoch`，返回后不匹配即丢弃状态变更，不会把新条目误标为已连接。
+  - **删除设备**：直接从 `_devices` 移除；端点缓存只保留仍未变设备引用的端点，其余 `Disconnect()` 后清除。
 - 内部以 `recursive_mutex` 串行化（GetOrCreateChannel 持锁触发连接流程）。
 
 ## 5.3 TagReader — 管线唯一持有者

@@ -14,6 +14,7 @@
 #include "MyProt/Core/Log.hpp"
 #include "MyProt/Core/Expected.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <map>
 
 namespace MyProt { namespace Polling {
@@ -23,8 +24,7 @@ PollingEngine::PollingEngine(asio::io_context& io, Gateway::ProtocolGateway& gat
     , _gateway(gateway)
     , _stats()
     , _running(false)
-    , _stopping(false)
-    , _generation(0) {}
+    , _stopping(false) {}
 
 // ──────────────────── 生命周期 ────────────────────
 
@@ -33,19 +33,33 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
                           ResultDispatch onResults,
                           const Core::Optional<Core::ResilienceConfig>&
                               globalResilience) {
-    if (_running.load()) return;
+    // 语义 = 从头重启, 不是空操作: 已运行时再次 Start 会先整体退役上一代。
+    // (热重载走 ApplySnapshot 做设备级 diff, 不需要停整代; 这里保留全量语义
+    //  给冷启动与遗留调用点, 避免早期 `if (_running) return;` 让重启静默失效)
+    Stop();                               // 清理上一代 (全部组退役 + 取消定时器)
+    ApplySnapshot(tags, devices, std::move(onResults), globalResilience);
+}
+
+void PollingEngine::ApplySnapshot(
+        const std::vector<Core::TagDefinition>& tags,
+        const std::vector<Core::DeviceConfig>& devices,
+        ResultDispatch onResults,
+        const Core::Optional<Core::ResilienceConfig>& globalResilience) {
 
     _stopping.store(false);
     _running.store(true);
-    _generation.fetch_add(1);   // 新装配代际 — 旧代 in-flight 组不得再续排 (热重载防护)
-    _groups.clear();
-    _protocolCache.clear();     // 协议快照随重装配刷新 (热重载后取新配置)
     _onResults = std::move(onResults);
+    _protocolCache.clear();     // 协议快照随代刷新 (模板/线序变更下一轮读取即生效)
 
-    // 构建 deviceId → protocolName / requestTimeoutMs / 生效韧性 映射
-    // (超时收敛: 2026-08-24; 韧性解析: 设备级覆盖 > 全局 > 内置默认)
+    // 1. 设备映射表整表重建 — O(设备数), 与组复用无关
+    //    (韧性解析: 设备级覆盖 > 全局 > 内置默认)
     // KI-04: enabled=false 的设备不参与轮询, 生命周期固定 Disabled (需热重载恢复)。
+    _deviceProtocolMap.clear();
+    _deviceTimeoutMap.clear();
+    _deviceResilienceMap.clear();
+
     std::map<std::string, bool> deviceEnabled;
+    std::map<std::string, const Core::DeviceConfig*> deviceById;
     for (const auto& dev : devices) {
         _deviceProtocolMap[dev.id] = dev.protocol;
         _deviceTimeoutMap[dev.id] = dev.requestTimeoutMs;
@@ -57,6 +71,7 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
             _deviceResilienceMap[dev.id] = Core::ResilienceConfig();
         }
         deviceEnabled[dev.id] = dev.enabled;
+        deviceById[dev.id] = &dev;
         if (!dev.enabled) {
             Core::metrics::GaugeSet(
                 Core::metrics::kDeviceLifecycleState,
@@ -69,85 +84,245 @@ void PollingEngine::Start(const std::vector<Core::TagDefinition>& tags,
         }
     }
 
-    // 按 scanRateMs 分组 (TagGrouper::GroupByScanRate)
+    // 2. 按设备聚合参与轮询的标签
         // 写标签 (direction=write) 与推送标签 (source=push) 不参与轮询 —
     //   前者只作为 /api/data/write 的定向目标, 后者由南向 ingest 适配器产出;
     //   在引擎入口过滤, TagGrouper 无需感知.
-    std::vector<Core::TagDefinition> pollTags;
-    pollTags.reserve(tags.size());
-    for (size_t i = 0; i < tags.size(); ++i) {
-        if (tags[i].direction != "write" && tags[i].source != "push") {
-            std::map<std::string, bool>::const_iterator en =
-                deviceEnabled.find(tags[i].deviceId);
-            if (en != deviceEnabled.end() && !en->second) continue;  // KI-04: 停用设备
-            pollTags.push_back(tags[i]);
+    std::vector<std::string> deviceOrder;
+    std::map<std::string, std::vector<Core::TagDefinition>> perDeviceTags;
+    for (const auto& tag : tags) {
+        if (tag.direction == "write" || tag.source == "push") continue;
+        std::map<std::string, bool>::const_iterator en =
+            deviceEnabled.find(tag.deviceId);
+        if (en != deviceEnabled.end() && !en->second) continue;  // KI-04: 停用设备
+        if (perDeviceTags.find(tag.deviceId) == perDeviceTags.end()) {
+            deviceOrder.push_back(tag.deviceId);
         }
+        perDeviceTags[tag.deviceId].push_back(tag);
     }
 
-    auto tagGroups = _gateway.GetTagGrouper().GroupByScanRate(pollTags);
+    // 3. 上一代组按设备归档 — 设备级 diff 的比对面
+    std::map<std::string, std::vector<std::shared_ptr<PollGroup>>> existing;
+    for (size_t i = 0; i < _groups.size(); ++i) {
+        existing[_groups[i]->deviceId].push_back(_groups[i]);
+    }
+    _groups.clear();
 
-    // 标签表全部组共享一份 (原实现每组拷贝全量 pollTags — O(组数×标签数) 内存);
-    // in-flight 异步链经 PollGroup shared_ptr 持有旧表快照, 热重载替换不悬垂
-    auto sharedTags = std::make_shared<const std::vector<Core::TagDefinition>>(
-        std::move(pollTags));
+    std::unordered_map<std::string, std::string> nextSignatures;
+    int64_t activeTags = 0;
 
-    // 设备级 PollGroup: 以 (scanRateMs, deviceId) 为键 — 每设备独立 timer +
-    // 独立 deadline 预算, 避免同扫描周期下某设备连接故障重试耗尽共享预算,
-    // 拖累其他设备 (ADR-0004 预算模型由"组级"细化为"设备级")。
-    // 单设备组内 ProcessDevice/PollBatchChain 串行链自然退化 (换设备分支不再触发)。
-    std::map<std::pair<int, std::string>, std::shared_ptr<PollGroup>> groupMap;
-    for (const auto& tg : tagGroups) {
-        auto key = std::make_pair(tg.scanRateMs, tg.deviceId);
-        auto& pg = groupMap[key];   // 缺省构造 shared_ptr (nullptr)
+    for (size_t i = 0; i < deviceOrder.size(); ++i) {
+        const std::string& devId = deviceOrder[i];
+        const std::vector<Core::TagDefinition>& devTags = perDeviceTags[devId];
+        activeTags += static_cast<int64_t>(devTags.size());
+
+        // 合并跨度来自协议级配置; 协议查找失败时回退 Core::kDefaultMaxSpanBytes.
+        int maxSpan = Core::kDefaultMaxSpanBytes;
+        std::shared_ptr<const Core::ProtocolConfig> proto =
+            GetProtocolForDevice(devId);
+        if (proto && proto->maxSpanBytes > 0) maxSpan = proto->maxSpanBytes;
+
+        // 标签引用了未声明的设备时与旧实现保持一致: 仍建组 (运行期按
+        // DeviceNotFound 标 Bad), 签名退化为设备 id.
+        Core::DeviceConfig fallback;
+        fallback.id = devId;
+        std::map<std::string, const Core::DeviceConfig*>::const_iterator dit =
+            deviceById.find(devId);
+        const Core::DeviceConfig& devCfg =
+            (dit != deviceById.end()) ? *dit->second : fallback;
+
+        const std::string sig = DevicePollSignature(
+            devCfg, devTags, ResilienceFor(devId), maxSpan);
+        nextSignatures[devId] = sig;
+
+        std::map<std::string, std::vector<std::shared_ptr<PollGroup>>>::iterator
+            prev = existing.find(devId);
+        std::unordered_map<std::string, std::string>::const_iterator oldSig =
+            _deviceSignatures.find(devId);
+
+        // 设备轮询语义未变 → 整组复用: timer / in-flight 链 / deadline 预算全部
+        // 保持原样, 本次热重载对该设备零扰动 (不重连、不空窗、不重置熔断)。
+        if (prev != existing.end() && oldSig != _deviceSignatures.end()
+                && oldSig->second == sig) {
+            for (size_t k = 0; k < prev->second.size(); ++k) {
+                _groups.push_back(prev->second[k]);
+            }
+            existing.erase(prev);
+            continue;
+        }
+
+        // 变更/新增设备: 旧组退役 (in-flight 回调按 alive 丢弃), 按新标签表重建
+        if (prev != existing.end()) {
+            for (size_t k = 0; k < prev->second.size(); ++k) {
+                RetireGroup(prev->second[k]);
+            }
+            existing.erase(prev);
+        }
+        BuildGroupsForDevice(devId, devTags, maxSpan);
+    }
+
+    // 4. 消失的设备 (配置删除或无标签) — 退役其全部旧组
+    for (std::map<std::string, std::vector<std::shared_ptr<PollGroup>>>::iterator it =
+             existing.begin(); it != existing.end(); ++it) {
+        for (size_t k = 0; k < it->second.size(); ++k) RetireGroup(it->second[k]);
+    }
+
+    _deviceSignatures.swap(nextSignatures);
+    _stats.activeTags.store(activeTags);
+}
+
+void PollingEngine::BuildGroupsForDevice(
+        const std::string& deviceId,
+        const std::vector<Core::TagDefinition>& deviceTags,
+        int maxSpan) {
+    // 每设备一份标签表 (不是全量): tagIndices 只在本设备内有效, 未变设备的组
+    // 因此可以跨代复用 — 其他设备增删标签不会移动它的索引。
+    std::shared_ptr<const std::vector<Core::TagDefinition>> sharedTags =
+        std::make_shared<const std::vector<Core::TagDefinition>>(deviceTags);
+
+    const std::vector<Gateway::TagGroup> tagGroups =
+        _gateway.GetTagGrouper().GroupByScanRate(*sharedTags);
+
+    std::map<int, std::shared_ptr<PollGroup>> byRate;
+    for (size_t i = 0; i < tagGroups.size(); ++i) {
+        const Gateway::TagGroup& tg = tagGroups[i];
+        std::shared_ptr<PollGroup>& pg = byRate[tg.scanRateMs];   // 缺省 nullptr
         if (!pg) {
             pg = std::make_shared<PollGroup>(_io);
+            pg->deviceId = deviceId;
             pg->scanRateMs = tg.scanRateMs;
-            pg->generation = _generation.load();
             pg->tags = sharedTags;
         }
-                // 合并跨度来自协议级配置 (不能写死 — 早期写死的 125 语义是 Modbus 的
-                //   寄存器上限, 且地址单位改为字节后该值未同步,
-        //   实际只剩 125 字节 ≈ 62 寄存器, 合并能力静默缩水一半).
-        //   协议查找失败时回退 Core::kDefaultMaxSpanBytes.
-        int maxSpan = Core::kDefaultMaxSpanBytes;
-        {
-            std::shared_ptr<const Core::ProtocolConfig> proto =
-                GetProtocolForDevice(tg.deviceId);
-            if (proto && proto->maxSpanBytes > 0) maxSpan = proto->maxSpanBytes;
-        }
-        auto merged = _gateway.GetTagGrouper().CoalesceAdjacent(tg, *sharedTags,
-                                                                maxSpan);
+        std::vector<Gateway::MergedRequest> merged =
+            _gateway.GetTagGrouper().CoalesceAdjacent(tg, *sharedTags, maxSpan);
         pg->mergedRequests.insert(
             pg->mergedRequests.end(), merged.begin(), merged.end());
     }
 
-    for (auto& pair : groupMap) {
-        _groups.push_back(pair.second);
-    }
-
-    _stats.activeTags.store(static_cast<int64_t>(sharedTags->size()));
-
-    for (auto& pg : _groups) {
-        ScheduleNext(pg);
+    for (std::map<int, std::shared_ptr<PollGroup>>::iterator it = byRate.begin();
+         it != byRate.end(); ++it) {
+        _groups.push_back(it->second);
+        _stats.groupsBuilt.fetch_add(1);   // 热重载 diff 保真度指标 (只计新建的组)
+        ScheduleNext(it->second);
     }
 }
 
 void PollingEngine::Stop() {
     _stopping.store(true);
     _running.store(false);
-    for (auto& pg : _groups) {
-        asio::error_code ec;
-        pg->timer.cancel(ec);
-    }
+    for (size_t i = 0; i < _groups.size(); ++i) RetireGroup(_groups[i]);
     _groups.clear();
+    _deviceSignatures.clear();   // 下次 Start 必须整代重建
+}
+
+void PollingEngine::RetireGroup(const std::shared_ptr<PollGroup>& group) {
+    if (!group) return;
+    // 先置 retired 再取消定时器: 定时器回调若已在队列中, 进入后按 alive 直接返回
+    group->alive.store(false);
+    asio::error_code ec;
+    group->timer.cancel(ec);
+}
+
+// ──────────────────── 设备签名 (热重载设备级 diff) ────────────────────
+
+namespace {
+
+// 签名片段拼接: 用 \x1f 分隔, 避免 "ab"+"c" 与 "a"+"bc" 拼出同一个串
+void SigAppend(std::string& out, const std::string& v) {
+    out += v;
+    out.push_back('\x1f');
+}
+
+void SigAppend(std::string& out, long long v) {
+    out += std::to_string(v);
+    out.push_back('\x1f');
+}
+
+void SigAppendBool(std::string& out, bool v) {
+    out.push_back(v ? '1' : '0');
+    out.push_back('\x1f');
+}
+
+// 变量表是无序容器 — 签名必须先排序, 否则同内容不同桶序会误判为变更
+void SigAppendVars(
+        std::string& out,
+        const std::unordered_map<std::string, std::uint32_t>& vars) {
+    std::map<std::string, std::uint32_t> ordered(vars.begin(), vars.end());
+    for (std::map<std::string, std::uint32_t>::const_iterator it = ordered.begin();
+         it != ordered.end(); ++it) {
+        out += it->first;
+        out.push_back('=');
+        out += std::to_string(it->second);
+        out.push_back(',');
+    }
+    out.push_back('\x1f');
+}
+
+} // namespace
+
+std::string PollingEngine::DevicePollSignature(
+        const Core::DeviceConfig& device,
+        const std::vector<Core::TagDefinition>& deviceTags,
+        const Core::ResilienceConfig& effectiveResilience,
+        int maxSpan) {
+    std::string sig;
+    sig.reserve(deviceTags.size() * 128);
+
+    // 设备侧 — 只列引擎读取的字段; 连接参数 (host/port/...) 归 ChannelManager
+    // 的 diff 管, 这里引入反而会让“仅改地址”把轮询组也重建。
+    SigAppend(sig, device.id);
+    SigAppend(sig, device.protocol);
+    SigAppendBool(sig, device.enabled);
+    SigAppend(sig, static_cast<long long>(device.requestTimeoutMs));
+    SigAppend(sig, static_cast<long long>(effectiveResilience.maxAttempts));
+    SigAppend(sig, static_cast<long long>(effectiveResilience.backoffBaseMs));
+    SigAppend(sig, static_cast<long long>(effectiveResilience.backoffMaxMs));
+    SigAppend(sig, static_cast<long long>(effectiveResilience.failureThreshold));
+    SigAppend(sig, static_cast<long long>(effectiveResilience.cooldownMs));
+    SigAppend(sig, static_cast<long long>(effectiveResilience.halfOpenProbes));
+    SigAppend(sig, static_cast<long long>(effectiveResilience.disableAfterDegraded));
+    SigAppend(sig, static_cast<long long>(maxSpan));
+
+    // 标签侧 — label/unit 仅用于展示, 不参与签名 (改中文名不应触发重连)
+    for (size_t i = 0; i < deviceTags.size(); ++i) {
+        const Core::TagDefinition& t = deviceTags[i];
+        SigAppend(sig, t.name);
+        SigAppend(sig, t.deviceId);
+        SigAppend(sig, t.operation);
+        SigAppendVars(sig, t.variables);
+        SigAppend(sig, static_cast<long long>(t.scanRateMs));
+        SigAppend(sig, t.finalType);
+        SigAppendBool(sig, t.byteOrder.has_value());
+        if (t.byteOrder.has_value()) {
+            SigAppend(sig, static_cast<long long>(t.byteOrder.value()));
+        }
+        SigAppendBool(sig, t.coalesce);
+        SigAppend(sig, static_cast<long long>(t.bitOffset));
+        SigAppend(sig, t.direction);
+        SigAppend(sig, t.source);
+        SigAppend(sig, t.writeVariable);
+        SigAppend(sig, t.readBackTag);
+        SigAppend(sig, t.writeOperation);
+        SigAppend(sig, t.writeBytesOperation);
+        SigAppendVars(sig, t.writeVariables);
+        SigAppend(sig, static_cast<long long>(t.converters.size()));
+        for (size_t c = 0; c < t.converters.size(); ++c) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.17g,%.17g",
+                          t.converters[c].k, t.converters[c].b);
+            sig += buf;
+            sig.push_back('\x1f');
+        }
+    }
+    return sig;
 }
 
 // ──────────────────── 定时器调度 ────────────────────
 
 void PollingEngine::ScheduleNext(std::shared_ptr<PollGroup> group) {
-    // 代际防护: Stop→Start 连续调用时 (_stopping 已复位), 旧代 in-flight 组
-    // 的 FinishBatch 会走到这里 — 代际不匹配直接丢弃, 防旧标签集复活
-    if (_stopping.load() || group->generation != _generation.load()) return;
+    // 退役防护: Stop→Start 连续调用时 (_stopping 已复位), 已退役组的
+    // FinishBatch 会走到这里 — alive=false 直接丢弃, 防旧标签集复活
+    if (_stopping.load() || !group->alive.load()) return;
     group->timer.expires_after(std::chrono::milliseconds(group->scanRateMs));
     group->timer.async_wait(
         [this, group](const asio::error_code& ec) {
@@ -159,7 +334,7 @@ void PollingEngine::OnTimerFire(std::shared_ptr<PollGroup> group,
                                 const asio::error_code& ec) {
     if (_stopping.load()) return;
     if (ec) return;  // cancelled
-    if (group->generation != _generation.load()) return;  // 旧代组
+    if (!group->alive.load()) return;   // 已退役组
 
     // 背压: 上一批未完成 → 跳过
     if (group->busy) {
@@ -242,8 +417,8 @@ void PollingEngine::ProcessDevice(
                 FinishBatch(group, results);
                 return;
             }
-            if (group->generation != _generation.load()) {
-                AbandonBatch(group);   // 旧代: 丢弃, 不复活陈旧标签值
+            if (!group->alive.load()) {
+                AbandonBatch(group);   // 已退役: 丢弃, 不复活陈旧标签值
                 return;
             }
 
@@ -264,7 +439,7 @@ void PollingEngine::ProcessDevice(
                                 FinishBatch(group, results);
                                 return;
                             }
-                            if (group->generation != _generation.load()) {
+                            if (!group->alive.load()) {
                                 AbandonBatch(group);
                                 return;
                             }
@@ -326,8 +501,8 @@ void PollingEngine::PollBatchChain(
         FinishBatch(group, allResults);
         return;
     }
-    if (group->generation != _generation.load()) {
-        AbandonBatch(group);   // 旧代: 丢弃, 不复活陈旧标签值
+    if (!group->alive.load()) {
+        AbandonBatch(group);   // 已退役: 丢弃, 不复活陈旧标签值
         return;
     }
     if (curIdx >= group->mergedRequests.size() ||
@@ -378,8 +553,8 @@ void PollingEngine::PollBatchChain(
                 FinishBatch(group, allResults);
                 return;
             }
-            if (group->generation != _generation.load()) {
-                AbandonBatch(group);   // 旧代: 丢弃, 不复活陈旧标签值
+            if (!group->alive.load()) {
+                AbandonBatch(group);   // 已退役: 丢弃, 不复活陈旧标签值
                 return;
             }
 
@@ -415,7 +590,7 @@ void PollingEngine::PollBatchChain(
                             FinishBatch(group, allResults);
                             return;
                         }
-                        if (group->generation != _generation.load()) {
+                        if (!group->alive.load()) {
                             AbandonBatch(group);
                             return;
                         }
@@ -439,7 +614,7 @@ void PollingEngine::PollBatchChain(
 // ──────────────────── 完成 / 辅助 ────────────────────
 
 void PollingEngine::AbandonBatch(std::shared_ptr<PollGroup> group) {
-    // 旧代组已不在 _groups 中 (Start 已 clear), 此处仅释放背压;
+    // 已退役组 (alive=false) 的收尾: 此处仅释放背压;
     // 关键是**不**调用 _onResults — 避免陈旧标签值写回 LatestValueStore。
     if (group) group->busy = false;
 }
@@ -461,8 +636,11 @@ void PollingEngine::FinishBatch(
         }
     }
 
-    // 结果分发
-    if (_onResults && !results->empty()) {
+    // 结果分发 — 停止中/已退役组不分发: 旧标签集的 in-flight 结果可能晚于热重载
+    // 的 Retain/ApplySnapshot 到达, 会把已删除标签重新写回实时快照.
+    // (全停看 _stopping; 局部重建看 alive — 两者并发场景不同)
+    if (_onResults && !_stopping.load() && group->alive.load()
+            && !results->empty()) {
         _onResults(*results);
     }
 

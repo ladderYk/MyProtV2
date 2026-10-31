@@ -1048,6 +1048,174 @@ bool ParseOutputsDoc(const std::string& prefix, const json& doc,
     return true;
 }
 
+/// 操作原型 (operationProfiles) —— 只承载可复用字段: outputs / responseParser。
+/// 允许单继承 extends (父原型先合并, 子原型覆盖); 禁止环。
+bool ValidateResponseParserFields(const json& rp, const std::string& ctx,
+                                  std::string& err) {
+    if (!rp.is_object()) { err = ctx + " 须为对象"; return false; }
+    for (json::const_iterator it = rp.begin(); it != rp.end(); ++it) {
+        const std::string& key = it.key();
+        if (key == "validCondition" || key == "dataLengthExpr") {
+            if (!it.value().is_null() && !it.value().is_string()) {
+                err = ctx + "." + key + " 须为字符串";
+                return false;
+            }
+        } else if (key == "dataStartIndex") {
+            if (!it.value().is_null() && !it.value().is_number_integer()) {
+                err = ctx + ".dataStartIndex 须为整数";
+                return false;
+            }
+        } else {
+            err = ctx + " 含未知字段 \"" + key + "\"";
+            return false;
+        }
+    }
+    if (rp.contains("validCondition") && rp.at("validCondition").is_string()) {
+        const std::string cond = rp.at("validCondition").get<std::string>();
+        if (!cond.empty()) {
+            try {
+                MyProt::Engine::MiniExpression::Parser p(cond);
+                p.Parse();
+            } catch (const MyProt::Engine::MiniExpression::Error& e) {
+                err = ctx + ".validCondition 语法错误: " + e.what();
+                return false;
+            } catch (...) {
+                err = ctx + ".validCondition 语法错误";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool ValidateProfileDoc(const std::string& name, const json& p, std::string& err) {
+    const std::string ctx = "operationProfiles." + name;
+    if (!p.is_object()) { err = ctx + " 须为对象"; return false; }
+    bool hasPayload = false;
+    for (json::const_iterator it = p.begin(); it != p.end(); ++it) {
+        const std::string& key = it.key();
+        if (key == "description") {
+            if (!it.value().is_string()) { err = ctx + ".description 须为字符串"; return false; }
+        } else if (key == "extends") {
+            if (!it.value().is_string() || it.value().get<std::string>().empty()) {
+                err = ctx + ".extends 须为非空字符串";
+                return false;
+            }
+        } else if (key == "outputs") {
+            hasPayload = true;
+            std::unordered_map<std::string, Core::VariableConfig> dummy;
+            if (!ParseOutputsDoc(ctx, p, dummy, err)) return false;
+            if (dummy.empty()) { err = ctx + ".outputs 不能为空对象"; return false; }
+        } else if (key == "responseParser") {
+            hasPayload = true;
+            if (!ValidateResponseParserFields(it.value(), ctx + ".responseParser", err)) return false;
+        } else {
+            err = ctx + " 含未知字段 \"" + key
+                + "\" (仅允许 extends/description/outputs/responseParser)";
+            return false;
+        }
+    }
+    if (!hasPayload) {
+        err = ctx + " 须至少声明 outputs 或 responseParser";
+        return false;
+    }
+    return true;
+}
+
+/// 父原型 → 子原型: outputs 按变量名覆盖, responseParser 按字段覆盖.
+json MergeProfileDocs(const json& base, const json& child) {
+    json merged = base;
+    if (child.contains("description")) merged["description"] = child.at("description");
+    if (child.contains("outputs")) {
+        json outs;
+        if (merged.contains("outputs") && merged.at("outputs").is_object()) {
+            outs = merged.at("outputs");
+        } else {
+            outs = json::object();
+        }
+        for (json::const_iterator it = child.at("outputs").begin();
+                it != child.at("outputs").end(); ++it) {
+            outs[it.key()] = it.value();
+        }
+        merged["outputs"] = outs;
+    }
+    if (child.contains("responseParser")) {
+        json rp;
+        if (merged.contains("responseParser") && merged.at("responseParser").is_object()) {
+            rp = merged.at("responseParser");
+        } else {
+            rp = json::object();
+        }
+        for (json::const_iterator it = child.at("responseParser").begin();
+                it != child.at("responseParser").end(); ++it) {
+            rp[it.key()] = it.value();
+        }
+        merged["responseParser"] = rp;
+    }
+    return merged;
+}
+
+/// 解析 extends 链 (带环检测 + 结果缓存).
+bool ResolveProfileDoc(const std::string& name,
+                       const std::unordered_map<std::string, json>& profiles,
+                       std::unordered_map<std::string, json>& resolved,
+                       std::set<std::string>& visiting,
+                       json& out, std::string& err) {
+    std::unordered_map<std::string, json>::const_iterator cached = resolved.find(name);
+    if (cached != resolved.end()) { out = cached->second; return true; }
+    std::unordered_map<std::string, json>::const_iterator it = profiles.find(name);
+    if (it == profiles.end()) {
+        err = "operationProfiles 未定义: " + name;
+        return false;
+    }
+    if (visiting.find(name) != visiting.end()) {
+        err = "operationProfiles." + name + " 存在循环 extends";
+        return false;
+    }
+    visiting.insert(name);
+    json merged = json::object();
+    if (it->second.contains("extends")) {
+        const std::string base = it->second.at("extends").get<std::string>();
+        json baseMerged;
+        if (!ResolveProfileDoc(base, profiles, resolved, visiting, baseMerged, err)) {
+            return false;
+        }
+        merged = baseMerged;
+    }
+    merged = MergeProfileDocs(merged, it->second);
+    visiting.erase(name);
+    resolved[name] = merged;
+    out = merged;
+    return true;
+}
+
+/// 操作 → 合并后的操作 JSON (原型的 outputs/responseParser 为默认值, 操作显式字段优先).
+json MergeOperationWithProfile(const json& op, const json& profile) {
+    json merged = op;
+    merged.erase("profile");
+    if (profile.contains("outputs")) {
+        json outs = profile.at("outputs");
+        if (op.contains("outputs") && op.at("outputs").is_object()) {
+            for (json::const_iterator it = op.at("outputs").begin();
+                    it != op.at("outputs").end(); ++it) {
+                outs[it.key()] = it.value();
+            }
+        }
+        merged["outputs"] = outs;
+    }
+    if (profile.contains("responseParser")) {
+        json rp = profile.at("responseParser");
+        if (op.contains("responseParser") && op.at("responseParser").is_object()) {
+            for (json::const_iterator it = op.at("responseParser").begin();
+                    it != op.at("responseParser").end(); ++it) {
+                rp[it.key()] = it.value();
+            }
+        }
+        merged["responseParser"] = rp;
+    }
+    return merged;
+}
+
 bool ParseOperationDoc(const json& j, Core::OperationConfig& op, std::string& err) {
     if (!j.contains("requestTemplate")) {
         err = "操作 " + op.name + " 缺失 requestTemplate";
@@ -1211,6 +1379,29 @@ bool ParseProtocolDocImpl(const json& doc, int defaultVer,
     // 检查仍然执行 (与旧行为一致)
     std::set<std::string> allPlaceholderNames;
 
+    // 操作原型 (可选): 先校验全部原型, 再解析 extends 链 (环/未定义父原型在此报错).
+    std::unordered_map<std::string, json> profiles;
+    std::unordered_map<std::string, json> resolvedProfiles;
+    if (doc.contains("operationProfiles")) {
+        const json& ps = doc.at("operationProfiles");
+        if (!ps.is_object()) {
+            err = "operationProfiles 须为对象 (map<原型名, 原型配置>)";
+            return false;
+        }
+        for (json::const_iterator it = ps.begin(); it != ps.end(); ++it) {
+            if (it.key().empty()) { err = "operationProfiles 键名不能为空"; return false; }
+            if (!ValidateProfileDoc(it.key(), it.value(), err)) return false;
+            profiles[it.key()] = it.value();
+        }
+        for (json::const_iterator it = ps.begin(); it != ps.end(); ++it) {
+            std::set<std::string> visiting;
+            json resolved;
+            if (!ResolveProfileDoc(it.key(), profiles, resolvedProfiles, visiting, resolved, err)) {
+                return false;
+            }
+        }
+    }
+
     if (doc.contains("operations")) {
         const json& ops = doc.at("operations");
         if (!ops.is_object()) { err = "operations 须为对象 (map<操作名, OperationConfig>)"; return false; }
@@ -1218,7 +1409,23 @@ bool ParseProtocolDocImpl(const json& doc, int defaultVer,
             if (!it.value().is_object()) { err = "操作 " + it.key() + " 定义须为对象"; return false; }
             Core::OperationConfig op;
             op.name = it.key();
-            if (!ParseOperationDoc(it.value(), op, err)) return false;
+            json opDoc = it.value();
+            if (opDoc.contains("profile")) {
+                std::string profileName;
+                if (!OptStr(opDoc, "profile", profileName, err)) return false;
+                if (profileName.empty()) {
+                    err = "操作 " + it.key() + " 的 profile 不能为空";
+                    return false;
+                }
+                std::unordered_map<std::string, json>::const_iterator pit =
+                    resolvedProfiles.find(profileName);
+                if (pit == resolvedProfiles.end()) {
+                    err = "操作 " + it.key() + " 引用了未定义的 operationProfiles." + profileName;
+                    return false;
+                }
+                opDoc = MergeOperationWithProfile(opDoc, pit->second);
+            }
+            if (!ParseOperationDoc(opDoc, op, err)) return false;
             p.operations.insert(std::make_pair(it.key(), op));
         }
                 // 各操作的 outputs 引用域校验 (需协议级 inputs 全量就绪) —

@@ -89,6 +89,7 @@
 | [ADR-0019 南向推送接入](./adr/0019-southbound-push-ingest.md) | 设备主动上报（MQTT 订阅 / TCP 监听）新增 `IInboundTransport`（不复用 `IChannel`）；`device.ingest` + 标签 `source=poll|push` 单一来源；`TagValueSink` 唯一写入口；静默 → `Uncertain` |
 | [ADR-0020 帧层与会话层分离](./adr/0020-frame-layer-vs-session.md) | `Core::Frame` + `IFrameCodec`（无状态帧层）/ `MqttSession`（协议状态机）/ `MqttClient`（IO）三段切分；`StreamFrameCodec` 统一 TCP 切帧；P1 待补 varint/bits/dispatch/repeat；管理面 HTTP 不接入 |
 | [ADR-0021 配置驱动的帧规格原语](./adr/0021-config-driven-framing-primitives.md) | 补齐 varint 长度域、`headerFields` 位域、`dispatch` 分派、`repeat` 记录区四个原语；`LengthField` 的 payload 改为帧头之后；长度域语义只在 `LengthFieldFrameParser` 保留一份（轮询/仿真/入站共用） |
+| [ADR-0022 操作原型与解析期展开](./adr/0022-operation-profiles.md) | 新增协议级 `operationProfiles`：只承载可复用的 `outputs`（派生）/ `responseParser`，支持 `extends` 单继承；合并顺序「父原型 → 子原型 → 操作显式字段」，在 `ProtocolJsonParser` 解析期展开，POCO 与引擎零改动 |
 
 > ⚠️ 若 `modules/` 中的 POCO/示例与 [配置 Schema 定稿](./Config_Schema.md) 冲突时，以 Schema 定稿为准。
 

@@ -57,9 +57,9 @@ main()                                                  [main.cpp L293-309]
        |         |-- Build and publish RuntimeSnapshot synchronously (the only config copy)
        |         |-- Rebuild simulation instances per protocol (simulation.listenPort > 0;
        |         |   alias shared_ptr keeps the snapshot alive)
-       |         |-- Clear the live snapshot
-       |         `-- io.post: stop engine / close channels / ResetDevices / startEngine
-       |              `-- engine.Start(...)              // PollingEngine assembly
+       |         |-- Converge the live snapshot to the new tag set (Retain)
+       |         `-- io.post: device-level diff (ApplyDevices / Retain / ApplySnapshot)
+       |              `-- engine.ApplySnapshot(...)        // polling engine assembly (unchanged devices keep groups)
        |                                                    [Polling §6.2]
        |
        |-- 6. Hot-reload wiring                         [main.cpp L222-224]
@@ -195,7 +195,7 @@ SignalHandler (Ctrl+C / window close) -> g_running=false
   `-- main thread exits while (IsRunning())
        |
        |-- 1. engine.Stop()                              // stop polling, cancel every group timer
-       |    `-- in-flight batches finish naturally, the generation counter prevents old-generation dispatch
+       |    `-- in-flight batches finish naturally, PollGroup::alive prevents retired-group dispatch
        |
        |-- 2. server.Stop()                              // stop the management plane, reject new requests
        |

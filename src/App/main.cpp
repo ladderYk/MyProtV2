@@ -285,14 +285,16 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
                 }
             }
         };
-    // 引擎启动器 — ApplyRuntimeSync 首次装配与热重载共用
+    // 引擎装配器 — ApplyRuntimeSync 首次装配与热重载共用同一入口。
+    //   ApplySnapshot 做设备级 diff: 未变设备的 PollGroup 原样保留 (不重连、
+    //   不空窗、不重置熔断), 只有变更设备重建组。
     EngineStarter startEngine =
         [&engine, &resultDispatch](
                 const std::vector<MyProt::Core::TagDefinition>& tags,
                 const std::vector<MyProt::Core::DeviceConfig>& devices,
                 const MyProt::Core::Optional<
                     MyProt::Core::ResilienceConfig>& globalResilience) {
-            engine.Start(tags, devices, resultDispatch, globalResilience);
+            engine.ApplySnapshot(tags, devices, resultDispatch, globalResilience);
         };
 
     // ── 4.5 运行时状态聚合 (AppContext — 新增接口所需状态统一在此挂接) ──

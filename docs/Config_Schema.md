@@ -50,7 +50,8 @@ configs/
 | `transport` | object | ✓ | — | 见 §2.1 |
 | `framing` | object | ✓ | — | 见 §2.2 |
 | `dataByteOrder` | ByteOrder | ✗ | `"BigEndian"` | 协议级数据解码字节序；标签 `byteOrder` 未声明时回退至此（与 `framing.byteOrder` 长度域字节序解耦） |
-| `operations` | map\<string, OperationConfig\> | ✓ | — | 非空，**map 的 key 即操作名**。写能力不在协议层声明（已移除 `writeOperation` / `writeBytesOperation` 协议级字段）——操作仅以 `kind: "read"/"write"` 标注语义，供校验器一致性核对与 UI 过滤；写声明点在标签层（见 §标签） |
+| `operations` | map\<string, OperationConfig\> | ✓ | — | 非空，**map 的 key 即操作名**。写能力不在协议层声明（已移除 `writeOperation` / `writeBytesOperation` 协议级字段）——操作仅以 `kind: "read"/"write"` 标注语义，供校验器一致性核对与 UI 过滤；写声明点在标签层（见 §标签）。操作可用 `profile` 引用 §2.7 的操作原型，复用 `outputs` / `responseParser` |
+| `operationProfiles` | map\<string, OperationProfile\> | ✗ | `{}` | 操作原型表：把多个操作共用的 `outputs`（仅派生）与 `responseParser` 提到一处声明，操作通过 `profile` 引用。支持 `extends` 单继承，合并顺序「父原型 → 子原型 → 操作显式字段」，见 §2.7。纯增量可选字段，不升 `schemaVersion` |
 | `inputs` | map\<string, VariableConfig\> | ✗ | `{}` | 协议级**输入段**：声明操作者提供 / 运行时生成的输入 —— `source=static`（含 `value` 注入默认值；无 `value` 仅作 UI 提示）与 `source=auto`（`strategy` 指定 `autoIncrement`/`frameSlice`/`expr`/`crc`，渲染期求值）。变长写载荷由模板 `{Name:raw}` 占位符自动识别，无需特殊策略声明。完整 `VariableConfig` 结构见 §3.2 |
 | `outputs` | map\<string, VariableConfig\> | ✗ | `{}` | 协议级**输出段**。仅 `source=auto strategy=derivedLength` 的**派生输出**（按载荷字节数计算，见 §3.2.1）。`expr` 可引用 `inputs` 中已声明名或模板 `{Name:raw}` 载荷名，`{name:len}` 取字节长度（raw 载荷 = 实际字节数，其余 = 模板渲染宽度）。同一协议域内 `inputs` 与 `outputs` 不得同名（校验 Error）；跨操作允许同名不同角色（如 `RegisterCount` 读操作 = 输入 / 写操作 = 输出） |
 | `handshake` | HandshakeStep[] | ✗ | `[]` | 空数组 = 无握手（如 Modbus） |
@@ -207,7 +208,8 @@ configs/
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |------|------|:--:|------|------|
 | `requestTemplate` | string[] | ✓ | — | 非空，文法见 §3 |
-| `responseParser` | object | ✓ | — | 见 §2.4 |
+| `responseParser` | object | ✓ | — | 见 §2.4。操作引用 `profile` 时可由原型提供，本操作只需声明差异字段 |
+| `profile` | string | ✗ | `""` | 引用 `operationProfiles` 的键。解析期把原型（含 `extends` 链）的 `outputs` / `responseParser` 作为默认值展开进本操作，本操作显式同名项优先；`profile` 本身不进 POCO、不参与运行期。见 §2.7 |
 | `inputs` | map\<string, VariableConfig\> | ✗ | `{}` | 操作级输入覆盖：`source=static` 覆盖协议级默认值（含 `value` 才注入；无 `value` 即原 `hint` 语义）、`source=auto` 追加/覆盖协议级非 length 策略。与协议级 `inputs` 按**整条声明就近覆盖**（§3.4），schema 见 §3.2 |
 | `outputs` | map\<string, VariableConfig\> | ✗ | `{}` | 操作级派生输出（`derivedLength`）。覆盖协议级同名 `outputs`；`expr` 引用域 = 本操作 `inputs` ∪ 协议级 `inputs`，`{name:len}` 取字节长度（载荷变量 = 实际字节数，其余 = 模板渲染宽度）。同一操作域内 `inputs` 与 `outputs` 不得同名（校验 Error） |
 | `kind` | string | ✗ | `""` | 操作语义标注：`"read"` / `"write"`（可选，空 = 未标注，仅 UI 表单过滤与校验用） |
@@ -272,6 +274,80 @@ configs/
 | `countVar` | string | read 时必填 | `""` | read：匹配变量名 → 寄存器数量（应答数据字节 = count × 2 字节） |
 | `dataOffset` | int | write 建议声明 | -1 | write：请求数据区起始偏移（帧内字节下标）；`-1` = 未声明（忽略写入） |
 | `responseTemplate` | array&lt;string&gt; | ✗ | `[]` | 自定义应答模板；**非空时覆盖默认 echo 反向合成**。行文法：hex 字面量 / `{req:N:M}` 请求回显 / `{data}` 数据区；长度字段仍按 framing 自动重算（见 [modules/10 §10.6](./modules/10_Simulation.md)） |
+
+### 2.7 OperationProfileConfig（operationProfiles 的 value）
+
+> 用于消除「每个操作都抄一遍相同 `outputs` / `responseParser`」的重复。原型只承载**可复用**字段，不含 `requestTemplate` / `kind` / `expectResponse` / `inputs`——这些天然因操作而异（决策见 [ADR-0022](./adr/0022-operation-profiles.md)）。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:--:|------|------|
+| `extends` | string | ✗ | `""` | 父原型名（单继承）。先合并父原型，再合并本原型；须为非空字符串，链上禁止环 |
+| `description` | string | ✗ | `""` | 原型说明，仅作文档与 UI 提示，不进 POCO |
+| `outputs` | map\<string, VariableConfig\> | ✗ | `{}` | 与操作级 `outputs` 同构：仅允许 `source=auto strategy=derivedLength`；不能为空对象 |
+| `responseParser` | object | ✗ | `{}` | 与 §2.4 同构：`validCondition` / `dataStartIndex` / `dataLengthExpr`；出现未知字段 = Error |
+
+**约束**
+
+- 每个原型必须至少声明 `outputs` 或 `responseParser` 之一（只有 `description` / `extends` 的空壳报 Error）。
+- 只允许上述 4 个键，其它键报 Error 并列出允许集。
+- `responseParser.validCondition` 与操作级共用同一套 MiniExpression 语法校验（加载期即报错）。
+- `outputs.expr` 的引用域在**合并后按操作**校验：可引用该操作 `requestTemplate` 的占位符，以及协议级 / 操作级 `inputs`。
+
+**合并顺序**（操作引用原型时）
+
+```
+父原型（沿 extends 链逐层：outputs 按变量名覆盖、responseParser 按字段覆盖）
+        ↓
+子原型
+        ↓
+操作显式 outputs / responseParser（同名键 / 同字段覆盖）
+```
+
+- `outputs` 以**变量名**为单位覆盖：整条 `VariableConfig` 替换，不做字段级合并。
+- `responseParser` 以**字段**为单位覆盖：可以只覆盖 `validCondition`，其余字段继承。
+- `description` 被子原型覆盖；只在解析期使用。
+
+**解析期展开**：合并发生在 `ProtocolJsonParser`（加载与保存前校验共用同一入口），POCO 中只有合并后的 `OperationConfig`；`profile` 与 `operationProfiles` 不进入运行期对象。`ConfigStore` 以 JSON 文本为操作边界，因此管理面读写的始终是「原型 + 引用」的原始写法，不会被展开重写。
+
+> 展开后的语义与旧配置**完全等价**：等于把原型的 `outputs` / `responseParser` 原样抄进每个引用它的操作，再用操作自身的显式字段覆盖。不使用 `operationProfiles` 的旧配置照常解析（字段缺失 = 不启用）。
+
+**示例**
+
+```jsonc
+"operationProfiles": {
+  "readResponse": {
+    "description": "Modbus 读响应: ByteCount 在 resp[8]",
+    "responseParser": { "dataStartIndex": 9, "dataLengthExpr": "resp[8]" }
+  },
+  "readBits": {
+    "extends": "readResponse",
+    "outputs": {
+      "BitCount": { "source": "auto", "strategy": "derivedLength", "expr": "resp[8]" }
+    }
+  },
+  "writeWords": {
+    "outputs": {
+      "RegisterCount": { "source": "auto", "strategy": "derivedLength", "expr": "{WriteValue:len} / 2" }
+    }
+  }
+},
+"operations": {
+  "ReadCoils": {
+    "kind": "read",
+    "requestTemplate": ["..."],
+    "responseParser": { "validCondition": "resp[7] == 0x01" },
+    "profile": "readBits"
+  },
+  "ReadHoldingRegisters": {
+    "kind": "read",
+    "requestTemplate": ["..."],
+    "responseParser": { "validCondition": "resp[7] == 0x03" },
+    "profile": "readBits"
+  }
+}
+```
+
+`ReadCoils` 的有效配置 = `readResponse` → `readBits` → 操作自身，最终 `responseParser = { dataStartIndex: 9, dataLengthExpr: "resp[8]", validCondition: "resp[7] == 0x01" }`。
 
 ---
 
@@ -601,6 +677,8 @@ configs/
 
 **派生长度的就近语义**：`derivedLength` 注入同样遵循操作级覆盖协议级；标签若显式提供同名变量则优先（不被派生注入覆盖）。
 
+**操作原型的位置**：`operationProfiles` 不是新的作用域层级——它在**解析期**先展开到操作级（§2.7），因此上面的合并链看到的始终是「展开后的操作声明」。原型里的 `outputs` 与操作自写的 `outputs` 同属操作级。
+
 **各 source 的分派去向**（详见 §3.2）：
 
 - `static` 含 `value` — 合并进 ctx.variables，作默认值。
@@ -852,6 +930,8 @@ Validate 收集**全部**错误后一次性返回（不提前终止），Warning
 4. Fixed：`fixedLength > 0`。
 5. Silence：`charTimeUs ≥ 0`、`frameGapUs ≥ 0`、`maxFrameSize > 0`；`charTimeUs == 0` 时协议级 `baudRate` 必须 > 0（否则无法折算字符时间）。`framing.type == "Message"` 为**名称预留**（CAN 未实装，见 [ROADMAP.md](./ROADMAP.md)）。
 6. `operations` 非空；每个操作的 `requestTemplate` 非空且逐行匹配 §3 文法；占位符格式合法。
+   - `operationProfiles`（可选）：键名非空；每个原型至少声明 `outputs` / `responseParser` 之一；只允许 `extends` / `description` / `outputs` / `responseParser`；`extends` 非空且指向已定义原型；`extends` 链不得成环；`outputs` 不得为空对象且仅允许 `derivedLength`；`responseParser` 的字段类型与 `validCondition` 语法按 §2.4 校验。
+   - 操作的 `profile`（可选）：非空且指向已定义原型，未定义 = Error；合并后的 `outputs` / `responseParser` 仍按本清单规则校验（`derivedLength.expr` 的引用域在合并后按操作校验）。
 7. 模板函数 token 为内置能力，按内置白名单校验合法性。校验和占位符的格式宽度须与算法匹配（`crc16*`→X4、`crc32`→X8、`lrc`/`xor8`→X2），不匹配报 Error。
 8. handshake 的 `sessionExtractExpr` 与 `sessionVariable` 成对出现。
 9. 协议层可选 `simulation` 段只描述仿真实例部署参数（端口 / 数据区 / 仿真操作），按 §2.6 / §13 校验；`transport` / `framing` / `operations` 内不得出现仿真专用字段。

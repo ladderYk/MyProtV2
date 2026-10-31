@@ -8,6 +8,7 @@
 
 #pragma once
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include <mutex>
@@ -34,7 +35,11 @@ public:
     /// Current tag count
     size_t Count() const;
 
-    /// Clear the snapshot (called after a config hot reload, discarding stale data of the old tag set)
+    /// Drop entries whose tag name is not in keepTagNames (called after a config hot reload).
+    /// Unchanged tags keep their last value and change-detection baseline; removed tags are discarded.
+    void Retain(const std::set<std::string>& keepTagNames);
+
+    /// Drop the whole snapshot (explicit full reset; hot reload uses Retain instead)
     void Clear();
 
 private:

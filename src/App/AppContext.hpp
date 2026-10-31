@@ -31,7 +31,9 @@ namespace App {
 /// Device ID -> simulation-server handle (lookup table for the sim extension routes)
 typedef std::map<std::string, Simulation::SimulationServer*> SimServerMap;
 
-/// Callback to start (or restart) the polling engine - ApplyRuntimeSync calls it after re-assembly completes
+/// Callback to apply one config generation to the polling engine - ApplyRuntimeSync calls it after
+/// re-assembly completes. Production binds it to PollingEngine::ApplySnapshot (device-level diff:
+/// unchanged devices keep their poll groups) rather than Start (whole-generation rebuild).
 typedef std::function<void(const std::vector<Core::TagDefinition>&,
                            const std::vector<Core::DeviceConfig>&,
                            const Core::Optional<Core::ResilienceConfig>&)>
@@ -50,7 +52,7 @@ struct AppContext {
     asio::io_context* io;              // write-path post / engine re-assembly dispatch
     Gateway::ProtocolGateway* gateway;
     Polling::PollingEngine* engine;
-    EngineStarter startEngine;         // called by ApplyRuntimeSync after re-assembly completes
+    EngineStarter startEngine;         // called by ApplyRuntimeSync after re-assembly (ApplySnapshot semantics)
     Core::RuntimeSnapshotHolder* snapshot;  // current config generation (protocols/devices/tags/server)
     Polling::LatestValueStore* latest;
     SimServerMap* sims;

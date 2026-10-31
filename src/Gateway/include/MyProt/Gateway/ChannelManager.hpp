@@ -9,6 +9,7 @@
 #include <mutex>
 #include <functional>
 #include <chrono>
+#include <cstdint>
 #include <asio.hpp>
 
 #include "MyProt/Core/Expected.hpp"
@@ -45,9 +46,18 @@ public:
     /// Batch-register devices
     void RegisterDevices(const std::vector<Core::DeviceConfig>& devices);
 
-    /// Reset the device table and re-register per the new config (config hot reload:
-    /// clears residual entries of deleted devices; must be called after ShutdownAll)
+    /// Reset the device table and re-register per the new config (full reset; must be called after ShutdownAll)
     void ResetDevices(const std::vector<Core::DeviceConfig>& devices);
+
+    /// Apply a config generation with a device-level diff (config hot reload).
+    /// Unchanged devices keep their channel, session (handshake variables / circuit breaker /
+    /// lifecycle) and cooldown state - a config save no longer drops every physical connection.
+    /// Changed devices are rebuilt, removed devices are erased, and endpoints no longer referenced
+    /// by any unchanged device are disconnected.
+    /// Exception: a Disabled device is rebuilt even when its connection identity is unchanged.
+    /// Disabled is terminal inside one session (SessionContext refuses the transition out), so a
+    /// hot reload is the only recovery point - a fresh session re-runs connect + handshake.
+    void ApplyDevices(const std::vector<Core::DeviceConfig>& devices);
 
     /// Get or create a channel (auto Connect on first use; async callback)
     void GetOrCreateChannel(const std::string& deviceId,
@@ -71,8 +81,13 @@ private:
         //    Cooldown period 2s (a single connect timeout is 1-3s, slightly more than one attempt).
         int failedStreak;       // consecutive-failure count (reset to zero on success)
         std::chrono::steady_clock::time_point lastFailedAt;  // most recent failure time
+        std::string endpointKey;   // physical endpoint this entry currently targets
+        // Entry generation — bumped when the device is rebuilt by a hot reload. Async callbacks
+        // capture it and drop their state mutations when it no longer matches, so a connect that
+        // completes after the rebuild cannot mark the fresh entry Connected.
+        std::uint64_t epoch;
 
-        ChannelEntry() : connecting(false), failedStreak(0) {}
+        ChannelEntry() : connecting(false), failedStreak(0), epoch(0) {}
     };
 
     asio::io_context& _io;
@@ -89,6 +104,15 @@ private:
     /// Compute the physical endpoint identifier (ADR-0002 §4)
     static std::string ComputeEndpointKey(const Core::ConnectionConfig& conn,
                                           const Core::TransportConfig& transport);
+
+    /// Endpoint key with connection.port==0 resolved through the protocol defaultPort
+    /// (ADR-0012 appendix A.1) - the value PerformConnect actually connects to
+    std::string EffectiveEndpointKey(const Core::DeviceConfig& device) const;
+
+    /// Whether a hot reload can keep this device's channel/session untouched: identical
+    /// connection identity + identical effective endpoint (protocol defaultPort may have moved)
+    bool SameConnectionIdentity(const ChannelEntry& entry,
+                                const Core::DeviceConfig& next) const;
 
     /// Establish the TCP/physical connection (excluding the protocol handshake)
     void PerformConnect(ChannelEntry& entry,

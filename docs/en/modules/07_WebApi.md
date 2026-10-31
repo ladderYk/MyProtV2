@@ -362,8 +362,8 @@ store.SetReloadHandler([&configDir, &ctx]() {
 1. **Reload the config directory** (`ConfigDirectoryLoader::Load`) - an illegal new config returns an error and the runtime stays untouched;
 2. **Build the new-generation snapshot and collect simulation instances** - load products are moved in; per protocol take those with `simulation.listenPort > 0`, falling back to `server.json` when no protocol-level config exists (carrying protocol 0); **this stage neither stops old instances nor publishes the new snapshot**;
 3. **Pre-validate port conflicts** - two enabled instances on the same port return `ConfigError` and both the old simulators and snapshot stay unchanged; only after passing are old instances stopped, `ctx.snapshot` published synchronously (the management plane sees the new config immediately) and the new instances started one by one;
-4. **Clear the live snapshot** (`LatestValueStore::Clear()`) - old tag-set data is invalidated and the engine rebuilds it over subsequent polling rounds;
-5. **`io.post` reassembly** - `engine.Stop()` / `gateway.Shutdown()` / `ResetDevices()` / `startEngine()` run serially on the io thread.
+4. **Converge the live snapshot to the new tag set** (`LatestValueStore::Retain(keepTagNames)`) - removed tags disappear immediately while unchanged tags keep their last value and change-detection baseline (the table does not blank out during a save);
+5. **`io.post` reassembly (device-level diff)** - on the io thread, in order: `ChannelManager::ApplyDevices()` (devices with an unchanged connection identity keep their channel and session; a `Disabled` device gets a fresh session so it can recover) -> `latest.Retain()` -> `startEngine()` (production binds `PollingEngine::ApplySnapshot`, so unchanged devices keep their poll groups). `gateway.Shutdown()` / `ResetDevices()` / `engine.Stop()` are no longer called.
 
 This closes the "**save in the UI, effective immediately**" loop: edit a protocol JSON's `simulation` in
 the UI -> PUT succeeds -> automatic reload -> the corresponding simulator restarts on the new

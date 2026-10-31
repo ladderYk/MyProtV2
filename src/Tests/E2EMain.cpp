@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <set>
 #include <cstdint>
 #include <chrono>
 #include <thread>
@@ -2731,7 +2732,8 @@ int RunE2E() {
                     const std::vector<MyProt::Core::DeviceConfig>& devices,
                     const MyProt::Core::Optional<
                         MyProt::Core::ResilienceConfig>& globalResilience) {
-                rengine.Start(tags, devices,
+                // 与生产同一入口: 设备级 diff (未变设备的组不动)
+                rengine.ApplySnapshot(tags, devices,
                     [&latest](const std::vector<MyProt::Core::TagValue>& r) {
                         latest.Update(r);
                     }, globalResilience);
@@ -2783,6 +2785,28 @@ int RunE2E() {
         // 预置旧快照: Old-Dev 引擎永不产出新数据
         Check("16-4: 预置快照 Old-Dev 已存在", !latest.Snapshot("Old-Dev").empty());
 
+        // 16-4b/4c: Retain 语义 — 热重载只剔除消失标签, 未变标签保留最新值
+        {
+            std::vector<MyProt::Core::TagValue> keepSeed(2);
+            keepSeed[0].tagName = "Keep.Tag";
+            keepSeed[0].typedValue.type = MyProt::Core::ValueType::UInt16;
+            keepSeed[0].typedValue.u = 9;
+            keepSeed[1].tagName = "Drop.Tag";
+            keepSeed[1].typedValue.type = MyProt::Core::ValueType::UInt16;
+            keepSeed[1].typedValue.u = 1;
+            latest.Update(keepSeed);
+
+            std::set<std::string> keep;
+            keep.insert("Keep.Tag");
+            latest.Retain(keep);
+
+            MyProt::Core::TagValue kept;
+            Check("16-4b: 未变标签的最新值被保留",
+                  latest.Lookup("Keep.Tag", kept) && kept.typedValue.u == 9);
+            Check("16-4c: 已删除标签被剔除",
+                  !latest.Lookup("Drop.Tag", kept));
+        }
+
         { std::ofstream f(protoPath.c_str()); f << ProtoJson(11532, "SimModbus", 0); }
         WriteSimServerJson(11532, 7);   // 仿真器随 server.json 迁移端口
         {
@@ -2794,6 +2818,11 @@ int RunE2E() {
               sims.count("SimModbus") == 1 &&
               sims["SimModbus"]->ListenPort() == 11532);
         Check("16-7: 旧标签快照已清空", latest.Snapshot("Old-Dev").empty());
+        Check("16-7b: 新标签集之外的值被剔除",
+              WaitFor([&latest]() {
+                  MyProt::Core::TagValue gone;
+                  return !latest.Lookup("Keep.Tag", gone);
+              }, 40));
         // reload 后经 io.post 重新装配 → 新快照只含新标签
         Check("16-8: 引擎热重载 activeTags=2",
               WaitFor([&rengine]() {
@@ -2816,7 +2845,8 @@ int RunE2E() {
                 std::vector<MyProt::Core::TagValue> snap = latest.Snapshot("");
                 for (size_t i = 0; i < snap.size(); ++i) {
                     if (snap[i].tagName == "R.V" &&
-                        snap[i].quality == MyProt::Core::QualityCode::Good) {
+                        snap[i].quality == MyProt::Core::QualityCode::Good &&
+                        snap[i].typedValue.u == 7) {
                         rvVal = snap[i].typedValue.u;
                         return true;
                     }
@@ -2863,8 +2893,11 @@ int RunE2E() {
             [&latest, &multiVal]() {
                 std::vector<MyProt::Core::TagValue> snap = latest.Snapshot("");
                 for (size_t i = 0; i < snap.size(); ++i) {
+                    // 热重载保留未变标签的旧值 → 必须等目标值本身,
+                    // 不能只等 quality=Good (否则会读到保留的旧值 7)。
                     if (snap[i].tagName == "R.V" &&
-                        snap[i].quality == MyProt::Core::QualityCode::Good) {
+                        snap[i].quality == MyProt::Core::QualityCode::Good &&
+                        snap[i].typedValue.u == 11) {
                         multiVal = snap[i].typedValue.u;
                         return true;
                     }
@@ -2999,7 +3032,7 @@ int RunE2E() {
                     const std::vector<MyProt::Core::DeviceConfig>& devices,
                     const MyProt::Core::Optional<
                         MyProt::Core::ResilienceConfig>& globalResilience) {
-                wengine.Start(tags, devices,
+                wengine.ApplySnapshot(tags, devices,
                     [&latest](const std::vector<MyProt::Core::TagValue>& r) {
                         latest.Update(r);
                     }, globalResilience);
@@ -3371,7 +3404,7 @@ int RunE2E() {
                     const std::vector<MyProt::Core::DeviceConfig>& devices,
                     const MyProt::Core::Optional<
                         MyProt::Core::ResilienceConfig>& globalResilience) {
-                vengine.Start(tags, devices,
+                vengine.ApplySnapshot(tags, devices,
                     [&vLatest](const std::vector<MyProt::Core::TagValue>& r) {
                         vLatest.Update(r);
                     }, globalResilience);
@@ -4194,6 +4227,168 @@ int RunE2E() {
               !MyProt::Engine::ResponseParser::CheckCondition(view, "resp[100] == 0x00"));
         Check("23-10: resp[7] == → false (语法错误运行时容错)",
               !MyProt::Engine::ResponseParser::CheckCondition(view, "resp[7] =="));
+    }
+    std::cout << std::endl;
+
+    // ─── Test 24: 热重载设备级 diff (ApplySnapshot / ApplyDevices) ───
+    // 配置保存不应让整个设备群重建: 未变设备的轮询组与会话 (握手变量/熔断/生命周期)
+    // 必须原样保留, 只有改动设备付重建代价。
+    std::cout << "--- Test 24: Hot reload device-level diff ---" << std::endl;
+    {
+        asio::io_context dio;   // 只装配不 run: 验证装配期 diff, 不产生真实网络行为
+
+        MyProt::Gateway::ProtocolLookup dLookup =
+            [](const std::string& name)
+                -> MyProt::Core::Expected<MyProt::Core::ProtocolConfig> {
+                if (name != "Sync") {
+                    return MyProt::Core::Unexpected(
+                        MyProt::Core::Error::Code::ProtocolNotFound, name);
+                }
+                MyProt::Core::ProtocolConfig p;
+                p.protocolName = "Sync";
+                p.transport.type = MyProt::Core::TransportType::Tcp;
+                p.transport.tcp.defaultPort = 1502;
+                p.maxSpanBytes = 240;
+                return MyProt::Core::Expected<MyProt::Core::ProtocolConfig>(p);
+            };
+        MyProt::Gateway::ChannelFactory dFactory =
+            [](asio::io_context& ioCtx, const std::string& channelId)
+                -> std::shared_ptr<MyProt::Transport::IChannel> {
+                return std::make_shared<MyProt::Transport::TcpChannel>(
+                    ioCtx, channelId);
+            };
+        MyProt::Gateway::ProtocolGateway dgw(dio, dLookup, dFactory);
+        MyProt::Polling::PollingEngine dengine(dio, dgw);
+        MyProt::Gateway::ChannelManager& dchm = dgw.GetChannelManager();
+
+        MyProt::Core::DeviceConfig devA;
+        devA.id = "A"; devA.protocol = "Sync";
+        devA.connection.host = "127.0.0.1"; devA.connection.port = 1502;
+        MyProt::Core::DeviceConfig devB = devA;
+        devB.id = "B"; devB.connection.port = 1503;
+
+        MyProt::Core::TagDefinition tagA;
+        tagA.name = "A.T1"; tagA.deviceId = "A"; tagA.operation = "Read";
+        tagA.scanRateMs = 1000; tagA.finalType = "UInt16";
+        tagA.direction = "read"; tagA.source = "poll";
+        tagA.variables["StartByteAddress"] = 0;
+        tagA.variables["ByteCount"] = 2;
+        MyProt::Core::TagDefinition tagB = tagA;
+        tagB.name = "B.T1"; tagB.deviceId = "B";
+        tagB.variables["StartByteAddress"] = 10;
+
+        std::vector<MyProt::Core::DeviceConfig> devs1;
+        devs1.push_back(devA); devs1.push_back(devB);
+        std::vector<MyProt::Core::TagDefinition> tags1;
+        tags1.push_back(tagA); tags1.push_back(tagB);
+
+        dchm.ApplyDevices(devs1);
+        dengine.ApplySnapshot(tags1, devs1);
+        const int64_t built0 = dengine.GetStats().groupsBuilt.load();
+        Check("24-1: 首次装配每设备 1 组 / activeTags=2",
+              built0 == 2 && dengine.GetStats().activeTags.load() == 2);
+
+        std::shared_ptr<MyProt::Service::SessionContext> sessA0 =
+            dchm.GetSession("A");
+        std::shared_ptr<MyProt::Service::SessionContext> sessB0 =
+            dchm.GetSession("B");
+        Check("24-2: 两设备各有独立会话",
+              sessA0 && sessB0 && sessA0 != sessB0);
+
+        // 预置 A 的会话状态: 未变设备的热重载不能把它清掉
+        sessA0->SetSessionVar("Token", "keep-me");
+        sessA0->SetLifecycle(MyProt::Service::DeviceLifecycleState::Degraded);
+
+        // 场景 1: 只改 A 的展示名 (label 不参与轮询签名) + 改 B 的端口与地址
+        devB.connection.port = 1504;
+        tagB.variables["StartByteAddress"] = 20;
+        MyProt::Core::TagDefinition tagA2 = tagA;
+        tagA2.label = "A 点 1";
+        std::vector<MyProt::Core::DeviceConfig> devs2;
+        devs2.push_back(devA); devs2.push_back(devB);
+        std::vector<MyProt::Core::TagDefinition> tags2;
+        tags2.push_back(tagA2); tags2.push_back(tagB);
+
+        dchm.ApplyDevices(devs2);
+        dengine.ApplySnapshot(tags2, devs2);
+        Check("24-3: 仅改标签展示名 + B 变更 → 只重建 B 的 1 组",
+              dengine.GetStats().groupsBuilt.load() - built0 == 1);
+        Check("24-4: 未变设备 A 的会话指针不变",
+              dchm.GetSession("A") == sessA0);
+        Check("24-5: 变更设备 B 的会话被重建",
+              dchm.GetSession("B") != sessB0);
+        MyProt::Core::Optional<std::string> keepToken =
+            sessA0->GetSessionVar("Token");
+        Check("24-6: A 的握手变量与生命周期被保留",
+              keepToken.has_value() && keepToken.value() == "keep-me" &&
+              sessA0->GetLifecycle() ==
+                  MyProt::Service::DeviceLifecycleState::Degraded);
+
+        // 场景 2: 删除设备 A → 组只退役不重建, 会话被移除
+        std::vector<MyProt::Core::DeviceConfig> devs3;
+        devs3.push_back(devB);
+        std::vector<MyProt::Core::TagDefinition> tags3;
+        tags3.push_back(tagB);
+        dchm.ApplyDevices(devs3);
+        dengine.ApplySnapshot(tags3, devs3);
+        Check("24-7: 删除设备 A → 零重建, activeTags=1",
+              dengine.GetStats().groupsBuilt.load() - built0 == 1 &&
+              dengine.GetStats().activeTags.load() == 1);
+        Check("24-8: 被删除设备的会话已移除", dchm.GetSession("A") == nullptr);
+
+        // 场景 3: Disabled 是会话内终态 (SetLifecycle 拒绝转换), 热重载重建会话才是唯一恢复路径
+        std::shared_ptr<MyProt::Service::SessionContext> sessB2 =
+            dchm.GetSession("B");
+        sessB2->SetLifecycle(MyProt::Service::DeviceLifecycleState::Disabled);
+        dchm.ApplyDevices(devs3);   // B 连接身份未变
+        Check("24-9: 未变且 Disabled 的设备被热重载恢复为 New (会话重建)",
+              dchm.GetSession("B") != nullptr &&
+              dchm.GetSession("B") != sessB2 &&
+              dchm.GetSession("B")->GetLifecycle() ==
+                  MyProt::Service::DeviceLifecycleState::New);
+
+        // 场景 4: enabled=false 的设备不建轮询组 (KI-04)
+        MyProt::Core::DeviceConfig devAOff = devA;
+        devAOff.enabled = false;
+        std::vector<MyProt::Core::DeviceConfig> devs4;
+        devs4.push_back(devAOff); devs4.push_back(devB);
+        std::vector<MyProt::Core::TagDefinition> tags4;
+        tags4.push_back(tagA); tags4.push_back(tagB);
+        dengine.ApplySnapshot(tags4, devs4);
+        Check("24-10: enabled=false 设备不建组, 零重建",
+              dengine.GetStats().groupsBuilt.load() - built0 == 1 &&
+              dengine.GetStats().activeTags.load() == 1);
+
+        // 场景 5: 设备级韧性是 SessionContext 熔断/自动禁用策略的来源 → 改了必须重建会话
+        std::shared_ptr<MyProt::Service::SessionContext> sessB3 =
+            dchm.GetSession("B");
+        MyProt::Core::DeviceConfig devB3 = devB;
+        MyProt::Core::ResilienceConfig br3;
+        br3.failureThreshold = 3;
+        devB3.resilience = br3;
+        std::vector<MyProt::Core::DeviceConfig> devs5;
+        devs5.push_back(devB3);
+        dchm.ApplyDevices(devs5);
+        Check("24-11: 设备级韧性变更 → 会话重建 (新熔断策略生效)",
+              dchm.GetSession("B") != nullptr &&
+              dchm.GetSession("B") != sessB3);
+
+        // 场景 6: 仅 requestTimeoutMs 变更 — 不是连接身份, 会话保留;
+        //         但它是轮询签名的一部分, 所以轮询组要重建
+        std::shared_ptr<MyProt::Service::SessionContext> sessB4 =
+            dchm.GetSession("B");
+        MyProt::Core::DeviceConfig devB4 = devB3;
+        devB4.requestTimeoutMs = 1500;
+        std::vector<MyProt::Core::DeviceConfig> devs6;
+        devs6.push_back(devB4);
+        std::vector<MyProt::Core::TagDefinition> tags6;
+        tags6.push_back(tagB);
+        const int64_t built1 = dengine.GetStats().groupsBuilt.load();
+        dchm.ApplyDevices(devs6);
+        dengine.ApplySnapshot(tags6, devs6);
+        Check("24-12: 仅超时变更 → 会话保留, 只重建轮询组",
+              dchm.GetSession("B") == sessB4 &&
+              dengine.GetStats().groupsBuilt.load() - built1 == 1);
     }
     std::cout << std::endl;
 

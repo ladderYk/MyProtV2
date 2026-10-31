@@ -194,6 +194,8 @@ public:
    仅在无任何协议启用仿真时作为回退实例；解析失败 = 整体 `Load` 失败；
 5. 校验期 Warning 输出到 stderr，不阻断加载。
 
+> **操作原型展开**：协议若声明 `operationProfiles`，第 1 步在同一入口内先校验全部原型、再解析 `extends` 链（带环检测与结果缓存），最后按「父原型 → 子原型 → 操作显式字段」把原型铺进每个引用它的操作（[ADR-0022](../adr/0022-operation-profiles.md)）。展开只发生在解析方向：`profile` / `operationProfiles` 不进 POCO，`ConfigStore` 读写的仍是「原型 + 引用」的原始文本；合并后的操作与手工展开的旧配置走完全相同的后续校验。
+
 > 演进记录: 改造前协议文件经历 3 次 JSON 解析、tags.json 经历 2 次；
 > 收敛后每文件严格 1 次（v4.1 重构 Item 1）。
 
@@ -276,7 +278,7 @@ public:
 ## 4.4 SchemaRegistry
 
 `GET /api/config/schema` 数据源，供 Vue 管理界面动态表单渲染；
-表内容与 docs/Config_Schema.md 契约手工保持一致。
+表内容与 docs/Config_Schema.md 契约手工保持一致。协议段包含 `operations[].profile` 与 `operationProfiles` 的字段描述（后者限定为 `extends` / `description` / `outputs` / `responseParser`），前端据此渲染原型下拉与原型 JSON 编辑器。
 
 ```cpp
 // src/Service/include/MyProt/Service/SchemaRegistry.hpp
@@ -411,7 +413,7 @@ New ──(GOC)──► Connecting ──(握手+连接成功)──► Connect
 
 * ──► Disabled   配置 enabled=false / 协议或握手 BuildError /
   │              连续 Degraded 轮次达到 resilience.disableAfterDegraded
-  Disabled ──► (新会话)  配置热重载: ResetDevices 重建 SessionContext 即恢复
+  Disabled ──► (新会话)  配置热重载: ApplyDevices 重建 SessionContext 即恢复
   (会话内 Disabled 为终态: 下一轮 GOC 的 Connecting 不会把它"救活")
 ```
 
@@ -426,14 +428,14 @@ New ──(GOC)──► Connecting ──(握手+连接成功)──► Connect
 | Degraded → Connecting | 下一轮 timer 触发 GOC |
 | Degraded → Connected | GOC 成功完成 |
 | * → Disabled | 协议/握手 `BuildError`（即时）；或连续 `Degraded` 轮次 ≥ `resilience.disableAfterDegraded`；或构造时 `device.enabled=false` |
-| Disabled → (新会话) | 仅配置热重载：`ChannelManager::ResetDevices` 重建 `SessionContext` |
+| Disabled → (新会话) | 仅配置热重载：`ChannelManager::ApplyDevices` 重建 `SessionContext`（连接身份未变也重建） |
 
 ### 自动禁用与恢复（KI-04）
 
 - **累积粒度**：`SetLifecycle(Degraded)` 每次真实迁移（前一状态非 `Degraded`）计 1 轮；同状态重复设置幂等不计。`Connected` 将计数清零，因此"抖动但偶发连上"的设备不会被误禁用。
 - **阈值**：`resilience.disableAfterDegraded`（全局块或设备覆盖，默认 `10`，`0` = 永不自动禁用）。达到阈值的那次迁移直接落到 `Disabled`，并打 `WARN` 日志。该设备随即退出轮询采集链（不再调 `GetOrCreateChannel`、不产出 Bad、不累计 `poll_read_failures_total`），仅保留定时器空转，见 modules/06_Polling.md。
 - **配置停用**：`device.enabled=false` 在构造时即钉为 `Disabled`；轮询侧不建组、不 collect 其标签，南向侧不建订阅/不占端口，写请求直接返回 `ConfigError("device disabled")`。
-- **恢复**：`Disabled` 是**会话内终态**；唯一恢复路径是配置热重载（改回 `enabled=true` 或调整阈值后保存），`ResetDevices` 重建 `SessionContext` 并重新进入 `New`。无独立 API，避免误操作把故障设备的无限重连风暴"一键复活"。
+- **恢复**：`Disabled` 是**会话内终态**；唯一恢复路径是配置热重载（改回 `enabled=true` 或调整阈值后保存），`ApplyDevices` 重建 `SessionContext` 并重新进入 `New`。无独立 API，避免误操作把故障设备的无限重连风暴"一键复活"。
 - **兼容性**：两个字段均为可选增量（`enabled` 默认 `true`、`disableAfterDegraded` 默认 `10`），旧配置行为不变，`schemaVersion` 不升代。
 
 ### 故障分类（`Core::IsLifecycleDegrading`）

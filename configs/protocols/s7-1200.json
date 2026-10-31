@@ -138,20 +138,7 @@
         "{AddrMid:X2}",
         "{AddrLo:X2}"
       ],
-      "outputs": {
-        "Length": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "ByteCount",
-          "label": "BYTE 字节数量",
-          "unit": "字节"
-        }
-      },
-      "responseParser": {
-        "validCondition": "resp[21] == 0xFF",
-        "dataStartIndex": 25,
-        "dataLengthExpr": ""
-      }
+      "profile": "s7ReadBit"
     },
     "ReadVarWord": {
       "kind": "read",
@@ -172,20 +159,7 @@
         "{AddrMid:X2}",
         "{AddrLo:X2}"
       ],
-      "outputs": {
-        "Length": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "ByteCount / 2",
-          "label": "WORD 元素数量",
-          "unit": "个"
-        }
-      },
-      "responseParser": {
-        "validCondition": "resp[21] == 0xFF",
-        "dataStartIndex": 25,
-        "dataLengthExpr": ""
-      }
+      "profile": "s7ReadWord"
     },
     "ReadVarDWord": {
       "kind": "read",
@@ -206,20 +180,7 @@
         "{AddrMid:X2}",
         "{AddrLo:X2}"
       ],
-      "outputs": {
-        "Length": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "ByteCount / 4",
-          "label": "DWORD 元素数量",
-          "unit": "个"
-        }
-      },
-      "responseParser": {
-        "validCondition": "resp[21] == 0xFF",
-        "dataStartIndex": 25,
-        "dataLengthExpr": ""
-      }
+      "profile": "s7ReadDWord"
     },
     "ReadVarReal": {
       "kind": "read",
@@ -240,20 +201,7 @@
         "{AddrMid:X2}",
         "{AddrLo:X2}"
       ],
-      "outputs": {
-        "Length": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "ByteCount / 4",
-          "label": "REAL 元素数量",
-          "unit": "个"
-        }
-      },
-      "responseParser": {
-        "validCondition": "resp[21] == 0xFF",
-        "dataStartIndex": 25,
-        "dataLengthExpr": ""
-      }
+      "profile": "s7ReadReal"
     },
     "WriteVarBit": {
       "kind": "write",
@@ -285,6 +233,153 @@
           "label": "写入载荷 (1 字节 0/1)"
         }
       },
+      "profile": "s7WriteBit"
+    },
+    "WriteVarWord": {
+      "kind": "write",
+      "requestTemplate": [
+        "03 00",
+        "{PDULength:X4}",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "{DataLen:X4}",
+        "05 01",
+        "12 0A 10",
+        "04",
+        "{ItemLength:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}",
+        "00",
+        "04",
+        "{DataBits:X4}",
+        "{WriteValue:raw}"
+      ],
+      "inputs": {
+        "WriteValue": {
+          "source": "static",
+          "label": "写入载荷"
+        }
+      },
+      "profile": "s7WriteWord"
+    },
+    "WriteVarDWord": {
+      "kind": "write",
+      "requestTemplate": [
+        "03 00",
+        "{PDULength:X4}",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "{DataLen:X4}",
+        "05 01",
+        "12 0A 10",
+        "06",
+        "{ItemLength:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}",
+        "00",
+        "04",
+        "{DataBits:X4}",
+        "{WriteValue:raw}"
+      ],
+      "inputs": {
+        "WriteValue": {
+          "source": "static",
+          "label": "写入载荷"
+        }
+      },
+      "profile": "s7WriteDWord"
+    },
+    "WriteVarReal": {
+      "kind": "write",
+      "requestTemplate": [
+        "03 00",
+        "{PDULength:X4}",
+        "02 F0 80",
+        "32 01 00 00",
+        "{TransactionID:X4}",
+        "00 0E",
+        "{DataLen:X4}",
+        "05 01",
+        "12 0A 10",
+        "08",
+        "{ItemLength:X4}",
+        "{DBNumber:X4}",
+        "{Area:X2}",
+        "{AddrHi:X2}",
+        "{AddrMid:X2}",
+        "{AddrLo:X2}",
+        "00",
+        "07",
+        "{DataBits:X4}",
+        "{WriteValue:raw}"
+      ],
+      "inputs": {
+        "WriteValue": {
+          "source": "static",
+          "label": "写入载荷"
+        }
+      },
+      "profile": "s7WriteReal"
+    }
+  },
+  "operationProfiles": {
+    "s7Response": {
+      "description": "S7 应答: 第 21 字节为 0xFF 表示成功, 数据区从第 25 字节开始",
+      "responseParser": {
+        "validCondition": "resp[21] == 0xFF",
+        "dataStartIndex": 25,
+        "dataLengthExpr": ""
+      }
+    },
+    "s7ReadBit": {
+      "extends": "s7Response",
+      "outputs": {
+        "Length": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount",
+          "label": "BYTE 字节数量",
+          "unit": "字节"
+        }
+      }
+    },
+    "s7ReadWord": {
+      "extends": "s7Response",
+      "outputs": {
+        "Length": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount / 2",
+          "label": "WORD 元素数量",
+          "unit": "个"
+        }
+      }
+    },
+    "s7ReadDWord": {
+      "extends": "s7Response",
+      "outputs": {
+        "Length": {
+          "source": "auto",
+          "strategy": "derivedLength",
+          "expr": "ByteCount / 4",
+          "label": "DWORD 元素数量",
+          "unit": "个"
+        }
+      }
+    },
+    "s7WriteBit": {
+      "extends": "s7Response",
+      "description": "位写: 地址 = 字节地址<<3 + 位偏移",
       "outputs": {
         "AddrLo": {
           "source": "auto",
@@ -318,63 +413,12 @@
           "label": "数据区总长",
           "unit": "字节"
         }
-      },
-      "responseParser": {
-        "validCondition": "resp[21] == 0xFF",
-        "dataStartIndex": 25,
-        "dataLengthExpr": ""
       }
     },
-    "WriteVarWord": {
-      "kind": "write",
-      "requestTemplate": [
-        "03 00",
-        "{PDULength:X4}",
-        "02 F0 80",
-        "32 01 00 00",
-        "{TransactionID:X4}",
-        "00 0E",
-        "{DataLen:X4}",
-        "05 01",
-        "12 0A 10",
-        "04",
-        "{ItemLength:X4}",
-        "{DBNumber:X4}",
-        "{Area:X2}",
-        "{AddrHi:X2}",
-        "{AddrMid:X2}",
-        "{AddrLo:X2}",
-        "00",
-        "04",
-        "{DataBits:X4}",
-        "{WriteValue:raw}"
-      ],
-      "inputs": {
-        "WriteValue": {
-          "source": "static",
-          "label": "写入载荷"
-        }
-      },
+    "s7WriteWord": {
+      "extends": "s7Response",
+      "description": "字写: 地址沿用协议级 AddrLo/Mid/Hi",
       "outputs": {
-        "AddrLo": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "lo8(StartByteAddress * 8)",
-          "label": "S7 地址低字节",
-          "unit": "S7 地址 = 字节地址<<3"
-        },
-        "AddrMid": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "hi8(StartByteAddress * 8)",
-          "label": "S7 地址中字节"
-        },
-        "AddrHi": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "(StartByteAddress * 8) / 65536",
-          "label": "S7 地址高字节"
-        },
         "ItemLength": {
           "source": "auto",
           "strategy": "derivedLength",
@@ -402,63 +446,12 @@
           "label": "位长度",
           "unit": "bit"
         }
-      },
-      "responseParser": {
-        "validCondition": "resp[21] == 0xFF",
-        "dataStartIndex": 25,
-        "dataLengthExpr": ""
       }
     },
-    "WriteVarDWord": {
-      "kind": "write",
-      "requestTemplate": [
-        "03 00",
-        "{PDULength:X4}",
-        "02 F0 80",
-        "32 01 00 00",
-        "{TransactionID:X4}",
-        "00 0E",
-        "{DataLen:X4}",
-        "05 01",
-        "12 0A 10",
-        "06",
-        "{ItemLength:X4}",
-        "{DBNumber:X4}",
-        "{Area:X2}",
-        "{AddrHi:X2}",
-        "{AddrMid:X2}",
-        "{AddrLo:X2}",
-        "00",
-        "04",
-        "{DataBits:X4}",
-        "{WriteValue:raw}"
-      ],
-      "inputs": {
-        "WriteValue": {
-          "source": "static",
-          "label": "写入载荷"
-        }
-      },
+    "s7WriteDWord": {
+      "extends": "s7Response",
+      "description": "双字写: 地址沿用协议级 AddrLo/Mid/Hi",
       "outputs": {
-        "AddrLo": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "lo8(StartByteAddress * 8)",
-          "label": "S7 地址低字节",
-          "unit": "S7 地址 = 字节地址<<3"
-        },
-        "AddrMid": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "hi8(StartByteAddress * 8)",
-          "label": "S7 地址中字节"
-        },
-        "AddrHi": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "(StartByteAddress * 8) / 65536",
-          "label": "S7 地址高字节"
-        },
         "ItemLength": {
           "source": "auto",
           "strategy": "derivedLength",
@@ -486,95 +479,32 @@
           "label": "位长度",
           "unit": "bit"
         }
-      },
-      "responseParser": {
-        "validCondition": "resp[21] == 0xFF",
-        "dataStartIndex": 25,
-        "dataLengthExpr": ""
       }
     },
-    "WriteVarReal": {
-      "kind": "write",
-      "requestTemplate": [
-        "03 00",
-        "{PDULength:X4}",
-        "02 F0 80",
-        "32 01 00 00",
-        "{TransactionID:X4}",
-        "00 0E",
-        "{DataLen:X4}",
-        "05 01",
-        "12 0A 10",
-        "08",
-        "{ItemLength:X4}",
-        "{DBNumber:X4}",
-        "{Area:X2}",
-        "{AddrHi:X2}",
-        "{AddrMid:X2}",
-        "{AddrLo:X2}",
-        "00",
-        "07",
-        "{DataBits:X4}",
-        "{WriteValue:raw}"
-      ],
-      "inputs": {
-        "WriteValue": {
-          "source": "static",
-          "label": "写入载荷"
-        }
-      },
+    "s7ReadReal": {
+      "extends": "s7ReadDWord",
+      "description": "实数读: 与双字同构, 仅元素文案不同",
       "outputs": {
-        "AddrLo": {
+        "Length": {
           "source": "auto",
           "strategy": "derivedLength",
-          "expr": "lo8(StartByteAddress * 8)",
-          "label": "S7 地址低字节",
-          "unit": "S7 地址 = 字节地址<<3"
-        },
-        "AddrMid": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "hi8(StartByteAddress * 8)",
-          "label": "S7 地址中字节"
-        },
-        "AddrHi": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "(StartByteAddress * 8) / 65536",
-          "label": "S7 地址高字节"
-        },
+          "expr": "ByteCount / 4",
+          "label": "REAL 元素数量",
+          "unit": "个"
+        }
+      }
+    },
+    "s7WriteReal": {
+      "extends": "s7WriteDWord",
+      "description": "实数写: 与双字同构, 仅元素文案不同",
+      "outputs": {
         "ItemLength": {
           "source": "auto",
           "strategy": "derivedLength",
           "expr": "ByteCount / 4",
           "label": "元素数 (REAL)",
           "unit": "个"
-        },
-        "PDULength": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "{Frame:fixed} + {WriteValue:len}",
-          "label": "PDU 长度（TPKT 总帧长）"
-        },
-        "DataLen": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "{WriteValue:len} + 4",
-          "label": "数据区总长",
-          "unit": "字节"
-        },
-        "DataBits": {
-          "source": "auto",
-          "strategy": "derivedLength",
-          "expr": "{WriteValue:len} * 8",
-          "label": "位长度",
-          "unit": "bit"
         }
-      },
-      "responseParser": {
-        "validCondition": "resp[21] == 0xFF",
-        "dataStartIndex": 25,
-        "dataLengthExpr": ""
       }
     }
   }

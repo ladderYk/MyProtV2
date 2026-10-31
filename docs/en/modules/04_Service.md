@@ -189,6 +189,8 @@ Directory layout (Config_Schema §1):
 4. read `server.json` (missing = OK, `ServerConfig.simulation.listenPort` defaults to 0, i.e. simulation off) and attach the parsed result to `LoadedConfig.server`; its `simulation` section shares the same parse/validate implementation as the protocol level and only serves as a fallback instance when no protocol enables simulation; a parse failure fails the whole `Load`;
 5. validation warnings go to stderr and never block loading.
 
+> **Operation-profile expansion**: if a protocol declares `operationProfiles`, step 1 first validates every profile, then resolves the `extends` chains (cycle detection plus result caching), and finally lays the profile into each referencing operation in the order "parent → child → operation's explicit fields" ([ADR-0022](../../adr/0022-operation-profiles.md) *zh*). Expansion only happens in the parse direction: `profile` / `operationProfiles` never enter the POCO, `ConfigStore` still reads/writes the original "profiles + references" text, and a merged operation goes through exactly the same downstream validation as a hand-expanded legacy config.
+
 > Evolution record: before the refactor protocol files went through 3 JSON parses and `tags.json`
 > through 2; after convergence every file is parsed exactly once (v4.1 refactor item 1).
 
@@ -268,7 +270,10 @@ public:
 ## 4.4 SchemaRegistry
 
 Data source for `GET /api/config/schema`, used by the Vue management UI for dynamic form rendering; the
-table contents are kept manually in sync with the `docs/Config_Schema.md` contract.
+table contents are kept manually in sync with the `docs/Config_Schema.md` contract. The protocol section includes
+the field descriptions for `operations[].profile` and `operationProfiles` (the latter limited to `extends` /
+`description` / `outputs` / `responseParser`), which the front end uses to render the profile dropdown and the
+profile JSON editor.
 
 ```cpp
 // src/Service/include/MyProt/Service/SchemaRegistry.hpp
@@ -407,7 +412,7 @@ New --(GOC)--> Connecting --(handshake + connect ok)--> Connected
 
 * --> Disabled   config enabled=false / protocol-handshake BuildError /
   |              consecutive Degraded rounds reaching resilience.disableAfterDegraded
-  Disabled --> (new session)  config hot reload: ResetDevices rebuilds SessionContext
+  Disabled --> (new session)  config hot reload: ApplyDevices rebuilds SessionContext
   (Disabled is terminal within a session: the next GOC's Connecting cannot revive it)
 ```
 
@@ -422,14 +427,14 @@ New --(GOC)--> Connecting --(handshake + connect ok)--> Connected
 | Degraded -> Connecting | the next timer round triggers GOC |
 | Degraded -> Connected | GOC completes successfully |
 | * -> Disabled | protocol/handshake `BuildError` (immediate); or consecutive `Degraded` rounds >= `resilience.disableAfterDegraded`; or `device.enabled=false` at construction |
-| Disabled -> (new session) | config hot reload only: `ChannelManager::ResetDevices` rebuilds `SessionContext` |
+| Disabled -> (new session) | config hot reload only: `ChannelManager::ApplyDevices` rebuilds `SessionContext` (even when the connection identity is unchanged) |
 
 ### Auto-disable and recovery (KI-04)
 
 - **Counting granularity**: `SetLifecycle(Degraded)` counts 1 round per real transition (previous state != `Degraded`); repeated same-state calls are idempotent and never double-count. `Connected` resets the counter, so a flapping device that occasionally connects is not falsely disabled.
 - **Threshold**: `resilience.disableAfterDegraded` (global block or per-device override, default `10`, `0` = never auto-disable). The transition that reaches the threshold lands directly on `Disabled` and emits a `WARN` log. The device then leaves the polling acquisition chain (no more `GetOrCreateChannel`, no Bad values, no `poll_read_failures_total` increments); only an idle timer keeps ticking - see modules/06_Polling.md.
 - **Administrative disable**: `device.enabled=false` pins the state to `Disabled` at construction; polling builds no group and collects none of its tags, southbound creates no subscription and takes no port, and writes return `ConfigError("device disabled")` immediately.
-- **Recovery**: `Disabled` is **terminal within a session**; the only recovery path is a config hot reload (set `enabled=true` or adjust the threshold and save), where `ResetDevices` rebuilds `SessionContext` and re-enters `New`. No dedicated API exists, so a broken device cannot be revived with one call into another reconnect storm.
+- **Recovery**: `Disabled` is **terminal within a session**; the only recovery path is a config hot reload (set `enabled=true` or adjust the threshold and save), where `ApplyDevices` rebuilds `SessionContext` and re-enters `New`. No dedicated API exists, so a broken device cannot be revived with one call into another reconnect storm.
 - **Compatibility**: both fields are optional additions (`enabled` defaults to `true`, `disableAfterDegraded` to `10`), legacy configs behave unchanged, and `schemaVersion` is not bumped.
 
 ### Fault classification (`Core::IsLifecycleDegrading`)

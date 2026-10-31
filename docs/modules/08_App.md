@@ -232,7 +232,9 @@ server.SetExtHandler([&ctx, &extRoutes](const std::string& m,
 
 ### ApplyRuntimeSync 语义
 
-配置变更生效的**单一汇聚点**：重新执行 `ConfigDirectoryLoader::Load` → 校验失败则返回错误（上层 `ConfigStore` 据此自动回滚）→ 成功则构建新一代不可变 `RuntimeSnapshot`（加载产物直接 move 入内），按协议收集 `simulation.listenPort > 0` 的实例（无协议级配置时回退 `server.json`）→ **端口冲突前置校验**（失败则旧实例/旧快照保持不变）→ 通过后才停旧实例、**同步发布**新快照到 `ctx.snapshot` 并逐个启动新仿真器 → `io.post` 到 io 线程依次执行 `engine.Stop()` / `gateway.Shutdown()` / `ResetDevices()` / `ctx.startEngine()`。首次装配与 Save/reload 触发的热重载共用此函数，保证两条路径行为一致；多实例语义见 [ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md)。
+配置变更生效的**单一汇聚点**：重新执行 `ConfigDirectoryLoader::Load` → 校验失败则返回错误（上层 `ConfigStore` 据此自动回滚）→ 成功则构建新一代不可变 `RuntimeSnapshot`（加载产物直接 move 入内），按协议收集 `simulation.listenPort > 0` 的实例（无协议级配置时回退 `server.json`）→ **端口冲突前置校验**（失败则旧实例/旧快照保持不变）→ 通过后才停旧实例、**同步发布**新快照到 `ctx.snapshot` 并逐个启动新仿真器 → `io.post` 到 io 线程依次执行 **设备级 diff**：`ChannelManager::ApplyDevices()` → `latest.Retain(keepTagNames)` → `ctx.startEngine()`（生产绑定 `PollingEngine::ApplySnapshot`）。首次装配与 Save/reload 触发的热重载共用此函数，保证两条路径行为一致；多实例语义见 [ADR-0017](../adr/0017-protocol-scoped-simulation-instances.md)。
+
+> 热重载**不再**“全停重建”：未变设备保留物理通道、`SessionContext`（握手变量/熔断/生命周期）与其轮询组，只有变更设备重连重建；已退役组的在飞结果按 `PollGroup::alive` 丢弃。详见 [modules/05 §5.2](./05_Gateway.md) / [modules/06 §6.1](./06_Polling.md)。
 
 > 同步发布是为了消除“配置已保存、首个写请求仍走旧标签”的可见性窗口；io 队列 FIFO 保证新到写请求的重装配先于执行。详见 [ADR-0014](../adr/0014-runtime-snapshot-single-source.md)。
 

@@ -32,7 +32,7 @@ class PollingEngine {
 public:
     PollingEngine(asio::io_context& io, Gateway::ProtocolGateway& gateway);
 
-    /// Start polling
+    /// Start polling from scratch (= Stop + ApplySnapshot). Used for the first-time assembly.
     /// @param tags  all tag definitions (copied and stored, grouped by scanRateMs)
     /// @param devices  device configs (used to build the deviceId -> protocolName map)
     /// @param onResults  the result-dispatch callback after each read round (optional)
@@ -47,6 +47,21 @@ public:
     /// Stop polling (cancel all timers; in-flight batches complete naturally)
     void Stop();
 
+    /// Apply one configuration generation (first-time assembly and hot reload share this path).
+    /// Device-level diff: only the poll groups of devices whose poll-relevant configuration changed
+    /// are rebuilt; unchanged devices keep their timers, in-flight chains and deadline budgets, so a
+    /// config save no longer produces a fleet-wide polling gap. Retired groups are marked !alive —
+    /// their in-flight results are discarded instead of reviving removed/renamed tags.
+    /// @param tags  all tag definitions of the new generation
+    /// @param devices  device configs of the new generation
+    /// @param onResults  result-dispatch callback (replaces the previous one)
+    /// @param globalResilience  global resilience policy; device-level override wins
+    void ApplySnapshot(const std::vector<Core::TagDefinition>& tags,
+                       const std::vector<Core::DeviceConfig>& devices,
+                       ResultDispatch onResults = nullptr,
+                       const Core::Optional<Core::ResilienceConfig>& globalResilience =
+                           Core::Optional<Core::ResilienceConfig>());
+
     /// Get the statistics
     const PollStats& GetStats() const { return _stats; }
 
@@ -54,12 +69,13 @@ public:
     bool IsRunning() const { return _running.load(); }
 
 private:
-    /// Poll group - all tags with the same scanRateMs + merged requests
+    /// Poll group - all tags of one device with the same scanRateMs + merged requests
     struct PollGroup {
+        std::string deviceId;       // owning device (device-level diff key)
         int scanRateMs;
-        std::uint64_t generation;   // assembly generation - after a hot reload, old-generation in-flight groups must not be rescheduled
-        // The original tag array - all groups share the same one (tagIndices reference this array);
-        // shared_ptr ensures the in-flight async chain holds an old-generation tag-table snapshot, so a hot-reload replacement does not dangle
+        // The tag array of this group's device only - tagIndices reference this array.
+        // Kept per device (not the global tag table) so a group can survive a generation
+        // change while other devices add/remove tags without shifting its indices.
         std::shared_ptr<const std::vector<Core::TagDefinition>> tags;
         std::vector<Gateway::MergedRequest> mergedRequests;
         asio::steady_timer timer;
@@ -67,9 +83,13 @@ private:
         // This round's total-budget deadline (= trigger time + scanRateMs, ADR-0004 §3);
         // retries/reconnects consume the same budget; over-budget does not cascade to the next cycle
         std::chrono::steady_clock::time_point batchDeadline;
+        // Retirement flag — set when the owning device is rebuilt or removed (or on Stop).
+        // An in-flight chain of a retired group abandons its results instead of dispatching:
+        // a global generation counter cannot express a *partial* rebuild (only some devices).
+        std::atomic<bool> alive;
 
         PollGroup(asio::io_context& io)
-            : scanRateMs(1000), generation(0), timer(io), busy(false) {}
+            : scanRateMs(1000), timer(io), busy(false), alive(true) {}
     };
 
     asio::io_context& _io;
@@ -77,14 +97,17 @@ private:
     PollStats _stats;
     std::atomic<bool> _running;
     std::atomic<bool> _stopping;
-    std::atomic<std::uint64_t> _generation;  // current assembly generation (incremented at Start)
     ResultDispatch _onResults;   // result-dispatch callback
+    // deviceId -> signature of everything polling depends on (device poll fields + its tags +
+    // effective resilience + max span). Equal signature => the device's groups are reused as-is.
+    std::unordered_map<std::string, std::string> _deviceSignatures;
     std::unordered_map<std::string, std::string> _deviceProtocolMap;  // deviceId -> protocolName
     std::unordered_map<std::string, int> _deviceTimeoutMap;           // deviceId -> requestTimeoutMs
     std::unordered_map<std::string, Core::ResilienceConfig>
         _deviceResilienceMap;    // deviceId -> effective resilience (device-level override > global > default)
     // Protocol snapshot cache (protocolName -> shared_ptr) - each protocol does a lookup+copy only on first access;
-    // cleared at Start(), refreshed naturally after a hot-reload re-assembly (in-flight batches hold old snapshots, snapshot semantics)
+    // cleared by ApplySnapshot (a hot reload must pick up protocol template/byte-order changes immediately;
+    // in-flight batches keep their old snapshot, snapshot semantics)
     std::unordered_map<std::string, std::shared_ptr<const Core::ProtocolConfig>>
         _protocolCache;
     std::vector<std::shared_ptr<PollGroup>> _groups;
@@ -119,9 +142,26 @@ private:
     void FinishBatch(std::shared_ptr<PollGroup> group,
                      std::shared_ptr<std::vector<Core::TagValue>> results);
 
-    /// Discard an old-generation batch (generation mismatch after a hot reload): dispatch no results, update no stats,
-    /// release only the backpressure - preventing stale values of deleted/renamed tags from reviving into the new data plane.
+    /// Discard a retired group's batch: dispatch no results, update no stats, release only the
+    /// backpressure - preventing stale values of deleted/renamed tags from reviving into the new data plane.
     void AbandonBatch(std::shared_ptr<PollGroup> group);
+
+    /// Retire a poll group: subsequent timer/in-flight callbacks abandon instead of rescheduling
+    void RetireGroup(const std::shared_ptr<PollGroup>& group);
+
+    /// Build + schedule the poll groups of one device from its own tag table
+    void BuildGroupsForDevice(const std::string& deviceId,
+                              const std::vector<Core::TagDefinition>& deviceTags,
+                              int maxSpan);
+
+    /// Signature of everything polling depends on for one device (label/unit excluded —
+    /// display-only). NOTE: when a TagDefinition/DeviceConfig field starts influencing polling,
+    /// it must be appended here, otherwise a hot reload silently keeps the stale group.
+    static std::string DevicePollSignature(
+        const Core::DeviceConfig& device,
+        const std::vector<Core::TagDefinition>& deviceTags,
+        const Core::ResilienceConfig& effectiveResilience,
+        int maxSpan);
 
     /// Mark all tags of the specified MergedRequest as Bad and append them to results
     void AppendBadValues(std::shared_ptr<PollGroup> group,

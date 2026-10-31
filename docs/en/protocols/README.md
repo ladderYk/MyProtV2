@@ -128,7 +128,7 @@ Minimal steps:
 
 1. **Write the protocol JSON**: `configs/protocols/<name>.json`
    - Prefer `MyProt.App.exe --proto-init lengthfield` for the skeleton, then replace the bytes per the manual (field list in [Config_Schema.md §3](../Config_Schema.md))
-   - Root-level required keys: `protocolName` / `schemaVersion` / `transport` / `framing` / `operations`; each op needs `requestTemplate` + `responseParser.validCondition/dataStartIndex/dataLengthExpr`
+   - Root-level required keys: `protocolName` / `schemaVersion` / `transport` / `framing` / `operations`; each op needs `requestTemplate`; the three `responseParser` fields may be declared on the op itself or (when it references a `profile`) come from the expanded protocol-level `operationProfiles` — the merged result must be complete
    - When devices of the same protocol differ only by constants, use `devices[].variables` instead of copying the protocol file
 2. **Write the tutorial doc**: `docs/protocols/<name>.md`
    - Frame-structure table + config↔byte mapping + error handling
@@ -151,6 +151,7 @@ Minimal steps:
 - `validCondition`: a Mini-C expression judging response validity; `resp[N]` means byte offset N
 - `dataStartIndex`: start offset of the data region
 - `dataLengthExpr`: data-region length expression
+- When several operations share the same parsing rules, hoist them into protocol-level `operationProfiles` (single-inheritance `extends`) and reference them via `profile` from the operations, which then declare only the differences. Expansion is exactly equivalent to writing the fields per operation; see [Config_Schema.md §2.7](../Config_Schema.md#27-operationprofileconfig-value-of-operationprofiles) and [ADR-0022](../../adr/0022-operation-profiles.md) *zh*
 
 ## Common error-handling conventions
 

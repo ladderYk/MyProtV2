@@ -82,8 +82,14 @@ public:
     void RegisterDevice(const Core::DeviceConfig& device);            // must register before GetOrCreateChannel
     void RegisterDevices(const std::vector<Core::DeviceConfig>& devices);
     /// Reset the device table and re-register with the new config
-    /// (config hot reload; must be called after ShutdownAll)
+    /// (full reset; must be called after ShutdownAll)
     void ResetDevices(const std::vector<Core::DeviceConfig>& devices);
+
+    /// Apply one config generation with a device-level diff (config hot reload): devices with an
+    /// unchanged connection identity keep their channel, session (handshake variables / circuit
+    /// breaker / lifecycle) and cooldown state; changed devices are rebuilt, removed devices are
+    /// erased, and only endpoints no unchanged device still references are disconnected.
+    void ApplyDevices(const std::vector<Core::DeviceConfig>& devices);
 
     /// Get or create a channel (connects automatically on first use; async callback)
     void GetOrCreateChannel(const std::string& deviceId,
@@ -101,6 +107,10 @@ private:
         std::shared_ptr<Service::SessionContext> session;
         Core::DeviceConfig deviceConfig;
         bool connecting;          // prevents concurrent creation of the same channel
+        int failedStreak;         // consecutive connect failures (cooldown window)
+        std::chrono::steady_clock::time_point lastFailedAt;
+        std::string endpointKey;  // physical endpoint this entry currently targets (defaultPort resolved)
+        std::uint64_t epoch;      // bumped on rebuild; in-flight connect callbacks with a stale epoch are dropped
     };
     // _devices (key=deviceId) + _endpointCache (key=physical endpoint)
 };
@@ -112,6 +122,12 @@ Key points:
 
 - **Shared-bus channel reuse** (ADR-0002 §4): callers address a deviceId, while internally `IChannel` instances are reused by **physical endpoint** (Tcp/Tls = `host:port`, Serial = `portName`) through `_endpointCache`; `ShutdownAll` disconnects them all. Logical device routing (UnitID and so on) is carried by template variables.
 - **Session context**: `Service::SessionContext` (connection-level state plus a read circuit breaker Closed/Open/HalfOpen, see ADR-0004); session variables established by the handshake are stored there for request templates.
+- **Device-level diff on hot reload (`ApplyDevices`)**:
+  - **Comparison key = connection identity**: `id/protocol/enabled/connection(host, port, portName, timeoutMs)/credentials/device-level variables/device-level resilience` plus the **effective endpoint** (`port==0` is resolved through the new protocol snapshot's `defaultPort` before comparing) - changing a protocol's default port is detected too. `resilience` is part of the key because the breaker/auto-disable policy lives in `SessionContext`; without a rebuild a changed threshold would silently keep the old policy.
+  - **Unchanged devices**: channel, `SessionContext` (handshake variables, circuit-breaker counters, lifecycle, cooldown window) are kept as-is, so a config save no longer tears down every physical connection.
+  - **The one exception - `Disabled`**: `SessionContext` treats `Disabled` as terminal for the session (`SetLifecycle` refuses to leave it), so the entry is **rebuilt even when the connection identity is unchanged** (fresh session + new `epoch`); otherwise a device disabled by a bad handshake template could never recover after the protocol was fixed. Its endpoint is not added to the kept set and is disconnected when nobody else references it.
+  - **Changed/new devices**: the entry is rebuilt and `epoch` is bumped; an in-flight `PerformConnect` callback carries the old `epoch` and drops its state mutation when it no longer matches, so a fresh entry cannot be marked connected by a stale attempt.
+  - **Removed devices**: erased from `_devices`; the endpoint cache keeps only endpoints still referenced by unchanged devices, everything else is `Disconnect()`ed and erased.
 - Internally serialized with a `recursive_mutex` (`GetOrCreateChannel` holds the lock while triggering the connection flow).
 
 ## 5.3 TagReader — the single pipeline owner

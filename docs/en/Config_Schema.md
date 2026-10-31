@@ -70,7 +70,8 @@ order). See §2.6 / §13 and [ADR-0017](../adr/0017-protocol-scoped-simulation-i
 | `transport` | object | ✓ | — | See §2.1 |
 | `framing` | object | ✓ | — | See §2.2 |
 | `dataByteOrder` | ByteOrder | ✗ | `"BigEndian"` | Protocol-level data-decode byte order; a tag's `byteOrder` falls back here when undeclared (decoupled from the `framing.byteOrder` length-field byte order) |
-| `operations` | map\<string, OperationConfig\> | ✓ | — | Non-empty; **the map key is the operation name**. Write capability is not declared at the protocol layer (the protocol-level `writeOperation` / `writeBytesOperation` fields were removed) — operations only annotate semantics via `kind: "read"/"write"` for validator consistency checks and UI filtering; the write declaration point is the tag layer (see §Tags) |
+| `operations` | map\<string, OperationConfig\> | ✓ | — | Non-empty; **the map key is the operation name**. Write capability is not declared at the protocol layer (the protocol-level `writeOperation` / `writeBytesOperation` fields were removed) — operations only annotate semantics via `kind: "read"/"write"` for validator consistency checks and UI filtering; the write declaration point is the tag layer (see §Tags). An operation may reference an operation profile via `profile` to reuse `outputs` / `responseParser` |
+| `operationProfiles` | map\<string, OperationProfile\> | ✗ | `{}` | Operation-profile table: hoists the `outputs` (derived only) and `responseParser` shared by several operations into one declaration, referenced by an operation's `profile`. Supports single-inheritance `extends`; merge order is "parent → child → operation's explicit fields". See §2.7. Purely additive optional field, no `schemaVersion` bump |
 | `inputs` | map\<string, VariableConfig\> | ✗ | `{}` | Protocol-level **input section**: declares operator-supplied / runtime-generated inputs — `source=static` (with `value` injects a default; without `value` it is a UI hint only) and `source=auto` (`strategy` selects `autoIncrement`/`frameSlice`/`expr`/`crc`, evaluated at render time). Variable-length write payloads are auto-detected by the template `{Name:raw}` placeholder, no special strategy declaration needed. Full `VariableConfig` structure in §3.2 |
 | `outputs` | map\<string, VariableConfig\> | ✗ | `{}` | Protocol-level **output section**. Only **derived outputs** with `source=auto strategy=derivedLength` (computed from payload byte count, see §3.2.1). `expr` may reference names declared in `inputs` or template `{Name:raw}` payload names; `{name:len}` yields the byte length (raw payload = actual byte count, otherwise = template render width). Within one protocol scope `inputs` and `outputs` must not share a name (validation Error); across operations the same name with different roles is allowed (e.g. `RegisterCount`: read op = input / write op = output) |
 | `handshake` | HandshakeStep[] | ✗ | `[]` | Empty array = no handshake (e.g. Modbus) |
@@ -252,7 +253,8 @@ file is not implemented — do not configure it.
 | Field | Type | Req | Default | Description |
 |------|------|:--:|------|------|
 | `requestTemplate` | string[] | ✓ | — | Non-empty; grammar in §3 |
-| `responseParser` | object | ✓ | — | See §2.4 |
+| `responseParser` | object | ✓ | — | See §2.4. When the op references a `profile`, the prototype may supply it; the op only declares the differences |
+| `profile` | string | ✗ | `""` | Key into `operationProfiles`. At parse time the prototype (including its `extends` chain) is expanded into this op as defaults for `outputs` / `responseParser`; this op's explicit same-name entries win. `profile` itself never enters the POCO or the runtime. See §2.7 |
 | `inputs` | map\<string, VariableConfig\> | ✗ | `{}` | Operation-level input overrides: `source=static` overrides the protocol-level default (injects only when `value` is present; without `value` it is the former `hint` semantics), `source=auto` appends/overrides protocol-level non-length strategies. Merged with protocol-level `inputs` by **whole-declaration nearest-wins override** (§3.4); schema in §3.2 |
 | `outputs` | map\<string, VariableConfig\> | ✗ | `{}` | Operation-level derived outputs (`derivedLength`). Override same-named protocol-level `outputs`; the `expr` reference domain = this op's `inputs` ∪ protocol-level `inputs`, `{name:len}` yields the byte length (payload variable = actual byte count, otherwise = template render width). Within one op domain `inputs` and `outputs` must not share a name (validation Error) |
 | `kind` | string | ✗ | `""` | Operation semantics tag: `"read"` / `"write"` (optional; empty = untagged, used only for UI form filtering and validation) |
@@ -337,6 +339,80 @@ ResponseParser::Parse. The parser defines no standalone type-conversion utility 
 | `countVar` | string | required for read | `""` | read: matched variable name → register count (response data bytes = count × 2 bytes) |
 | `dataOffset` | int | recommended for write | -1 | write: start offset of the request data region (frame byte index); `-1` = undeclared (ignore the write) |
 | `responseTemplate` | array&lt;string&gt; | ✗ | `[]` | Custom response template; **when non-empty it overrides the default echo reverse-synthesis**. Line grammar: hex literal / `{req:N:M}` request echo / `{data}` data region; the length field is still recomputed per framing (see [modules/10 §10.6](../modules/10_Simulation.md) *zh*) |
+
+### 2.7 OperationProfileConfig (value of operationProfiles)
+
+> Removes the repetition of copying the same `outputs` / `responseParser` into every operation. A profile carries only the **reusable** fields; it has no `requestTemplate` / `kind` / `expectResponse` / `inputs` — those are inherently per-operation (rationale in [ADR-0022](../adr/0022-operation-profiles.md) *zh*).
+
+| Field | Type | Req | Default | Description |
+|------|------|:--:|------|------|
+| `extends` | string | ✗ | `""` | Parent profile name (single inheritance). The parent is merged first, then this profile; must be a non-empty string; cycles are forbidden |
+| `description` | string | ✗ | `""` | Profile description; documentation and UI hint only, never enters the POCO |
+| `outputs` | map\<string, VariableConfig\> | ✗ | `{}` | Same shape as operation-level `outputs`: only `source=auto strategy=derivedLength` allowed; must not be an empty object |
+| `responseParser` | object | ✗ | `{}` | Same shape as §2.4: `validCondition` / `dataStartIndex` / `dataLengthExpr`; an unknown field is an Error |
+
+**Constraints**
+
+- Every profile must declare at least one of `outputs` / `responseParser` (a shell with only `description` / `extends` is an Error).
+- Only the four keys above are allowed; any other key is an Error listing the allowed set.
+- `responseParser.validCondition` uses the same MiniExpression syntax check as operation level (reported at load time).
+- The `outputs.expr` reference domain is validated **per operation after expansion**: it may reference that operation's `requestTemplate` placeholders plus protocol-level / operation-level `inputs`.
+
+**Merge order** (when an operation references a profile)
+
+```
+parent profile (walk the extends chain: outputs override by variable name, responseParser by field)
+        ↓
+child profile
+        ↓
+operation's explicit outputs / responseParser (same-name key / same field overrides)
+```
+
+- `outputs` overrides by **variable name**: the whole `VariableConfig` is replaced, no field-level merge.
+- `responseParser` overrides by **field**: you may override only `validCondition` and inherit the rest.
+- `description` is overridden by the child; used at parse time only.
+
+**Parse-time expansion**: merging happens in `ProtocolJsonParser` (shared by loading and pre-save validation); the POCO only holds the merged `OperationConfig`. `profile` and `operationProfiles` never reach runtime objects. `ConfigStore` uses JSON text as its boundary, so the management plane always reads/writes the original "profiles + references" form; it is never rewritten expanded.
+
+> The expanded semantics are **exactly equivalent** to the legacy form: as if the profile's `outputs` / `responseParser` were copied into each referencing operation, then overridden by the operation's own explicit fields. Legacy configs without `operationProfiles` keep parsing unchanged (absent = disabled).
+
+**Example**
+
+```jsonc
+"operationProfiles": {
+  "readResponse": {
+    "description": "Modbus read response: ByteCount at resp[8]",
+    "responseParser": { "dataStartIndex": 9, "dataLengthExpr": "resp[8]" }
+  },
+  "readBits": {
+    "extends": "readResponse",
+    "outputs": {
+      "BitCount": { "source": "auto", "strategy": "derivedLength", "expr": "resp[8]" }
+    }
+  },
+  "writeWords": {
+    "outputs": {
+      "RegisterCount": { "source": "auto", "strategy": "derivedLength", "expr": "{WriteValue:len} / 2" }
+    }
+  }
+},
+"operations": {
+  "ReadCoils": {
+    "kind": "read",
+    "requestTemplate": ["..."],
+    "responseParser": { "validCondition": "resp[7] == 0x01" },
+    "profile": "readBits"
+  },
+  "ReadHoldingRegisters": {
+    "kind": "read",
+    "requestTemplate": ["..."],
+    "responseParser": { "validCondition": "resp[7] == 0x03" },
+    "profile": "readBits"
+  }
+}
+```
+
+`ReadCoils`' effective config = `readResponse` → `readBits` → the operation itself, so `responseParser = { dataStartIndex: 9, dataLengthExpr: "resp[8]", validCondition: "resp[7] == 0x01" }`.
 
 ---
 
@@ -681,6 +757,8 @@ Device-level variables may also be referenced from `handshake[].requestTemplate`
 
 **Derived-length nearest semantics**: `derivedLength` injection also follows operation-over-protocol override; a tag that explicitly provides a same-named variable wins (not overwritten by derived injection).
 
+**Where operation profiles sit**: `operationProfiles` is not a new scope level — it is expanded into the operation level at **parse time** (§2.7), so the merge chain above always sees the expanded operation declaration. A profile's `outputs` and the operation's own `outputs` belong to the same level.
+
 **Dispatch of each source** (details in §3.2):
 
 - `static` with `value` — merged into ctx.variables as a default.
@@ -832,6 +910,8 @@ Validate collects **all** errors then returns them at once (no early exit); Warn
 4. Fixed: `fixedLength > 0`.
 5. Silence: `charTimeUs ≥ 0`, `frameGapUs ≥ 0`, `maxFrameSize > 0`; when `charTimeUs == 0` the protocol-level `baudRate` must be > 0 (else the character time cannot be derived). `framing.type == "Message"` is a **name reservation** (CAN un-implemented, see [ROADMAP.md](../ROADMAP.md) *zh*).
 6. `operations` is non-empty; each op's `requestTemplate` is non-empty and each line matches the §3 grammar; placeholder formats are valid.
+   - `operationProfiles` (optional): keys non-empty; each profile declares at least one of `outputs` / `responseParser`; only `extends` / `description` / `outputs` / `responseParser` allowed; `extends` non-empty and referencing a defined profile; the `extends` chain must not cycle; `outputs` must not be empty and only `derivedLength` is allowed; `responseParser` field types and `validCondition` syntax are validated per §2.4.
+   - An operation's `profile` (optional): non-empty and referencing a defined profile, otherwise an Error; the merged `outputs` / `responseParser` are still validated by this list (`derivedLength.expr` reference domain is checked per operation after expansion).
 7. Template function tokens are built-in capabilities, validated against the built-in whitelist. A checksum placeholder's format width must match the algorithm (`crc16*`→X4, `crc32`→X8, `lrc`/`xor8`→X2); a mismatch is an Error.
 8. A handshake's `sessionExtractExpr` and `sessionVariable` appear as a pair.
 9. The optional protocol-level `simulation` section describes simulator deployment only (port / data region / simulated operations) and is validated per §2.6 / §13; simulation-only fields must not appear inside `transport` / `framing` / `operations`.

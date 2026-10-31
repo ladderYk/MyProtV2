@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <map>
+#include <set>
 
 namespace MyProt { namespace Gateway {
 
@@ -209,6 +210,7 @@ void ChannelManager::RegisterDevice(const Core::DeviceConfig& device) {
     entry.connecting = false;
     entry.failedStreak = 0;        // 新设备清零冷却计数
     entry.lastFailedAt = std::chrono::steady_clock::time_point();
+    entry.endpointKey = EffectiveEndpointKey(device);
 }
 
 void ChannelManager::RegisterDevices(const std::vector<Core::DeviceConfig>& devices) {
@@ -227,7 +229,152 @@ void ChannelManager::ResetDevices(const std::vector<Core::DeviceConfig>& devices
         entry.connecting = false;
         entry.failedStreak = 0;    // 重置后清零冷却计数
         entry.lastFailedAt = std::chrono::steady_clock::time_point();
+        entry.endpointKey = EffectiveEndpointKey(devices[i]);
     }
+}
+
+// ── 设备级差异应用 (热重载) ──
+//
+// 目标: 一次配置保存不再断掉所有设备的物理通道。判定粒度是“连接身份”:
+//   连接参数 / 凭据 / 设备级模板变量 / 有效端点 (协议 defaultPort 可能已变)。
+// 未变设备连 SessionContext 一起保留 — 握手会话变量、熔断器、生命周期、
+// 冷却计时全部延续, 不会因保存配置而集体重连。
+void ChannelManager::ApplyDevices(
+        const std::vector<Core::DeviceConfig>& devices) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+
+    std::map<std::string, const Core::DeviceConfig*> next;
+    for (size_t i = 0; i < devices.size(); ++i) {
+        next[devices[i].id] = &devices[i];
+    }
+
+    // 保留端点集合 — 仅来自“未变设备”当前使用的物理端点
+    std::set<std::string> keepEndpoints;
+
+    for (std::unordered_map<std::string, ChannelEntry>::iterator it = _devices.begin();
+         it != _devices.end(); ) {
+        std::map<std::string, const Core::DeviceConfig*>::const_iterator nx =
+            next.find(it->first);
+        if (nx == next.end()) {                 // 设备已从配置删除
+            it = _devices.erase(it);
+            continue;
+        }
+        if (SameConnectionIdentity(it->second, *nx->second)) {
+            // 热重载是 Disabled (会话内终态) 唯一的恢复时机。注意不能只调
+            // SetLifecycle(New): SessionContext 自身拒绝 Disabled 出发的转换。
+            // 也无法只靠“重建 SessionContext”: 若旧通道仍在, 新会话不会重跑握手。
+            // 故这里走下面的重建分支 — 新的 SessionContext + 新 epoch, 且不加入
+            // keepEndpoints, 端点无人再用时由下方的回收逻辑断链。
+            const bool wasDisabled = it->second.session &&
+                it->second.session->GetLifecycle() ==
+                    Service::DeviceLifecycleState::Disabled;
+            if (!wasDisabled) {
+                keepEndpoints.insert(it->second.endpointKey);
+                ++it;
+                continue;
+            }
+        }
+
+        // 连接语义变了 (或未变但已 Disabled, 需恢复) → 重建条目;
+        // epoch 自增使在途连接回调失效。
+        // 旧通道指针在此释放, 若对应端点无人再用, 会在下面被断链。
+        const std::uint64_t nextEpoch = it->second.epoch + 1;
+        ChannelEntry fresh;
+        fresh.deviceConfig = *nx->second;
+        fresh.session = std::make_shared<Service::SessionContext>(*nx->second);
+        fresh.endpointKey = EffectiveEndpointKey(*nx->second);
+        fresh.epoch = nextEpoch;
+        it->second = fresh;
+        ++it;
+    }
+
+    for (std::map<std::string, const Core::DeviceConfig*>::const_iterator it =
+             next.begin(); it != next.end(); ++it) {
+        if (_devices.find(it->first) != _devices.end()) continue;   // 已存在
+        ChannelEntry entry;
+        entry.deviceConfig = *it->second;
+        entry.session = std::make_shared<Service::SessionContext>(*it->second);
+        entry.endpointKey = EffectiveEndpointKey(*it->second);
+        _devices[it->first] = entry;
+    }
+
+    // 端点缓存: 只保留仍被未变设备引用的物理通道, 其余断链。
+    // (注: 多设备共享总线时, 同一端点上某设备变更不会拆掉其他设备的会话 —
+    //  共享物理通道本身就是一份会话, 这符合 ADR-0002 §4 的共享总线模型。)
+    for (std::unordered_map<std::string, std::shared_ptr<Transport::IChannel>>::iterator
+             it = _endpointCache.begin(); it != _endpointCache.end(); ) {
+        if (keepEndpoints.find(it->first) != keepEndpoints.end()) {
+            ++it;
+            continue;
+        }
+        if (it->second) it->second->Disconnect();
+        it = _endpointCache.erase(it);
+    }
+}
+
+std::string ChannelManager::EffectiveEndpointKey(
+        const Core::DeviceConfig& device) const {
+    Core::ConnectionConfig conn = device.connection;
+    Core::TransportConfig transport;
+    auto protocol = _lookup(device.protocol);
+    if (protocol.has_value()) {
+        transport = protocol.value().transport;
+        // 有效端口解析 (ADR-0012 附录 A.1): port=0 → 协议 defaultPort
+        if (conn.port == 0) {
+            if (transport.type == Core::TransportType::Tcp) {
+                conn.port = transport.tcp.defaultPort;
+            } else if (transport.type == Core::TransportType::Tls) {
+                conn.port = transport.tls.defaultPort;
+            } else if (transport.type == Core::TransportType::Udp) {
+                conn.port = transport.udp.defaultPort;
+            }
+        }
+    }
+    return ComputeEndpointKey(conn, transport);
+}
+
+namespace {
+bool SameOptionalString(const Core::Optional<std::string>& a,
+                        const Core::Optional<std::string>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    return !a.has_value() || a.value() == b.value();
+}
+
+bool SameResilience(const Core::Optional<Core::ResilienceConfig>& a,
+                    const Core::Optional<Core::ResilienceConfig>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    if (!a.has_value()) return true;
+    const Core::ResilienceConfig& x = a.value();
+    const Core::ResilienceConfig& y = b.value();
+    return x.maxAttempts == y.maxAttempts
+        && x.backoffBaseMs == y.backoffBaseMs
+        && x.backoffMaxMs == y.backoffMaxMs
+        && x.failureThreshold == y.failureThreshold
+        && x.cooldownMs == y.cooldownMs
+        && x.halfOpenProbes == y.halfOpenProbes
+        && x.disableAfterDegraded == y.disableAfterDegraded;
+}
+} // namespace
+
+bool ChannelManager::SameConnectionIdentity(
+        const ChannelEntry& entry, const Core::DeviceConfig& next) const {
+    const Core::DeviceConfig& cur = entry.deviceConfig;
+    if (cur.id != next.id) return false;
+    if (cur.protocol != next.protocol) return false;
+    if (cur.enabled != next.enabled) return false;
+    if (cur.connection.host != next.connection.host) return false;
+    if (cur.connection.port != next.connection.port) return false;
+    if (cur.connection.portName != next.connection.portName) return false;
+    if (cur.connection.timeoutMs != next.connection.timeoutMs) return false;
+    if (!SameOptionalString(cur.username, next.username)) return false;
+    if (!SameOptionalString(cur.password, next.password)) return false;
+    if (cur.variables != next.variables) return false;
+    // 设备级韧性是 SessionContext 熔断/自动禁用策略的来源 — 改了阈值必须重建
+    // 会话, 否则旧策略一直生效 (保存后“调整阈值恢复”会静默无效)。
+    if (!SameResilience(cur.resilience, next.resilience)) return false;
+    // 协议 defaultPort 变更时 port=0 的有效端点会跟着变 — 用当前协议快照重算比对
+    if (entry.endpointKey != EffectiveEndpointKey(next)) return false;
+    return true;
 }
 
 // ── 物理端点标识计算 (ADR-0002 §4) ──
@@ -402,17 +549,20 @@ void ChannelManager::PerformConnect(
     auto self = this;
     auto deviceId = deviceConfig.id;
     auto handshakeProto = std::make_shared<Core::ProtocolConfig>(protocol);
+    // 代际快照: 连接结果回来时设备可能已被热重载重建, 旧回调只负责交付结果,
+    // 不得再改写新条目的状态 (epoch 不匹配即丢弃状态变更)
+    const std::uint64_t epoch = entry.epoch;
 
     channel->Connect(deviceConfig.connection, timeout,
         [self, deviceId, deviceConfig, channel, endpointKey, session,
-         handshakeProto, timeout, handler]
+         handshakeProto, timeout, handler, epoch]
         (Core::Expected<void> connectResult) {
 
             if (!connectResult.has_value()) {
                 {
                     std::lock_guard<std::recursive_mutex> lock(self->_mutex);
                     auto it = self->_devices.find(deviceId);
-                    if (it != self->_devices.end()) {
+                    if (it != self->_devices.end() && it->second.epoch == epoch) {
                         it->second.connecting = false;
                         // 冷却期计数: 失败 +1, 记录时刻
                         it->second.failedStreak++;
@@ -427,10 +577,13 @@ void ChannelManager::PerformConnect(
                 return;
             }
 
-            // 缓存物理通道
+            // 缓存物理通道 (仅当代条目仍有效 — 已被重建时不得把旧通道挂回缓存)
             {
                 std::lock_guard<std::recursive_mutex> lock(self->_mutex);
-                self->_endpointCache[endpointKey] = channel;
+                auto epIt = self->_devices.find(deviceId);
+                if (epIt != self->_devices.end() && epIt->second.epoch == epoch) {
+                    self->_endpointCache[endpointKey] = channel;
+                }
             }
             Core::metrics::CounterInc(Core::metrics::kChannelConnectsTotal,
                                       Core::metrics::Device(deviceId));
@@ -440,7 +593,7 @@ void ChannelManager::PerformConnect(
                 {
                     std::lock_guard<std::recursive_mutex> lock(self->_mutex);
                     auto it = self->_devices.find(deviceId);
-                    if (it != self->_devices.end()) {
+                    if (it != self->_devices.end() && it->second.epoch == epoch) {
                         it->second.connecting = false;
                         // 物理连接成功 → 清零冷却计数
                         it->second.failedStreak = 0;
@@ -460,13 +613,13 @@ void ChannelManager::PerformConnect(
             // 执行协议握手序列
             self->PerformHandshake(channel, session, handshakeProto, deviceConfig,
                                    0, timeout,
-                [self, deviceId, channel, endpointKey, session, handler]
+                [self, deviceId, channel, endpointKey, session, handler, epoch]
                 (Core::Expected<void> hsResult) {
 
                     {
                         std::lock_guard<std::recursive_mutex> lock(self->_mutex);
                         auto it = self->_devices.find(deviceId);
-                        if (it != self->_devices.end()) {
+                        if (it != self->_devices.end() && it->second.epoch == epoch) {
                             it->second.connecting = false;
                             if (hsResult.has_value()) {
                                 // 握手成功 → 清零冷却计数
@@ -480,10 +633,14 @@ void ChannelManager::PerformConnect(
                     }
 
                     if (!hsResult.has_value()) {
-                        // 握手失败 → 拆除物理通道
+                        // 握手失败 → 拆除物理通道 (同上: 只处理本代条目)
                         {
                             std::lock_guard<std::recursive_mutex> lock(self->_mutex);
-                            self->_endpointCache.erase(endpointKey);
+                            auto epIt = self->_devices.find(deviceId);
+                            if (epIt != self->_devices.end()
+                                    && epIt->second.epoch == epoch) {
+                                self->_endpointCache.erase(endpointKey);
+                            }
                         }
                         channel->Disconnect();
                         // KI-04: 握手模板 BuildError 属配置级不可恢复 → 立即 Disabled

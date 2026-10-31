@@ -77,7 +77,7 @@ Validate after editing: `MyProt.App.exe --validate configs` (same validators as 
 | Doc | Contents |
 |------|------|
 | [Config Schema](./Config_Schema.md) | Single source of truth for the config contract: JSON↔POCO mapping, template grammar, validation checklist |
-| [ADR index](../adr/) *zh* | Architecture Decision Records ADR-0001 … ADR-0021 |
+| [ADR index](../adr/) *zh* | Architecture Decision Records ADR-0001 … ADR-0022 |
 
 > ⚠️ If POCOs/examples in `modules/` conflict with
 > [Config_Schema.md](./Config_Schema.md), the Schema document wins.

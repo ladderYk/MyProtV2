@@ -27,7 +27,7 @@ class PollingEngine {
 public:
     PollingEngine(asio::io_context& io, Gateway::ProtocolGateway& gateway);
 
-    /// 启动轮询 (拷贝存储标签, 按 (scanRateMs, deviceId) 分组)
+    /// 启动轮询 = Stop + ApplySnapshot (从头重建整代; 首次装配与遗留调用点使用)
     /// @param globalResilience 全局韧性; 设备级 resilience 覆盖之, 均缺省用内置默认
     void Start(const std::vector<Core::TagDefinition>& tags,
                const std::vector<Core::DeviceConfig>& devices,
@@ -35,7 +35,15 @@ public:
                const Core::Optional<Core::ResilienceConfig>& globalResilience =
                    Core::Optional<Core::ResilienceConfig>());
 
-    /// 停止轮询 (取消各组定时器; 在飞批次自然完成, 靠代际号丢弃)
+    /// 应用一代配置 (首次装配与热重载共用入口) — 设备级 diff:
+    /// 只有轮询签名变化的设备才重建组, 未变设备保留 timer / 在飞链 / 预算
+    void ApplySnapshot(const std::vector<Core::TagDefinition>& tags,
+                       const std::vector<Core::DeviceConfig>& devices,
+                       ResultDispatch onResults = nullptr,
+                       const Core::Optional<Core::ResilienceConfig>& globalResilience =
+                           Core::Optional<Core::ResilienceConfig>());
+
+    /// 停止轮询 (取消各组定时器; 在飞批次自然完成, 靠 alive 标志丢弃)
     void Stop();
 
     /// 统计 (字段定义见 PollStats.hpp)
@@ -43,15 +51,20 @@ public:
     bool IsRunning() const;
 
 private:
-    /// 轮询组 — 同一 scanRateMs 的标签 + 合并请求 (设备级独立预算, ADR-0004 R2)
+    /// 轮询组 — 同一设备的同一 scanRateMs 的标签 + 合并请求 (设备级独立预算, ADR-0004 R2)
     struct PollGroup {
+        std::string deviceId;       // 所属设备 (设备级 diff 的键)
         int scanRateMs;
-        std::uint64_t generation;   // 装配代际 — 热重载后旧代 in-flight 组不得续排
-        std::vector<Core::TagDefinition> allTags;   // 原始标签数组 (tagIndices 引用此数组)
+        /// 本设备标签表 (不是全局标签表): tagIndices 只在本设备内有效,
+        /// 其他设备增删标签不会移动索引, 组才能跨代复用
+        std::shared_ptr<const std::vector<Core::TagDefinition>> tags;   // 本设备标签数组 (tagIndices 引用此数组)
         std::vector<Gateway::MergedRequest> mergedRequests;
         asio::steady_timer timer;
         bool busy;                                    // 背压标志
         std::chrono::steady_clock::time_point batchDeadline;   // 本轮预算截止
+        /// 退役标志 — 设备被重建/删除或 Stop 时置 false。全局代际号只能表达
+        /// "整代重建", 无法表达只重建部分设备, 故改为每组自带生命周期
+        std::atomic<bool> alive;
     };
 
     asio::io_context& _io;
@@ -59,7 +72,9 @@ private:
     PollStats _stats;
     std::atomic<bool> _running;
     std::atomic<bool> _stopping;
-    std::atomic<std::uint64_t> _generation;   // 当前装配代际 (Start 时递增)
+    /// deviceId -> 轮询签名 (设备轮询字段 + 有效韧性 + maxSpan + 该设备全部轮询标签,
+    /// 排除 label/unit)。签名相等 → 该设备的组整组复用
+    std::unordered_map<std::string, std::string> _deviceSignatures;
     ResultDispatch _onResults;
     std::unordered_map<std::string, std::string> _deviceProtocolMap;
     std::unordered_map<std::string, int> _deviceTimeoutMap;
@@ -67,7 +82,8 @@ private:
     std::vector<std::shared_ptr<PollGroup>> _groups;
 
     // 私有: ScheduleNext / OnTimerFire / ProcessDevice / PollBatchChain /
-    //       FinishBatch / AbandonBatch / AppendBadValues / FailDevice /
+    //       FinishBatch / AbandonBatch / RetireGroup / BuildGroupsForDevice /
+    //       DevicePollSignature / AppendBadValues / FailDevice /
     //       GetProtocolForDevice / ResilienceFor / RemainingBudgetMs /
     //       BackoffDelayMs / RetryAfterBackoff
 };
@@ -77,9 +93,11 @@ private:
 
 ### 生命周期与调度
 
-- **`Start`**：`_running=true`、`_generation++`、清空并重建 `_groups`。按 `(scanRateMs, deviceId)` 建组（设备级独立 timer + 独立 deadline 预算，ADR-0004 R2）；每组一个 `steady_timer` 并立即 `ScheduleNext`。`direction="write"` 的标签**不参与轮询**。
-- **停用设备（KI-04）**：`device.enabled=false` 不建组、其标签（非 `write`/非 `push`）不进入 `pollTags`，启动时将 `myprot_device_lifecycle_state` 置于 `Disabled` 并打 INFO 日志；热重载改回 `true` 后随下一轮 `Start` 正常建组。运行时因 `Degraded` 累积进入 `Disabled` 的设备同样退出采集链：`OnTimerFire` 检测到 `GetLifecycle()==Disabled` 仅续排定时器，不再调 `GetOrCreateChannel`、不产出 Bad、不累计失败计数（触发禁用那一轮仍正常输出一次 Bad）；`Disabled` 为会话内终态，恢复只能靠热重载重建 `PollGroup`。
-- **`Stop`**：`_stopping=true`、`_running=false`、取消各组定时器并清空 `_groups`。
+- **`ApplySnapshot`**（首次装配与热重载共用入口，四步）：① 设备映射表整表重建；② 按设备聚合轮询标签（过滤 `direction="write"` / `source="push"` / `enabled=false` 的设备）；③ 上一代组按 `deviceId` 归档，重新计算 `DevicePollSignature` —— 签名相同则**整组复用**（timer、在飞链、deadline 预算全部保持原样），否则 `RetireGroup` 后按新标签表重建；④ 消失设备的组全部退役。末尾 `swap(_deviceSignatures)` 并更新 `activeTags`。
+- **设备级 diff 的效果**：只改一个设备的地址/标签时，其他设备的轮询组零扰动 —— 不重连、不产生瞬时 Bad 窗口、不重置熔断与 deadline。`PollStats::groupsBuilt` 累加每次新建的组数，可直接观察 diff 保真度（一次保存后它只应增长被改设备的组数）。
+- **`Start`** = `Stop` + `ApplySnapshot`：从头重建整代，供冷启动与遗留调用点使用（已运行时再次 `Start` 不是空操作）。
+- **停用设备（KI-04）**：`device.enabled=false` 不建组、其标签（非 `write`/非 `push`）不进入 `pollTags`，启动时将 `myprot_device_lifecycle_state` 置于 `Disabled` 并打 INFO 日志；热重载改回 `true` 后随下一轮 `ApplySnapshot` 正常建组。运行时因 `Degraded` 累积进入 `Disabled` 的设备同样退出采集链：`OnTimerFire` 检测到 `GetLifecycle()==Disabled` 仅续排定时器，不再调 `GetOrCreateChannel`、不产出 Bad、不累计失败计数（触发禁用那一轮仍正常输出一次 Bad）；`Disabled` 为会话内终态，恢复只能靠热重载（`ChannelManager::ApplyDevices` 重建会话，见 [modules/05](./05_Gateway.md)）。
+- **`Stop`**：`_stopping=true`、`_running=false`、逐组 `RetireGroup`、清空 `_groups` 与 `_deviceSignatures`（下次必须整代重建）。
 - **`OnTimerFire`**：`_stopping` / 代际不符 / `ec`（已取消）直接返回；`group->busy` 为真则**跳过本轮**（背压），否则置 `busy=true`、设 `batchDeadline = now + scanRateMs`，进入 `ProcessDevice`。
 
 ### 读取链与韧性
@@ -114,13 +132,18 @@ changed = 首次写入（无基线）
 
 下游三处同源消费：`/api/data/latest` 的 `changed`、SSE `snapshot` 的 `changed`、MQTT `publishMode=changed` 的过滤（后者另用 `BuildSignature` 做同口径签名，见 [modules/11](./11_Northbound.md)）。
 
-### 热重载代际防护
+### 热重载：设备级 diff 与退役防护
 
-`Start` 递增 `_generation`，每个 `PollGroup` 记录装配时的代际。所有异步回调入口（GOC 完成、退避续跑、`ReadBatch` 完成、`PollBatchChain` 入口）先校验代际：
+`ApplySnapshot` 为每个设备计算一份 **`DevicePollSignature`**：设备侧只列引擎实际读取的字段（`id/protocol/enabled/requestTimeoutMs`、7 个有效韧性字段、`maxSpan`），标签侧排除仅用于展示的 `label`/`unit`，`variables` 先排序再入签名（无序容器）。连接参数（host/port/凭据）**不进**轮询签名 —— 它们归 `ChannelManager` 的 diff 管，否则“仅改地址”会连带把轮询组也重建。
 
-- **代际不匹配** → `AbandonBatch(group)`：**不**分发结果、**不**更新统计，仅释放背压 —— 防止已删除/改名标签的陈旧值写回实时快照。
-- **`_stopping`** → `FinishBatch`（收尾）。
-- `ScheduleNext` / `OnTimerFire` 另有自身代际检查，保证旧代组不再续排。
+- **签名相等** → 该设备上一代全部组原样复用（timer 不断、在飞链继续、deadline 预算不重置）。
+- **签名不等 / 新增设备** → 旧组 `RetireGroup`（`alive=false` 后再 `cancel`）并按新标签表重建；仍可达的已退役组回调一律 `AbandonBatch`。
+- **设备消失** → 仅退役，不重建。
+- **为什么不用单一全局代际号**：代际号只能表达“整代重建”，无法表达“只重建部分设备”。因此每个 `PollGroup` 自带 `alive`；所有异步回调入口（GOC 完成、退避续跑、`ReadBatch` 完成、`PollBatchChain` 入口）校验它：
+  - **`alive=false`** → `AbandonBatch(group)`：**不**分发结果、**不**更新统计，仅释放背压 —— 防止已删除/改名标签的陈旧值写回实时快照。
+  - **`_stopping`** → `FinishBatch`（收尾）。
+- **每设备标签表**：`PollGroup::tags` 只含本设备标签，`tagIndices` 不会因其他设备增删标签而偏移 —— 这是未变组可以跨代复用的前提。
+- **维护约束**：`TagDefinition` / `DeviceConfig` 新增任何影响轮询的字段时，必须同步追加到 `DevicePollSignature`，否则热重载会静默保留陈旧组（头文件已标注）。
 
 ### 离线值恢复（ResultDispatch，`src/App/main.cpp`）
 
@@ -136,18 +159,20 @@ changed = 首次写入（无基线）
 - [src/Polling/include/MyProt/Polling/LatestValueStore.hpp](../../src/Polling/include/MyProt/Polling/LatestValueStore.hpp) `Lookup(tagName, out)` 接口
 - [src/App/main.cpp](../../src/App/main.cpp) `ResultDispatch` lambda
 
-### LatestValueStore 热重载清空
+### LatestValueStore 热重载收敛
 
-`ApplyRuntimeSync` 热重载时对 `LatestValueStore` 调用 **`Clear()`**（该类提供的方法），丢弃旧标签集数据；随后由轮询按新标签集重新积累。
+`ApplyRuntimeSync` 热重载时不再整表清空，而是在 io 线程上按顺序：`ApplyDevices`（通道/会话设备级 diff）→ `Retain(keepTagNames)`（新标签集收敛）→ `ApplySnapshot`（轮询设备级 diff）。三步都在同一 io 线程串行，无竞态：
 
-- **线程安全**：`LatestValueStore` 以 `std::mutex` 保护 `Update` / `Snapshot` / `Lookup` / `Count` / `Clear`（io 线程写、WebApi 线程读）。
-- **旧代 in-flight 回调**由上述**代际防护**拦下，不会把陈旧值写回。
-- SSE 推送闭包与 `/api/data/latest` 读同一 store 指针，热重载后立即看到空表，下一轮轮询填充。
+- **保留未变标签**：仍存在的标签保留上次最新值与变化检测基线。保存瞬间实时页不再整表变空；引擎恢复后的首帧也不会因「首次写入」把未变值全部误标为 `changed`。
+- **剔除已删除标签**：不在新标签集中的条目立即移除，`/api/data/latest` 与 SSE 不会展示旧标签集的残留值（改名等同于删除 + 新增）。
+- **线程安全**：`LatestValueStore` 以 `std::mutex` 保护 `Update` / `Snapshot` / `Lookup` / `Count` / `Retain` / `Clear`（io 线程写、WebApi 线程读）。
+- **旧代 in-flight 回调**：`_stopping` 期间 `FinishBatch` 只收尾、不分发结果；已退役组由上述 `alive` 守卫丢弃，不会把陈旧值写回。
+- SSE 推送闭包与 `/api/data/latest` 读同一 store 指针：重载窗口内未变标签的值保持可见，下一轮轮询继续刷新。
 
 相关代码：
-- `src/App/RuntimeGlue.cpp`（`ApplyRuntimeSync`：`latest.Clear()`）
+- `src/App/RuntimeGlue.cpp`（`ApplyRuntimeSync`：`ApplyDevices` → `latest.Retain(keepTags)` → `ApplySnapshot`）
 - `src/Polling/include/MyProt/Polling/LatestValueStore.hpp`
-- `src/Polling/src/PollingEngine.cpp`（`_generation` / `AbandonBatch`）
+- `src/Polling/src/PollingEngine.cpp`（`ApplySnapshot` / `RetireGroup` / `alive` / `AbandonBatch`）
 
 ## 6.2 DataDispatcher（已撤回，历史备查）
 

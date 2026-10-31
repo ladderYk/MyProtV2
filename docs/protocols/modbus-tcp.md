@@ -181,6 +181,8 @@
 }
 ```
 
+> 仓库内 `configs/protocols/modbus-tcp.json` 把 8 个操作共享的 `responseParser` 与派生 `outputs` 收进协议级 `operationProfiles`（`readResponse` → `readBits` / `readWords`，`writeResponse` → `writeBits` / `writeWords` / 多写变体），操作只保留 `requestTemplate`、`kind`、`validCondition` 差异与 `profile` 引用。解析期展开后与上面逐操作写法**完全等价**；字段契约见 [Config_Schema §2.7](../Config_Schema.md#27-operationprofileconfigoperationprofiles-的-value) / [ADR-0022](../adr/0022-operation-profiles.md)。
+
 ---
 
 ## 3. 各 FC 配置↔字节对照

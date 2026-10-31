@@ -49,6 +49,18 @@ bool LatestValueStore::Lookup(const std::string& tagName, Core::TagValue& out) c
     return true;
 }
 
+void LatestValueStore::Retain(const std::set<std::string>& keepTagNames) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    for (std::map<std::string, Core::TagValue>::iterator it = _latest.begin();
+         it != _latest.end(); ) {
+        if (keepTagNames.find(it->first) == keepTagNames.end()) {
+            it = _latest.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void LatestValueStore::Clear() {
     std::lock_guard<std::mutex> lock(_mutex);
     _latest.clear();

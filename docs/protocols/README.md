@@ -121,7 +121,7 @@ curl -X POST "http://127.0.0.1:8080/api/preview/response?scope=protocols&name=pl
 
 1. **写协议 JSON**：`configs/protocols/<name>.json`
    - 优先用 `MyProt.App.exe --proto-init lengthfield` 生成骨架，再按手册替换字节（字段清单见 [Config_Schema.md §3](../Config_Schema.md)）
-   - 根级必填 `protocolName` / `schemaVersion` / `transport` / `framing` / `operations`；每个 op 必须有 `requestTemplate` + `responseParser.validCondition/dataStartIndex/dataLengthExpr`
+   - 根级必填 `protocolName` / `schemaVersion` / `transport` / `framing` / `operations`；每个 op 必须有 `requestTemplate`；`responseParser` 的三个字段可由操作自身声明，也可（引用 `profile` 时）来自协议级 `operationProfiles` 的展开结果——两者合并后必须齐备
    - 同协议不同设备只差常量时用 `devices[].variables`，不必复制协议文件
 2. **写教学文档**：`docs/protocols/<name>.md`
    - 帧结构表 + 配置↔字节映射 + 异常处理
@@ -144,6 +144,7 @@ curl -X POST "http://127.0.0.1:8080/api/preview/response?scope=protocols&name=pl
 - `validCondition`：判响应合法性的 Mini-C 表达式；`resp[N]` 表示 N 字节偏移
 - `dataStartIndex`：数据区起点偏移
 - `dataLengthExpr`：数据区长度计算式
+- 多个操作共用同一套解析规则时，把它们收进协议级 `operationProfiles`（支持 `extends` 单继承），操作侧只写差异字段并用 `profile` 引用；展开语义与逐操作明写完全等价，见 [Config_Schema.md §2.7](../Config_Schema.md) 与 [ADR-0022](../adr/0022-operation-profiles.md)
 
 ## 异常处理通用约定
 

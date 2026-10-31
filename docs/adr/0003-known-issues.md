@@ -22,7 +22,7 @@
 当前无未决项。
 
 > 已销账（2026-10-30）：
-> - ~~KI-04 设备生命周期~~ — `DeviceConfig.enabled`（可选，默认 `true`）与 `resilience.disableAfterDegraded`（默认 10，`0` = 不自动禁用）已实装；`Disabled` 为会话内终态，恢复路径 = 配置热重载（`ResetDevices` 重建 `SessionContext`）。见 [modules/04_Service.md §4.6](../modules/04_Service.md)、[Config_Schema.md §4/§11](../Config_Schema.md)。
+> - ~~KI-04 设备生命周期~~ — `DeviceConfig.enabled`（可选，默认 `true`）与 `resilience.disableAfterDegraded`（默认 10，`0` = 不自动禁用）已实装；`Disabled` 为会话内终态，恢复路径 = 配置热重载（`ApplyDevices` 重建会话，连接身份未变也重建）。见 [modules/04_Service.md §4.6](../modules/04_Service.md)、[Config_Schema.md §4/§11](../Config_Schema.md)。
 > - ~~KI-13 表达式优先级缺测试~~ — 层序与 C 一致且共 11 级（含原文档漏写的 relational 层），已由 `tests/Engine.Tests/MiniExpressionTests.cpp` 的优先级矩阵锁定（逐层相邻对、左结合、一元、括号覆盖、组合条件）。
 >
 > 已销账（2026-09-16，编号留空不复用）：

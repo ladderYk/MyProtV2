@@ -244,6 +244,8 @@ const Fields& SchemaRegistry::ProtocolFields() {
     static const Fields kOperationChildren = Fields{
         Plain("requestTemplate", "array<string>", true, "",
               "请求模板行序列; 每行要么纯十六进制字面量, 要么单占位符"),
+        Plain("profile", "string", false, "",
+              "操作原型名 (operationProfiles 键); 原型提供 outputs/responseParser 默认值, 本操作显式字段优先"),
         EnumF("kind", false, "(未标注)",
               "操作语义标注: read=读操作 / write=写操作; "
               "供 UI 表单过滤与标签 operation/writeOperation 一致性校验",
@@ -259,6 +261,18 @@ const Fields& SchemaRegistry::ProtocolFields() {
                   "数据长度表达式 e.g. resp[2]; 空 = 帧长 - dataStartIndex")
         })
         // 注: 单次请求-应答超时统一由 device.requestTimeoutMs 配置 (2026-08-24 收敛)
+    };
+
+    static const Fields kProfileChildren = Fields{
+        Plain("extends", "string", false, "",
+              "父原型名 (单继承); 先合并父原型再合并本原型, 禁止环"),
+        Plain("description", "string", false, "", "原型说明"),
+        ObjF("responseParser", false, "响应解析器默认值", Fields{
+            Plain("validCondition", "string", false, "", "有效性条件表达式"),
+            Plain("dataStartIndex", "int", false, "0", "数据起始索引"),
+            Plain("dataLengthExpr", "string", false, "", "数据长度表达式")
+        })
+        // outputs 为 map<变量名, VariableConfig>, 与 protocol operations 的 outputs 同构
     };
 
     static const Fields kHandshakeStepChildren = Fields{
@@ -301,6 +315,8 @@ const Fields& SchemaRegistry::ProtocolFields() {
         }),
         ObjF("operations", true,
              "操作名 -> 操作配置映射, 至少一项; 值结构见 children", kOperationChildren),
+        ObjF("operationProfiles", false,
+             "操作原型映射 (可复用 outputs/responseParser); 支持 extends 单继承", kProfileChildren),
         ArrF("handshake", false,
              "握手步骤序列; 空数组 = 无握手 (Modbus); 元素结构见 children",
              kHandshakeStepChildren),

@@ -39,6 +39,9 @@
     <ClCompile Include="SessionContextTests.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="OperationProfileTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\Service\src\SchemaRegistry.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>

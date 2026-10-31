@@ -28,7 +28,8 @@ class PollingEngine {
 public:
     PollingEngine(asio::io_context& io, Gateway::ProtocolGateway& gateway);
 
-    /// Start polling (copies the tag store, groups by (scanRateMs, deviceId))
+    /// Start polling = Stop + ApplySnapshot (rebuilds the whole generation; used for the
+    /// first-time assembly and legacy call sites)
     /// @param globalResilience global resilience; a device-level resilience overrides it,
     ///        both default to the built-in defaults
     void Start(const std::vector<Core::TagDefinition>& tags,
@@ -37,8 +38,17 @@ public:
                const Core::Optional<Core::ResilienceConfig>& globalResilience =
                    Core::Optional<Core::ResilienceConfig>());
 
+    /// Apply one config generation (first-time assembly and hot reload share this path) -
+    /// device-level diff: only devices whose poll signature changed are rebuilt; unchanged
+    /// devices keep their timer / in-flight chain / deadline budget
+    void ApplySnapshot(const std::vector<Core::TagDefinition>& tags,
+                       const std::vector<Core::DeviceConfig>& devices,
+                       ResultDispatch onResults = nullptr,
+                       const Core::Optional<Core::ResilienceConfig>& globalResilience =
+                           Core::Optional<Core::ResilienceConfig>());
+
     /// Stop polling (cancels every group timer; in-flight batches finish naturally,
-    /// the generation counter discards them)
+    /// the alive flag discards them)
     void Stop();
 
     /// Statistics (field definitions in PollStats.hpp)
@@ -46,16 +56,23 @@ public:
     bool IsRunning() const;
 
 private:
-    /// Poll group - tags sharing one scanRateMs plus merged requests
+    /// Poll group - one device's tags sharing one scanRateMs plus merged requests
     /// (device-level independent budget, ADR-0004 R2)
     struct PollGroup {
+        std::string deviceId;       // owning device (device-level diff key)
         int scanRateMs;
-        std::uint64_t generation;   // assembly generation - old in-flight groups must not reschedule
-        std::vector<Core::TagDefinition> allTags;   // original tag array (tagIndices refers to it)
+        /// This device's tag table only (not the global one): tagIndices are valid inside this
+        /// device only, so other devices adding/removing tags cannot shift them and the group
+        /// can survive a generation change
+        std::shared_ptr<const std::vector<Core::TagDefinition>> tags;   // this device's tag array (tagIndices refers to it)
         std::vector<Gateway::MergedRequest> mergedRequests;
         asio::steady_timer timer;
         bool busy;                                    // backpressure flag
         std::chrono::steady_clock::time_point batchDeadline;   // this round's budget deadline
+        /// Retirement flag - cleared when the device is rebuilt/removed (or on Stop).
+        /// A global generation counter can only express a *whole-generation* rebuild, not a
+        /// partial one, so each group carries its own lifetime.
+        std::atomic<bool> alive;
     };
 
     asio::io_context& _io;
@@ -63,7 +80,10 @@ private:
     PollStats _stats;
     std::atomic<bool> _running;
     std::atomic<bool> _stopping;
-    std::atomic<std::uint64_t> _generation;   // current assembly generation (incremented on Start)
+    /// deviceId -> poll signature (device poll fields + effective resilience + maxSpan + all
+    /// polling tags of that device, label/unit excluded). Equal signature => the device's
+    /// groups are reused as-is.
+    std::unordered_map<std::string, std::string> _deviceSignatures;
     ResultDispatch _onResults;
     std::unordered_map<std::string, std::string> _deviceProtocolMap;
     std::unordered_map<std::string, int> _deviceTimeoutMap;
@@ -71,7 +91,8 @@ private:
     std::vector<std::shared_ptr<PollGroup>> _groups;
 
     // Private: ScheduleNext / OnTimerFire / ProcessDevice / PollBatchChain /
-    //          FinishBatch / AbandonBatch / AppendBadValues / FailDevice /
+    //          FinishBatch / AbandonBatch / RetireGroup / BuildGroupsForDevice /
+    //          DevicePollSignature / AppendBadValues / FailDevice /
     //          GetProtocolForDevice / ResilienceFor / RemainingBudgetMs /
     //          BackoffDelayMs / RetryAfterBackoff
 };
@@ -81,10 +102,12 @@ private:
 
 ### Lifecycle and scheduling
 
-- **`Start`**: sets `_running=true`, increments `_generation`, clears and rebuilds `_groups`. Groups are keyed by `(scanRateMs, deviceId)` (independent timer and deadline budget per device, ADR-0004 R2); each group gets one `steady_timer` and an immediate `ScheduleNext`. Tags with `direction="write"` **do not participate in polling**.
-- **Disabled devices (KI-04)**: `device.enabled=false` builds no group and keeps its tags (non-`write`, non-`push`) out of `pollTags`; at start the device's `myprot_device_lifecycle_state` is pinned to `Disabled` with an INFO log. Setting it back to `true` and hot reloading lets the next `Start` build the group normally. A device that reaches `Disabled` at runtime via accumulated `Degraded` rounds also leaves the acquisition chain: `OnTimerFire` sees `GetLifecycle()==Disabled` and only reschedules the timer without calling `GetOrCreateChannel`, emitting no Bad values and incrementing no failure counters (the round that triggered the disable still emits Bad once). `Disabled` is terminal for the session, so recovery requires a hot reload that rebuilds the `PollGroup`.
-- **`Stop`**: sets `_stopping=true` and `_running=false`, cancels every group timer and clears `_groups`.
-- **`OnTimerFire`**: returns immediately when `_stopping`, when the generation does not match, or when `ec` is set (cancelled); if `group->busy` it **skips this round** (backpressure), otherwise sets `busy=true`, `batchDeadline = now + scanRateMs` and enters `ProcessDevice`.
+- **`ApplySnapshot`** (the shared entry point for first-time assembly and hot reload, four steps): (1) rebuild the device map; (2) collect polling tags per device (skipping `direction="write"` / `source="push"` tags and `enabled=false` devices); (3) archive the previous groups by `deviceId` and recompute `DevicePollSignature` - an equal signature means the whole group set is **reused as-is** (timer, in-flight chain and deadline budget untouched), otherwise `RetireGroup` and rebuild from the new tag table; (4) retire every group of devices that disappeared. Finally `swap(_deviceSignatures)` and update `activeTags`.
+- **What the device-level diff buys**: when only one device's address/tags change, every other device's poll groups are untouched - no reconnect, no transient Bad window, no circuit-breaker or deadline reset. `PollStats::groupsBuilt` counts every newly built group, so diff fidelity is directly observable (one save should only grow it by the changed device's group count).
+- **`Start`** = `Stop` + `ApplySnapshot`: rebuilds the whole generation, for cold start and legacy call sites (calling it while running is no longer a no-op).
+- **Disabled devices (KI-04)**: `device.enabled=false` builds no group and keeps its tags (non-`write`, non-`push`) out of `pollTags`; at start the device's `myprot_device_lifecycle_state` is pinned to `Disabled` with an INFO log. Setting it back to `true` and hot reloading lets the next `ApplySnapshot` build the group normally. A device that reaches `Disabled` at runtime via accumulated `Degraded` rounds also leaves the acquisition chain: `OnTimerFire` sees `GetLifecycle()==Disabled` and only reschedules the timer without calling `GetOrCreateChannel`, emitting no Bad values and incrementing no failure counters (the round that triggered the disable still emits Bad once). `Disabled` is terminal for the session, so recovery requires a hot reload (`ChannelManager::ApplyDevices` recreates the session, see [modules/05](./05_Gateway.md)).
+- **`Stop`**: sets `_stopping=true` and `_running=false`, retires every group, clears `_groups` and `_deviceSignatures` (the next assembly must rebuild the whole generation).
+- **`OnTimerFire`**: returns immediately when `_stopping`, when the group is no longer alive, or when `ec` is set (cancelled); if `group->busy` it **skips this round** (backpressure), otherwise sets `busy=true`, `batchDeadline = now + scanRateMs` and enters `ProcessDevice`.
 
 ### Read chain and resilience
 
@@ -118,13 +141,18 @@ changed = first write (no baseline)
 
 Three downstream consumers share this source: `changed` in `/api/data/latest`, `changed` in SSE `snapshot`, and the MQTT `publishMode=changed` filter (which uses `BuildSignature` with the same semantics, see [modules/11](./11_Northbound.md)).
 
-### Hot-reload generation guard
+### Hot reload: device-level diff and retirement guard
 
-`Start` increments `_generation` and every `PollGroup` records the generation it was assembled with. Every async callback entry point (GOC completion, backoff resume, `ReadBatch` completion, `PollBatchChain` entry) validates the generation first:
+`ApplySnapshot` computes one **`DevicePollSignature`** per device: the device side lists only the fields the engine actually reads (`id/protocol/enabled/requestTimeoutMs`, the 7 effective resilience fields, `maxSpan`); the tag side excludes display-only `label`/`unit` and sorts `variables` before hashing (unordered container). Connection parameters (host/port/credentials) are **not** part of the poll signature - they belong to the `ChannelManager` diff, otherwise "only the address changed" would rebuild the poll groups too.
 
-- **Generation mismatch** -> `AbandonBatch(group)`: **no** result dispatch and **no** statistics update, only backpressure is released - this prevents stale values of deleted/renamed tags from being written back into the live snapshot.
-- **`_stopping`** -> `FinishBatch` (wind down).
-- `ScheduleNext` / `OnTimerFire` perform their own generation checks, so old-generation groups never reschedule.
+- **Equal signature** -> the device's previous group set is reused untouched (timer keeps running, in-flight chain continues, deadline budget is not reset).
+- **Different signature / new device** -> `RetireGroup` the old groups (`alive=false`, then cancel) and rebuild from the new tag table; any callback still reachable from a retired group calls `AbandonBatch`.
+- **Device disappeared** -> retire only, never rebuild.
+- **Why not a single global generation counter**: a counter can only express a *whole-generation* rebuild, not a partial one. Each `PollGroup` therefore carries `alive`, validated at every async callback entry point (GOC completion, backoff resume, `ReadBatch` completion, `PollBatchChain` entry):
+  - **`alive=false`** -> `AbandonBatch(group)`: **no** result dispatch and **no** statistics update, only backpressure is released - this prevents stale values of deleted/renamed tags from being written back into the live snapshot.
+  - **`_stopping`** -> `FinishBatch` (wind down).
+- **Per-device tag table**: `PollGroup::tags` holds only this device's tags, so `tagIndices` cannot shift when another device adds/removes tags - the precondition for reusing an unchanged group across generations.
+- **Maintenance rule**: whenever a `TagDefinition` / `DeviceConfig` field starts influencing polling, it must be appended to `DevicePollSignature`; otherwise a hot reload silently keeps the stale group (noted in the header).
 
 ### Offline value recovery (ResultDispatch, `src/App/main.cpp`)
 
@@ -140,18 +168,20 @@ Related implementation:
 - [src/Polling/include/MyProt/Polling/LatestValueStore.hpp](../../../src/Polling/include/MyProt/Polling/LatestValueStore.hpp) `Lookup(tagName, out)` interface
 - [src/App/main.cpp](../../../src/App/main.cpp) `ResultDispatch` lambda
 
-### LatestValueStore clearing on hot reload
+### LatestValueStore convergence on hot reload
 
-On hot reload `ApplyRuntimeSync` calls **`Clear()`** on `LatestValueStore` (a method of that class), dropping data for the old tag set; polling then rebuilds it from the new tag set.
+On hot reload `ApplyRuntimeSync` no longer clears the whole store. On the io thread it runs, in order: `ApplyDevices` (device-level diff of channels/sessions) -> `Retain(keepTagNames)` (converge to the new tag set) -> `ApplySnapshot` (device-level diff of polling). All three run serially on the same io thread, so there is no race:
 
-- **Thread safety**: `LatestValueStore` guards `Update` / `Snapshot` / `Lookup` / `Count` / `Clear` with `std::mutex` (io thread writes, WebApi thread reads).
-- **Old-generation in-flight callbacks** are stopped by the **generation guard** above and cannot write stale values back.
-- The SSE push closure and `/api/data/latest` share the same store pointer, so after a hot reload they observe an empty table until the next polling round fills it.
+- **Unchanged tags are kept**: they retain their last value and change-detection baseline. The live table no longer blanks out during a save, and the first frame after the engine restarts is not falsely marked as `changed` just because it is a "first write".
+- **Removed tags are dropped**: entries outside the new tag set disappear immediately, so `/api/data/latest` and SSE never expose leftovers from the old set (a rename is a remove + add).
+- **Thread safety**: `LatestValueStore` guards `Update` / `Snapshot` / `Lookup` / `Count` / `Retain` / `Clear` with `std::mutex` (io thread writes, WebApi thread reads).
+- **Old in-flight callbacks**: while `_stopping` is set, `FinishBatch` only winds down and does not dispatch results; retired groups are dropped by the `alive` guard above, so stale values cannot be written back.
+- The SSE push closure and `/api/data/latest` share the same store pointer: unchanged values stay visible during the reload window and keep refreshing on the next polling round.
 
 Related code:
-- `src/App/RuntimeGlue.cpp` (`ApplyRuntimeSync`: `latest.Clear()`)
+- `src/App/RuntimeGlue.cpp` (`ApplyRuntimeSync`: `ApplyDevices` -> `latest.Retain(keepTags)` -> `ApplySnapshot`)
 - `src/Polling/include/MyProt/Polling/LatestValueStore.hpp`
-- `src/Polling/src/PollingEngine.cpp` (`_generation` / `AbandonBatch`)
+- `src/Polling/src/PollingEngine.cpp` (`ApplySnapshot` / `RetireGroup` / `alive` / `AbandonBatch`)
 
 ## 6.2 DataDispatcher (withdrawn, kept for reference)
 

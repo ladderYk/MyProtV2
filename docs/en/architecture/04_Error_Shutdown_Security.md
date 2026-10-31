@@ -98,7 +98,7 @@ Signal (SIGINT/SIGTERM)
 Phase 1: STOP_POLLING    (<= 2s)
   ├─ PollingEngine::Stop()
   ├─ cancel each group's steady_timer
-  └─ in-flight batches complete naturally (generation number discards stale gens)
+  └─ in-flight batches complete naturally (alive=false discards retired groups)
 
 Phase 2: DRAIN_REQUESTS  (<= 5s)
   ├─ wait for all in-flight SendReceive to finish

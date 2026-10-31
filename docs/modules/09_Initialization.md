@@ -52,9 +52,9 @@ main()                                                  [main.cpp L293-309]
        │    └─ ApplyRuntimeSync(configDir, ctx, &std::cout)
        │         ├─ 构建并同步发布 RuntimeSnapshot (唯一配置副本)
        │         ├─ 逐协议重建仿真实例 (simulation.listenPort > 0; 别名 shared_ptr 保活快照)
-       │         ├─ 清空实时快照
-       │         └─ io.post: 停引擎/关通道/ResetDevices/startEngine
-       │              └─ engine.Start(...)              // PollingEngine 装配
+       │         ├─ 实时快照按新标签集收敛 (Retain)
+       │         └─ io.post: 设备级 diff (ApplyDevices / Retain / ApplySnapshot)
+       │              └─ engine.ApplySnapshot(...)         // 轮询引擎装配 (未变设备保留组)
        │                                                    [Polling §6.2]
        │
        ├─ 6. 热重载联动注册                            [main.cpp L222-224]
@@ -190,7 +190,7 @@ SignalHandler (Ctrl+C / 关窗) → g_running=false
   └─ 主线程 while (IsRunning()) 退出
        │
        ├─ 1. engine.Stop()                              // 停轮询, 取消各组定时器
-       │    └─ 在飞批次自然完成, 代际号保证旧代不分发
+       │    └─ 在飞批次自然完成, PollGroup::alive 保证退役组不分发
        │
        ├─ 2. server.Stop()                              // 停管理面, 拒绝新请求
        │

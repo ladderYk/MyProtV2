@@ -95,7 +95,7 @@ Signal (SIGINT/SIGTERM)
 Phase 1: STOP_POLLING    (≤ 2s)
   ├─ PollingEngine::Stop()
   ├─ 取消各组 steady_timer
-  └─ 在飞批次自然完成 (代际号丢弃旧代)
+  └─ 在飞批次自然完成 (alive=false 丢弃退役组)
 
 Phase 2: DRAIN_REQUESTS  (≤ 5s)
   ├─ 等待所有 in-flight SendReceive 完成

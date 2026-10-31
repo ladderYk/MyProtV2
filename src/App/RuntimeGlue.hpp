@@ -58,7 +58,10 @@ std::pair<int, std::string> HandleResponsePreviewApi(const Service::ConfigStore&
 
 // ── reload runtime linkage - the sole code path for first-time assembly and hot reload ──
 // Reload the config directory -> fully stop and rebuild simulators -> clear real-time snapshots -> post to the io thread
-// to re-assemble the engine. On invalid new config, keep the old running state and return an error (pairs with ConfigStore auto-rollback).
+// to re-assemble the engine. On the io thread the three steps below run serially: device-level diff of channels/sessions
+// (ChannelManager::ApplyDevices), tag-set convergence of the latest-value store (Retain), then device-level diff of
+// polling (PollingEngine::ApplySnapshot) - unchanged devices keep their channel, session and poll groups.
+// On invalid new config, keep the old running state and return an error (pairs with ConfigStore auto-rollback).
 Core::VoidExpected ApplyRuntimeSync(const std::string& configDir,
                                     AppContext& ctx, std::ostream* log);
 

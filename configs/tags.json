@@ -96,7 +96,8 @@
         "ByteCount": 2
       },
       "scanRateMs": 2000,
-      "finalType": "UInt16"
+      "finalType": "UInt16",
+      "writeOperation": "WriteSingleRegister"
     },
     {
       "name": "PLC-001.HR1",
