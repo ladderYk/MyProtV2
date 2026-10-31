@@ -41,8 +41,11 @@ std::shared_ptr<asio::ip::udp::socket> StartUdpSilent(
     std::shared_ptr<Bytes> buf = std::make_shared<Bytes>(256);
     std::shared_ptr<asio::ip::udp::endpoint> sender =
         std::make_shared<asio::ip::udp::endpoint>();
+    // sender 必须随 operation 一起存活: async_receive_from 以引用保存对端地址,
+    // 完成时才写入。此前 lambda 漏捕 sender, helper 返回后该 endpoint 即被释放,
+    // 回调写入已释放内存 → 堆损坏 → 进程偶发在 WS2_32 内 0xC0000005。
     sock->async_receive_from(asio::buffer(*buf), *sender,
-        [&received, buf](const asio::error_code& ec, std::size_t n) {
+        [&received, buf, sender](const asio::error_code& ec, std::size_t n) {
             if (ec) return;
             received.assign(buf->begin(), buf->begin() + n);
             // 故意不回: 通道端 ReceiveOne 永无应答, 看门狗到期判 Timeout
