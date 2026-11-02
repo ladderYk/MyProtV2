@@ -65,6 +65,27 @@ const configDirty = ref(false)
 const navEl = ref(null)
 const navFade = ref({ left: false, right: false })
 
+// ── 手机端折叠导航 ──
+// 手机顶栏只留汉堡 + 当前页名, 全部导航与全局动作收进抽屉
+const navOpen = ref(false)
+const navItems = computed(() => NAV.reduce((acc, g) => acc.concat(g.items), []))
+const currentNavLabel = computed(() => {
+  const it = navItems.value.find(i => i.key === activeView.value)
+  return it ? it.label : ''
+})
+function onMobileNav(key) {
+  navOpen.value = false
+  onNav(key)
+}
+function openHelpFromNav() {
+  navOpen.value = false
+  showHelp.value = true
+}
+function logoutFromNav() {
+  navOpen.value = false
+  logout()
+}
+
 function updateNavFade() {
   const el = navEl.value
   if (!el) {
@@ -223,6 +244,7 @@ function go(view, intent) {
   configScope.value = nextScope
   navIntent.value = intent || null
   activeView.value = target
+  navOpen.value = false
   localStorage.setItem(VIEW_KEY, target)
 }
 
@@ -263,11 +285,25 @@ async function onConfigChanged() {
     <div v-else class="shell">
       <!-- ── 顶栏: 品牌 + 主导航 + 全局状态与动作 ── -->
       <header class="topbar">
+        <!-- 手机端: 汉堡展开导航抽屉; 桌面端隐藏 -->
+        <button
+          class="nav-toggle"
+          :aria-expanded="navOpen"
+          :aria-label="t('菜单')"
+          @click="navOpen = !navOpen"
+        >
+          <span class="nav-toggle-bar"></span>
+          <span class="nav-toggle-bar"></span>
+          <span class="nav-toggle-bar"></span>
+        </button>
+
         <div class="brand">
           <span class="brand-mark">MP</span>
           <span class="brand-name">MyProt</span>
           <span class="brand-sub">{{ t('管理控制台') }}</span>
         </div>
+
+        <span class="nav-current">{{ t(currentNavLabel) }}</span>
 
         <button v-if="navFade.left" class="nav-arrow" aria-label="previous" @click="scrollNav(-1)">‹</button>
         <nav
@@ -306,6 +342,31 @@ async function onConfigChanged() {
           </button>
         </div>
       </header>
+
+      <!-- 手机导航抽屉: 页面导航 + 全局动作, 点遮罩或选项后关闭 -->
+      <div v-if="navOpen" class="nav-backdrop" @click="navOpen = false"></div>
+      <div v-if="navOpen" class="nav-drawer">
+        <div class="drawer-nav">
+          <button
+            v-for="it in navItems" :key="it.key"
+            class="drawer-item" :class="{ active: activeView === it.key }"
+            @click="onMobileNav(it.key)"
+          >{{ t(it.label) }}</button>
+        </div>
+        <div class="drawer-actions">
+          <button
+            class="tb-btn adv" :class="{ on: advanced }"
+            :title="advanced ? t('当前为高级模式, 点击切回简单视图') : t('当前为简单视图, 点击显示 JSON 与原始文本')"
+            @click="toggleAdvanced"
+          >{{ advanced ? t('高级模式') : t('简单模式') }}</button>
+          <button class="tb-btn" :disabled="reloadBusy" @click="onReload">{{ reloadBusy ? t('重载中…') : t('热重载') }}</button>
+          <button class="tb-btn" @click="openHelpFromNav">{{ t('帮助') }}</button>
+          <button class="tb-btn lang" :title="locale === 'zh' ? t('切换到英文') : t('切换到中文')" @click="toggleLocale">
+            {{ locale === 'zh' ? 'EN' : '中' }}
+          </button>
+          <button v-if="authRequired" class="tb-btn subtle" @click="logoutFromNav">{{ t('退出') }}</button>
+        </div>
+      </div>
 
       <div v-if="banner" class="banner" :class="bannerKind">{{ banner }}</div>
 
@@ -391,6 +452,12 @@ async function onConfigChanged() {
   color: var(--mp-topbar-muted);
   white-space: nowrap;
 }
+
+/* 手机折叠导航: 桌面端全部隐藏 */
+.nav-toggle,
+.nav-current,
+.nav-backdrop,
+.nav-drawer { display: none; }
 
 .nav {
   display: flex;
@@ -529,9 +596,98 @@ async function onConfigChanged() {
   .tb-btn { padding: 5px 9px; }
 }
 @media (max-width: 720px) {
-  .content { padding: var(--mp-sp-3); }
+  /* 整页滚动: 取消 100vh 壳体的内部滚动 */
+  .shell { height: auto; min-height: 100vh; }
+  .topbar { position: sticky; top: 0; }
+  .content {
+    flex: none;
+    overflow: visible;
+    padding: var(--mp-sp-3);
+  }
+  .content > :not(.banner) { flex: none; min-height: 0; }
   .banner { margin: var(--mp-sp-2) var(--mp-sp-3) 0; }
   .nav-sep { margin: 0 3px; }
+
+  /* 导航折叠: 汉堡 + 当前页名; 菜单与全局动作进抽屉 */
+  .nav-toggle {
+    display: inline-flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    width: 32px;
+    height: 30px;
+    padding: 0 7px;
+    border: 1px solid var(--mp-topbar-line);
+    border-radius: var(--mp-radius-sm);
+    background: transparent;
+    flex-shrink: 0;
+  }
+  .nav-toggle-bar {
+    height: 2px;
+    border-radius: 1px;
+    background: var(--mp-topbar-ink);
+  }
+  .nav-current {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--mp-topbar-ink);
+    font-size: var(--mp-fs-base);
+    font-weight: 600;
+  }
+  .brand { display: none; }
+  .nav, .nav-arrow, .tb-actions { display: none; }
+
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: var(--mp-topbar-h) 0 0;
+    /* 100vw 覆盖右侧滚动条占位, 否则蒙层与抽屉右边缘会漏出一条 */
+    width: 100vw;
+    z-index: 18;
+    background: rgba(15, 23, 42, .35);
+  }
+  .nav-drawer {
+    display: block;
+    position: fixed;
+    top: var(--mp-topbar-h);
+    left: 0;
+    right: auto;
+    width: 100vw;
+    z-index: 19;
+    padding: 8px 12px 14px;
+    background: var(--mp-topbar-bg);
+    border-bottom: 1px solid var(--mp-topbar-line);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+  }
+  .drawer-nav { display: flex; flex-direction: column; gap: 2px; }
+  .drawer-item {
+    display: block;
+    width: 100%;
+    padding: 11px 12px;
+    border: 0;
+    border-radius: var(--mp-radius-sm);
+    background: transparent;
+    color: var(--mp-topbar-muted);
+    font-size: var(--mp-fs-md);
+    text-align: left;
+  }
+  .drawer-item.active {
+    background: var(--mp-topbar-active-bg);
+    color: var(--mp-topbar-active-ink);
+    font-weight: 600;
+  }
+  .drawer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--mp-topbar-line);
+  }
 }
 @media (max-width: 560px) {
   .brand { display: none; }

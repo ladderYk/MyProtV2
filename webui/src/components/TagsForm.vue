@@ -1210,7 +1210,7 @@ function onEditSource({ varName, layerKey }) {
                 style="width: 180px"
                 @update:model-value="v => { curDev.connection.port = v; emitDoc() }"
               />
-              <span class="unit">{{ t('端口 (1-65535)') }}</span>
+              <div class="field-hint">{{ t('端口 (1-65535)') }}</div>
             </el-form-item>
             <el-form-item :label="t('连接超时')">
               <el-input-number
@@ -1917,6 +1917,7 @@ function onEditSource({ varName, layerKey }) {
   z-index: 5;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
   padding: 8px 12px;
@@ -1990,8 +1991,7 @@ function onEditSource({ varName, layerKey }) {
 }
 /* 设备视图: 基本信息 + 连接参数两张卡片, 同时可见 */
 .dev-pane .form-grid {
-  max-width: 760px;
-  column-gap: 40px;
+  column-gap: 32px;
 }
 .blk-title {
   font-weight: 600;
@@ -2000,7 +2000,7 @@ function onEditSource({ varName, layerKey }) {
   margin-bottom: 10px;
 }
 .blk {
-  margin-bottom: var(--mp-sp-3);
+  margin-bottom: 16px;
 }
 .blk :deep(.el-card__header) {
   font-weight: 600;

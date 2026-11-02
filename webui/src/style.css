@@ -2,6 +2,11 @@
    顺序: Element Plus 样式 → tokens.css → element.css → style.css */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #app { height: 100%; }
+/* 手机端改用文档流滚动: 避免 100vh 壳体内的双层滚动条 */
+@media (max-width: 720px) {
+  html, body, #app { height: auto; min-height: 100%; }
+  body { overflow-y: auto; }
+}
 
 body {
   font-family: var(--mp-font-ui);
@@ -89,17 +94,105 @@ a { color: var(--mp-accent); }
 }
 
 /* ── 表单双列紧凑网格: el-form 加 .form-grid,
-      需跨列的字段 (长输入/键值编辑器) 在其 el-form-item 上加 .span2 ── */
+      需跨列的字段 (长输入/键值编辑器) 在其 el-form-item 上加 .span2 ──
+   排版约束 (v6): label 定宽 → 控件左边缘对齐; 控件吃满列宽 → 消除右侧大片留白;
+   hint 独占一行 → 行高不再忽高忽低。 */
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 28px;
+  column-gap: 32px;
 }
-.form-grid > .el-form-item { margin-bottom: 14px; }
+.form-grid > .el-form-item {
+  margin-bottom: 16px;
+  align-items: flex-start;
+  /* grid item 默认 min-width:auto, 内部宽表格会把整列撑出卡片 */
+  min-width: 0;
+}
 .form-grid > .span2 { grid-column: 1 / -1; }
+/* Element Plus 不消费 --el-form-label-width 变量, 这里直接约束 label 盒宽 */
+.form-grid .el-form-item__label {
+  flex: 0 0 var(--mp-form-label-width);
+  justify-content: flex-start;
+  text-align: left;
+  padding-right: 12px;
+  padding-top: 6px;
+  box-sizing: border-box;
+  line-height: 1.4;
+  white-space: normal;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.form-grid .el-form-item__content {
+  align-items: flex-start;
+  min-height: var(--mp-control-h);
+}
+/* 控件宽度交给栅格: 忽略模板里的行内固定宽度, 同列控件宽度一致 */
+.form-grid .el-form-item__content > .el-select,
+.form-grid .el-form-item__content > .el-input,
+.form-grid .el-form-item__content > .el-textarea {
+  flex: 1 1 auto;
+  width: auto !important;
+  min-width: 0;
+}
+.form-grid .el-form-item__content > .el-input-number {
+  flex: 0 1 200px;
+  width: auto !important;
+  min-width: 120px;
+}
+.form-grid .el-form-item__content > .el-switch { flex: 0 0 auto; }
+/* 说明文字独占一行, 避免与控件挤在同一行 (只约束控件内容区的直接子级,
+   不干扰表格/自定义块里嵌套的 hint) */
+.form-grid .el-form-item__content > .field-hint {
+  flex: 0 0 100%;
+  width: 100%;
+  margin-top: 4px;
+}
+.form-grid .el-form-item__content > .unit {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  line-height: var(--mp-control-h);
+}
+/* 小按钮与输入控件同高, 同一行不出现 24/32 两种高度 */
+.form-grid .el-form-item__content > .el-button {
+  height: var(--mp-control-h);
+  padding: 0 14px;
+}
+/* 宽表格在栅格内自行横向滚动: flex item 默认 min-width:auto 会按列宽总和撑破表单 */
+.form-grid .el-form-item__content > .el-table {
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+}
 .form-grid.el-form { --el-form-label-width: var(--mp-form-label-width); }
 @media (max-width: 1100px) {
   .form-grid { grid-template-columns: 1fr; }
+}
+/* 手机端: label 移到控件上方, 避免 110px 固定标签吃掉一半输入宽度 */
+@media (max-width: 600px) {
+  .form-grid .el-form-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .form-grid .el-form-item__label {
+    flex: 0 0 auto;
+    width: 100%;
+    padding: 0 0 4px;
+    line-height: 1.4;
+  }
+  .form-grid .el-form-item__content { width: 100%; }
+}
+
+/* el-empty 默认主题变量未定义时, SVG fill 会回落成黑色; 给一套浅灰兜底 */
+:root {
+  --el-empty-fill-color-1: #f5f8fc;
+  --el-empty-fill-color-2: #e8eef6;
+  --el-empty-fill-color-3: #eef2f7;
+  --el-empty-fill-color-4: #dde5ee;
+  --el-empty-fill-color-5: #cbd5e1;
+  --el-empty-fill-color-6: #dbe3ee;
+  --el-empty-fill-color-7: #b6c2d1;
+  --el-empty-fill-color-8: #a9b6c7;
+  --el-empty-fill-color-9: #94a3b8;
 }
 
 /* ── issue 跳转目标高亮 (focusIssue 定位反馈) ── */
@@ -125,6 +218,8 @@ a { color: var(--mp-accent); }
   .card-body { padding: 10px; }
   .toolbar { flex-wrap: wrap; gap: 6px; }
   .main-tabs { overflow-x: auto; }
+  /* 抽屉 size 是固定 px (420~620), 窄屏下会伸出左边界被裁: 统一收成整宽 */
+  .el-drawer { width: 100vw !important; max-width: 100vw; }
 }
 
 /* ── 深色侧栏对比度 (WCAG AA): 次要文字不低于 #94a3b8 ── */

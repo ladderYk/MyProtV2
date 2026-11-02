@@ -21,7 +21,7 @@ powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1
 powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1 -SkipUiBuild   # 复用已有 dist
 ```
 
-脚本会重建 `dist/`、在空闲环回端口启动 `MyProt.App`、用无头 Edge 的 DevTools Protocol 跑 105 项断言（顶栏与响应式、认证关闭时的入口形态、总览、帮助抽屉、配置工作台（协议/设备与标签子页切换）、简单/高级模式、协议与标签编辑、协议变量卡片/表格切换、操作模板与继承输出、双模页签切换与 DOM id 唯一性、标签批量新增与复制入口、未保存守卫、实时监控的行内写与写入抽屉、仿真器），并检查 console 无错误、无 429、无失败请求。`scripts/ci.ps1` 默认在 E2E 之后先跑 `npm run test`（Vitest）再执行该脚本，`-SkipWebUI` 可同时跳过两者；需要 Node.js（除非 `-SkipUiBuild`）与 Microsoft Edge。
+脚本会重建 `dist/`、在空闲环回端口启动 `MyProt.App`、用无头 Edge 的 DevTools Protocol 跑 108 项断言（顶栏与响应式（含窄屏整页滚动与折叠菜单）、认证关闭时的入口形态、总览、帮助抽屉、配置工作台（协议/设备与标签子页切换）、简单/高级模式、协议与标签编辑、协议变量卡片/表格切换、操作模板与继承输出、双模页签切换与 DOM id 唯一性、标签批量新增与复制入口、未保存守卫、实时监控的行内写与写入抽屉、仿真器），并检查 console 无错误、无 429、无失败请求。`scripts/ci.ps1` 默认在 E2E 之后先跑 `npm run test`（Vitest）再执行该脚本，`-SkipWebUI` 可同时跳过两者；需要 Node.js（除非 `-SkipUiBuild`）与 Microsoft Edge。
 
 ## 导航与页面结构
 

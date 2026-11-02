@@ -201,7 +201,9 @@ function applyS7Preset() {
 <style scoped>
 .hs-editor { display: flex; flex-direction: column; gap: 12px; }
 .hs-empty { padding: 8px 0; }
-.hs-empty-actions { display: flex; justify-content: center; gap: 8px; }
+/* 空态图/说明靠左, 动作按钮保持同一轴线 (之前居中导致视线断裂) */
+.hs-empty :deep(.el-empty) { padding: 12px 0; }
+.hs-empty-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 8px; }
 .hs-step :deep(.el-card__header) { padding: 8px 14px; background: var(--mp-surface-2); }
 .hs-step :deep(.el-card__body) { padding: 12px 14px; }
 .hs-head { display: flex; align-items: center; gap: 8px; }

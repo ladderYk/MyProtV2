@@ -627,7 +627,7 @@ onMounted(async () => {
           <div class="field-hint">{{ t('设备按此名引用协议 (不可修改, 修改会断开引用); 新建时确定') }}</div>
         </el-form-item>
         <el-form-item>
-          <template #label>schemaVersion<FieldHelp section="protocol" field="schemaVersion" /></template>
+          <template #label>{{ t('配置版本') }}<FieldHelp section="protocol" field="schemaVersion" /></template>
           <el-input-number
             :model-value="local.schemaVersion"
             :min="1" :controls="false" style="width: 100px"
@@ -663,7 +663,7 @@ onMounted(async () => {
           :placeholder="t('协议缺省')"
           @update:model-value="v => { if (v == null) { delete local.transport.defaultPort } else { local.transport.defaultPort = v } ; emitDoc() }"
         />
-        <span class="unit">{{ t('1-65535, 不填由该协议自身决定') }}</span>
+        <div class="field-hint">{{ t('1-65535, 不填由该协议自身决定') }}</div>
         </el-form-item>
 
         <el-form-item :label="t('成帧方式')">
@@ -764,7 +764,7 @@ onMounted(async () => {
           >
             <el-option v-for="b in BYTE_ORDERS" :key="b" :label="b" :value="b" />
           </el-select>
-          <span class="unit">{{ t('32位数据默认字序, 标签可覆盖') }}</span>
+          <div class="field-hint">{{ t('32位数据默认字序, 标签可覆盖') }}</div>
         </el-form-item>
       </el-form>
     </el-card>
@@ -1169,7 +1169,7 @@ onMounted(async () => {
 }
 /* 段尾「下一步」: 只给前进方向, 不重复罗列全部页签 */
 .step-foot { display: flex; justify-content: flex-end; padding: var(--mp-sp-3) 0 var(--mp-sp-2); }
-.concept-link { margin: -2px 0 var(--mp-sp-2); }
+.concept-link { margin: 0 0 12px; }
 .concept-link .link-btn {
   border: 0;
   background: none;
@@ -1211,7 +1211,7 @@ onMounted(async () => {
 }
 /* v4.9: 基础信息段内小节分隔 (传输与成帧 / 握手) */
 .sec-divider {
-  margin: var(--mp-sp-5) 0 var(--mp-sp-3);
+  margin: 22px 0 20px;
   scroll-margin-top: 8px;
 }
 .sec-divider :deep(.el-divider__text) {
@@ -1282,6 +1282,8 @@ onMounted(async () => {
   border-radius: var(--mp-radius-sm);
 }
 .chips-group {
+  flex: 0 0 auto;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: 600;
   color: var(--mp-muted-2);
@@ -1314,7 +1316,7 @@ onMounted(async () => {
 .var-chip.local { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
 .var-chip.local:hover { border-color: #10b981; color: #059669; }
 .blk {
-  margin-bottom: var(--mp-sp-3);
+  margin-bottom: 16px;
 }
 .blk :deep(.el-card__header) {
   font-weight: 600;
@@ -1418,6 +1420,16 @@ onMounted(async () => {
   padding-top: 8px;
 }
 
+/* 模板 tabs 内的宽表格由 .fb-table-wrap 自己滚动;
+   整条 flex 链路默认 min-width:auto 会按列宽总和撑破表单, 逐层放开收缩 */
+.template-tabs,
+.template-tabs :deep(.el-tabs__content),
+.template-tabs :deep(.el-tab-pane),
+.template-tabs :deep(.frame-builder) {
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+}
 .template-tabs :deep(.el-tabs__nav) {
   margin-bottom: 8px;
   border-bottom: 1px solid var(--mp-border);
@@ -1489,6 +1501,47 @@ onMounted(async () => {
   .sec-tabs :deep(.el-tabs__content) { overflow: visible; }
   .sec-tabs :deep(.el-tab-pane) { height: auto; overflow: visible; }
   .sec-tabs :deep(.el-tab-pane.pane-ops) { display: block; }
+  /* 顶栏吸顶占 56px, 段内页签贴在其下方; 缩小 padding 让 3 项一屏放下 */
+  .sec-tabs :deep(.el-tabs__header) { top: var(--mp-topbar-h); padding: 3px; }
+  .sec-tabs :deep(.el-tabs__item) { padding: 0 6px !important; }
+  /* 操作 tabs 与新建区各占一行: 否则 tabs 视口会被挤压到 0 */
+  .op-tabs-row { flex-wrap: wrap; }
+  .op-create { width: 100%; justify-content: flex-end; }
+  /* 宽表格限制在卡片内, 由 .fb-table-wrap 自己横向滚动 */
+  .template-tabs,
+  .template-tabs :deep(.el-tabs__content),
+  .template-tabs :deep(.el-tab-pane),
+  .template-tabs :deep(.frame-builder) { max-width: 100%; }
+  /* 折叠头说明改整行显示: 基础规则是 nowrap + 省略号 + 固定 34px 高,
+     这里用 .pform 提升特异性, 并恢复自动高度与正常行高 */
+  .pform .profiles-collapse :deep(.el-collapse-item__header) {
+    height: auto;
+    line-height: 1.5;
+    min-height: 40px;
+    padding: 8px 12px;
+    align-items: flex-start;
+  }
+  .pform .profiles-collapse :deep(.el-collapse-item__title) { min-width: 0; }
+  .pform .profiles-collapse .profiles-tip {
+    display: block;
+    width: 100%;
+    margin: 4px 0 0;
+    line-height: 1.5;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+  /* 内层 tabs (请求模板/表达式) 不应继承段页签的 sticky 与边框 */
+  .sec-tabs :deep(.template-tabs .el-tabs__header) {
+    position: static;
+    top: auto;
+    margin-bottom: 8px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
 }
 .output-expr-header code {
   font-family: var(--mp-font-mono);
@@ -1564,7 +1617,14 @@ onMounted(async () => {
   border-radius: var(--mp-radius-sm);
   background: var(--mp-surface-2);
 }
-.inherited-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.inherited-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-bottom: 6px;
+}
+.inherited-head .field-hint { flex: 1 1 240px; min-width: 0; margin-top: 0; }
 .inherited-row {
   display: flex;
   align-items: center;

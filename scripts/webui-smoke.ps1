@@ -730,8 +730,16 @@ true
     Set-Viewport 560 800
     Check-Js "560: brand block hidden" 'getComputedStyle(document.querySelector(".brand")).display === "none"'
     Check-Js "560: no horizontal page overflow" 'document.documentElement.scrollWidth <= window.innerWidth + 1'
-    Check-Js "560: nav stays on one row" 'document.querySelector(".nav").getBoundingClientRect().height <= 36'
-    Check-Wait "560: active nav item is revealed" '(function () { var nav = document.querySelector(".nav"); var a = nav.querySelector(".nav-item.active"); if (!a) return false; var n = nav.getBoundingClientRect(), r = a.getBoundingClientRect(); return r.left >= n.left - 1 && r.right <= n.right + 1; })()' 5
+    # <=720 走文档流滚动: 壳体与编辑区都不再各自产生内部滚动条
+    Check-Js "560: page scrolls as document" 'getComputedStyle(document.querySelector(".content")).overflowY === "visible"'
+    # <=720 导航折叠为汉堡菜单: 桌面 nav 隐藏, 汉堡可见; 点开抽屉验证导航项齐全
+    Check-Js "560: nav collapses into menu button" 'getComputedStyle(document.querySelector(".nav")).display === "none" && getComputedStyle(document.querySelector(".nav-toggle")).display !== "none"'
+    Check-Js "560: current page shown in topbar" 'document.querySelector(".nav-current").textContent.trim().length > 0'
+    Invoke-Js 'document.querySelector(".nav-toggle").click(); true' | Out-Null
+    Check-Wait "560: menu drawer opens" '!!document.querySelector(".nav-drawer") && document.querySelectorAll(".drawer-item").length >= 5' 5
+    Check-Js "560: menu drawer fills viewport" 'Math.abs(document.querySelector(".nav-drawer").getBoundingClientRect().width - window.innerWidth) <= 1'
+    Invoke-Js 'document.querySelector(".nav-backdrop").click(); true' | Out-Null
+    Check-Js "560: menu drawer closes on backdrop" '!document.querySelector(".nav-drawer")'
     Set-Viewport 1440 900
 
     # =======================================================================

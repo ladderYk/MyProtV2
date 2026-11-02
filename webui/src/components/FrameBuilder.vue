@@ -529,12 +529,23 @@ const stats = computed(() => {
   border: 1px solid var(--mp-border);
   border-radius: var(--mp-radius-sm);
 }
-.toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
+.toolbar-left, .toolbar-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 8px;
+}
 .btn-icon { font-size: var(--mp-fs-xs); margin-right: 4px; }
 .mx-2 { margin: 0 8px; }
 .ml-2 { margin-left: 8px; }
-.fb-table-wrap { overflow-x: auto; }
+.fb-table-wrap { overflow-x: auto; min-width: 0; }
 .fb-table { width: 100%; }
+/* 手机端: 窄容器会把 min-width 列压扁到刚好不溢出, el-table 便不再出横向滚动条。
+   按列宽总和(50+110+200+160+160+180+140)撑开, 由 .fb-table-wrap 承担横滚 */
+@media (max-width: 720px) {
+  .fb-table { min-width: 1000px; }
+}
 .hex-input :deep(.el-input__inner) {
   font-family: var(--mp-font-mono);
   font-size: var(--mp-fs-xs);

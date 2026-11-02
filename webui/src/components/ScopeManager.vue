@@ -997,9 +997,17 @@ watch(() => props.scope, () => {
 .issue-subj { flex: none; color: var(--mp-ink); }
 .issue-msg { color: var(--mp-ink-2); word-break: break-all; }
 
-/* 窄屏降级: 协议列表转为顶部横排 */
+/* 窄屏降级: 协议列表转为顶部横排, 整页滚动 (编辑区不再内部滚动) */
 @media (max-width: 720px) {
-  .edit-pane { flex-direction: column; }
+  .edit-pane { flex: none; flex-direction: column; overflow: visible; }
+  /* overflow:hidden 会成为 sticky 的滚动容器, 让段内页签吸顶失效 (还会被顶栏压住) */
+  .cfg-main { flex: none; overflow: visible; }
+  .pane-body {
+    flex: none;
+    overflow: visible;
+    padding: var(--mp-sp-2) var(--mp-sp-3) var(--mp-sp-4);
+  }
+  .form-fill { flex: none; }
   /* 高度交给内容: 固定 38vh 时, 头部+搜索+列表+新建区之和会溢出并压住编辑区 */
   .cfg-list {
     width: auto;
@@ -1007,7 +1015,7 @@ watch(() => props.scope, () => {
     border-right: 0;
     border-bottom: 1px solid var(--mp-border);
   }
-  .cfg-items { flex: none; max-height: 18vh; }
+  .cfg-items { flex: none; max-height: 30vh; }
   /* 新建区改两行网格: 模板占一行, 名称+按钮占一行, 少占 36px 纵向空间 */
   .create-area.stacked {
     display: grid;
