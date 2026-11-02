@@ -69,11 +69,11 @@ const checklist = computed(() => {
       action: t('去添加标签'), view: 'tags', intent: { add: 'tag' }
     },
     {
-      key: 'data', done: hasGood, title: t('看到第一个 Good 值'),
+      key: 'data', done: hasGood, title: t('看到第一个正常值'),
       hint: !valuesReady.value
         ? t('正在读取采集值…')
-        : (hasGood ? t('当前 {n} 个标签质量 Good', { n: goodCount.value })
-          : (hasTag ? t('已配置但无 Good — 检查设备连接, 或启动仿真') : t('配置标签后引擎轮询即产生数据'))),
+        : (hasGood ? t('当前 {n} 个标签采集正常', { n: goodCount.value })
+          : (hasTag ? t('已配置但无正常值 — 检查设备连接, 或启动仿真') : t('配置标签后引擎轮询即产生数据'))),
       action: hasTag ? t('去看实时监控') : t('去启动仿真'),
       view: hasTag ? 'live' : 'sim', intent: null
     }
@@ -100,7 +100,7 @@ const reloadText = computed(() => {
 const unknownCount = computed(() => Math.max(0, tagTotal.value - goodCount.value - badCount.value))
 const tagHint = computed(() => {
   const parts = []
-  if (badCount.value) parts.push(t('{n} 个非 Good', { n: badCount.value }))
+  if (badCount.value) parts.push(t('{n} 个异常或无值', { n: badCount.value }))
   if (unknownCount.value) parts.push(t('{n} 个无数据', { n: unknownCount.value }))
   if (!parts.length) return t('质量统计来自最新快照')
   return (goodCount.value > 0 ? t('另有 ') : '') + parts.join(' · ')
@@ -110,11 +110,11 @@ const stats = computed(() => [
   {
     key: 'dev', label: t('设备在线'),
     value: valuesReady.value ? `${onlineDevices.value}/${runtimeState.devices.length}` : '—',
-    hint: valuesReady.value ? t('至少一个 Good 值视为在线') : t('正在读取运行状态…'),
+    hint: valuesReady.value ? t('至少一个点位正常视为在线') : t('正在读取运行状态…'),
     tone: onlineDevices.value > 0 ? 'ok' : 'off', view: 'tags'
   },
   {
-    key: 'tag', label: t('标签 Good'),
+    key: 'tag', label: t('正常点位'),
     value: valuesReady.value ? `${goodCount.value}/${tagTotal.value}` : '—',
     hint: valuesReady.value ? tagHint.value : t('正在读取采集值…'),
     tone: goodCount.value > 0 ? 'ok' : 'off', view: 'live'
@@ -180,9 +180,6 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
 
         <div v-if="ready" class="ready-row">
           <StatusBadge kind="ok" :text="t('配置已就绪')" />
-          <span class="ready-summary">
-            {{ t('{devices} 台设备 · {tags} 个标签 · {good} 个 Good', { devices: runtimeState.devices.length, tags: tagTotal, good: goodCount }) }}
-          </span>
           <span class="ready-spacer"></span>
           <span class="health-inline">
             {{ t('标签配置') }}
@@ -238,7 +235,7 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
             <thead>
               <tr>
                 <th>{{ t('设备 ID') }}</th><th>{{ t('协议') }}</th><th>{{ t('地址') }}</th><th>{{ t('标签数') }}</th>
-                <th>{{ t('Good / Bad') }}</th><th>{{ t('最后更新') }}</th>
+                <th>{{ t('正常 / 异常') }}</th><th>{{ t('最后更新') }}</th>
               </tr>
             </thead>
             <tbody>

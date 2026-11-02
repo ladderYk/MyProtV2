@@ -424,6 +424,8 @@ private:
 
 **连接状态复位**：看门狗超时或读错误属连接级故障——`_connected.store(false)` + `_port.reset()`，使 `IsConnected()` 转 false，下次由 `ChannelManager::GetOrCreateChannel` 走重连。修复前仅 `close()` 端口而不复位标志，`IsConnected()` 恒真会导致该设备永久失效。
 
+**工厂接入**：`App/main.cpp` 的通道工厂按 `TransportType::Serial` 创建 `SerialChannel`，串口选项取自协议级 `transport.serial`；设备级 `connection.portName` 非空时由 `SerialChannel::Connect` 优先采用，因此同一串口协议可被多台设备指向不同 COM 口。
+
 **CanChannel**：未实装（仓库中无实现），若启用见 [ROADMAP.md](../ROADMAP.md) 与 [ADR-0002](../adr/0002-transport-abstraction.md) §4 设计要点——向引擎呈现 `[CAN ID 大端字节][payload]` 伪字节流，`resp[]` / `requestTemplate` 可直接引用 CAN ID，引擎层零改动。
 
 ---

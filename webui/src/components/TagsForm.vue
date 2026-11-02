@@ -3,16 +3,21 @@
 // 标签的 operation 候选项按其所属设备的协议自动联动
 import { reactive, ref, onMounted, watch, nextTick, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ElCollapse, ElCollapseItem } from 'element-plus'
 import {
   ElForm, ElFormItem, ElInput, ElInputNumber, ElSelect, ElOption,
-  ElSwitch, ElCard, ElButton, ElAlert, ElTabs, ElTabPane
+  ElSwitch, ElCard, ElButton, ElAlert, ElTabs, ElTabPane,
+  ElCollapse, ElCollapseItem
 } from 'element-plus'
 import VarTracePanel from './VarTracePanel.vue'
 import FieldHelp from './FieldHelp.vue'
 import { listConfigs, getConfig, getSchema } from '../api'
 import { t } from '../i18n'
 import { parseConfigJson } from '../jsonText'
+import { clone, hasOwn } from '../utils/object'
+import {
+  typeSizeOf, typeAddrStep, uniqueNameAmong, expandNameTpl,
+  nextAddrAfter, parsePasteRows
+} from '../utils/tagBatch'
 
 const props = defineProps({
   modelValue: { type: Object, required: true }
@@ -118,10 +123,6 @@ const treeDevices = computed(() => {
 // 增删条目后收敛选中下标 (防越界)
 watch(() => (local.devices || []).length, n => { if (selDev.value >= n) selDev.value = Math.max(0, n - 1) })
 watch(() => (local.tags || []).length, n => { if (selTag.value >= n) selTag.value = Math.max(0, n - 1) })
-
-function clone(v) {
-  return JSON.parse(JSON.stringify(v))
-}
 
 // 枚举候选: 首选后端字段注册表 (GET /api/config/schema) 下发值, 拉取失败时回退内置列表
 // (回退值与后端当前代际一致, 离线/旧后端也不影响编辑)
@@ -524,12 +525,7 @@ function defaultVariablesFor(devId) {
 // 引擎契约是跨协议字节单位 StartByteAddress / ByteCount, 但现场用户只熟悉
 // “寄存器号 / 字节地址 / 线圈号 + 值个数”。这里按协议 read 操作的派生表达式
 // 反推单位, 在能推导时提供简易输入; 推导不出 (ADS / SEER) 则不出该区块。
-const TYPE_SIZE = {
-  Bool: 1, ByteArray: 1, String: 1,
-  UInt16: 2, Int16: 2, UInt32: 4, Int32: 4, Float: 4,
-  UInt64: 8, Int64: 8, Double: 8
-}
-function typeSizeOf(t) { return TYPE_SIZE[t] || 0 }
+// 类型字节宽 (typeSizeOf) 与地址步长在 utils/tagBatch.js。
 
 function readOpOf(tag) {
   const dev = (local.devices || []).find(d => d.id === tag.deviceId)
@@ -700,31 +696,15 @@ function removeTag(i) {
 // 12 次。这里提供两条捷径: ① 区间生成 (起始地址 + 数量 + 步长); ② 从 Excel 粘贴表格。
 // 生成结果仍逐个写回 tags, 保存时走既有完整校验。
 
-/// 一个值占用的地址步长 (按当前协议的地址单位):
-/// word = 字/寄存器 → ceil(字节宽/2); bit = 线圈 → 1; byte/raw → 字节宽
-function typeAddrStep(tag) {
-  const size = typeSizeOf(tag.finalType) || 1
-  const mode = simpleAddrMode(tag)
-  if (mode === 'word') return Math.max(1, Math.ceil(size / 2))
-  if (mode === 'bit') return 1
-  return size
+/// 一个值占用的地址步长 (按当前协议的地址单位); 换算规则见 utils/tagBatch.js
+function addrStepOf(tag) {
+  return typeAddrStep(tag.finalType, simpleAddrMode(tag))
 }
 
-/// 名称去重: 已存在 base 时依次尝试 base_2 / base_3 …; used 可传入批量内部的占用集合
-function uniqueNameAmong(base, used) {
-  let name = base
-  let i = 2
-  while (used.has(name)) { name = base + '_' + i; i++ }
-  used.add(name)
-  return name
-}
 function existingTagNames() {
   const s = new Set()
   for (const tag of (local.tags || [])) s.add(tag.name)
   return s
-}
-function hasOwn(obj, key) {
-  return !!obj && Object.prototype.hasOwnProperty.call(obj, key)
 }
 function uniqueTagName(base) {
   return uniqueNameAmong(base, existingTagNames())
@@ -852,14 +832,15 @@ function defaultBatchTypeFor(op, devId) {
 /// 默认起点 = 同设备同操作现有标签的最大地址 + 一步 (无地址语义时 0)
 function nextBatchStart(devId, op, type) {
   const probe = { deviceId: devId, operation: op, finalType: type }
-  if (!simpleAddrMode(probe)) return 0
-  let max = -1
+  const mode = simpleAddrMode(probe)
+  if (!mode) return 0
+  const siblings = []
   for (const tag of (local.tags || [])) {
-    if (tag.deviceId !== devId || tag.operation !== op) continue
-    if (!simpleSupported(tag)) continue
-    max = Math.max(max, simpleAddr(tag))
+    if (simpleSupported(tag)) {
+      siblings.push({ deviceId: tag.deviceId, operation: tag.operation, addr: simpleAddr(tag) })
+    }
   }
-  return max < 0 ? 0 : max + typeAddrStep(probe)
+  return nextAddrAfter(siblings, devId, op, typeAddrStep(type, mode))
 }
 function openBatch() {
   if (!local.devices.length) {
@@ -881,7 +862,7 @@ function openBatch() {
   batchScanRate.value = 1000
   batchStart.value = nextBatchStart(devId, batchOp.value, batchFinalType.value)
   batchCount.value = 8
-  batchStep.value = typeAddrStep(batchProbe())
+  batchStep.value = addrStepOf(batchProbe())
   batchNameTpl.value = devId + '.Tag{addr}'
   batchPaste.value = ''
   batchErr.value = ''
@@ -899,17 +880,8 @@ watch(batchDev, () => {
 })
 // 类型/协议变化会改变地址单位 → 步长跟随类型宽度 (仍可手改)
 watch([batchDev, batchOp, batchFinalType], () => {
-  batchStep.value = typeAddrStep(batchProbe())
+  batchStep.value = addrStepOf(batchProbe())
 })
-
-/// 命名模板: 支持 {dev} 设备 ID / {addr} 地址 / {i} 序号 (1 起)
-function expandNameTpl(tpl, devId, addr, index) {
-  return String(tpl || '{dev}.Tag{addr}')
-    .replace(/\{dev\}/g, devId)
-    .replace(/\{addr\}/g, String(addr))
-    .replace(/\{i\}/g, String(index))
-    .trim()
-}
 
 const batchRangeRows = computed(() => {
   const devId = batchDev.value
@@ -933,25 +905,6 @@ const batchRangeRows = computed(() => {
   }
   return rows
 })
-
-/// 解析粘贴表格: 每行「名称, 地址[, 类型[, 单位]]」; 首行含 名称/name 与 地址/address 时视为表头
-function parsePasteRows(text) {
-  const rows = []
-  let headerChecked = false
-  for (const raw of String(text || '').split(/\r?\n/)) {
-    const line = raw.trim()
-    if (!line || line.indexOf('#') === 0 || line.indexOf('//') === 0) continue
-    const cells = line.split(/[\t,;，]+/).map(s => s.trim())
-    if (cells.length < 2) continue
-    if (!headerChecked && /name|名称/i.test(cells[0]) && /addr|地址/i.test(cells[1])) {
-      headerChecked = true
-      continue
-    }
-    headerChecked = true
-    rows.push(cells)
-  }
-  return rows
-}
 
 function normalizeFinalType(v) {
   const hit = FINAL_TYPES.value.find(x => String(x).toLowerCase() === String(v || '').toLowerCase())

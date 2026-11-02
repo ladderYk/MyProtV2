@@ -488,6 +488,18 @@ window.__smoke = {
     return true;
   },
   nav: function (i) { var n = document.querySelectorAll(".nav-item")[i]; if (!n) return false; n.click(); return true; },
+  setAdvanced: function (on) {
+    var b = document.querySelector(".tb-actions .tb-btn.adv"); if (!b) return false;
+    if (!!on !== b.classList.contains("on")) b.click();
+    return true;
+  },
+  setScope: function (scope) {
+    var s = document.querySelector(".scope-switch"); if (!s) return false;
+    var btns = s.querySelectorAll("button");
+    var target = scope === "tags" ? btns[1] : btns[0];
+    if (target && !target.classList.contains("active")) target.click();
+    return true;
+  },
   sleep: function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 };
 true
@@ -498,7 +510,7 @@ true
     Write-Head "SHELL"
     Check-Js "topbar rendered (>= 40px)" 'document.querySelector(".topbar").getBoundingClientRect().height >= 40'
     Check-Js "topbar height is 56px" 'Math.round(document.querySelector(".topbar").getBoundingClientRect().height) === 56'
-    Check-Js "nav has 6 items" 'document.querySelectorAll(".nav-item").length === 6'
+    Check-Js "nav has 5 items" 'document.querySelectorAll(".nav-item").length === 5'
     Check-Js "overview is the default view" 'document.querySelectorAll(".nav-item")[0].classList.contains("active") && !!document.querySelector(".overview")'
     Check-Js "brand rendered" 'document.querySelector(".brand-name") && document.querySelector(".brand-name").innerText.trim() === "MyProt"'
     Check-Js "status chip shows device/tag counters" '/\d+\s*\/\s*\d+/.test(document.querySelector(".tb-status") ? document.querySelector(".tb-status").innerText : "")'
@@ -521,7 +533,7 @@ true
 
     # =======================================================================
     Write-Head "HELP DRAWER"
-    Invoke-Js 'document.querySelectorAll(".tb-actions .tb-btn")[1].click(); true' | Out-Null
+    Invoke-Js 'window.__smoke.clickText(".tb-actions .tb-btn", "\u5e2e\u52a9"); true' | Out-Null
     Check-Wait "help drawer opens" '!!document.querySelector(".help-drawer") && window.__smoke.visible(".help-drawer")' 8
     Check-Js "help drawer is 440px wide" '(function () { var r = window.__smoke.rect(".help-drawer"); return r && Math.abs(r.w - 440) <= 2; })()'
     Check-Js "help drawer has quick-start steps" 'document.querySelectorAll(".help-drawer .step").length >= 3'
@@ -532,18 +544,38 @@ true
     Write-Head "PROTOCOLS"
     Invoke-Js 'window.__smoke.nav(4); true' | Out-Null
     Check-Wait "protocol workbench opens" '!!document.querySelector(".cfg-list") && document.querySelectorAll(".cfg-items li").length > 0 && !!document.querySelector(".toolbar")' 25
+    Check-Js "config workbench has a scope switch" 'document.querySelectorAll(".scope-switch button").length === 2 && document.querySelectorAll(".scope-switch button")[0].classList.contains("active")'
+    Check-Js "simple mode hides the JSON entry" '!document.querySelector(".toolbar .segmented") && !!document.querySelector(".tb-actions .tb-btn.adv:not(.on)")'
+    Invoke-Js 'window.__smoke.setAdvanced(true); true' | Out-Null
+    Check-Wait "advanced mode reveals the JSON entry" '!!document.querySelector(".toolbar .segmented")' 5
     Check-Js "protocol list is populated" 'document.querySelectorAll(".cfg-items li").length >= 5'
     Check-Wait "first protocol is selected" '!!document.querySelector(".cfg-items li.active")' 15
     Check-Wait "editor shows a json file" '/\.json$/.test(window.__smoke.txt(".file-name"))' 15
     $protoTotal = Invoke-Js 'document.querySelectorAll(".cfg-items li").length'
 
-    Invoke-Js 'document.querySelectorAll(".segmented button")[1].click(); true' | Out-Null
+    Invoke-Js 'document.querySelectorAll(".toolbar .segmented button")[1].click(); true' | Out-Null
     Check-Wait "JSON mode renders textarea" '!!document.querySelector("textarea.area")' 8
     Check-Js "JSON parses (status valid)" '!!document.querySelector(".editor .status.valid")'
     Check-Js "JSON contains schemaVersion" 'document.querySelector("textarea.area").value.indexOf("\"schemaVersion\"") >= 0'
-    Invoke-Js 'document.querySelectorAll(".segmented button")[0].click(); true' | Out-Null
+    Invoke-Js 'document.querySelectorAll(".toolbar .segmented button")[0].click(); true' | Out-Null
     Check-Wait "form mode returns" '!!document.querySelector(".pform")' 8
     Check-Js "protocol form has section tabs" 'document.querySelectorAll(".pform .el-tabs__item").length >= 3'
+
+    # 握手双模页签: name 带 hs- 前缀, 与请求模板的 visual/raw 不冲突
+    # 表单刚从 JSON 模式重建, tab 可能仍在挂载中 → 循环点击直到生效
+    $hsRaw = Invoke-Js '(async function () { for (var i = 0; i < 40; i++) { var tab = document.querySelector("#tab-hs-raw"); if (tab) { tab.click(); await new Promise(function (r) { setTimeout(r, 100); }); var pane = document.querySelector("#pane-hs-raw"); if (tab.getAttribute("aria-selected") === "true" && pane && getComputedStyle(pane).display !== "none" && pane.querySelector("textarea")) return true; } await new Promise(function (r) { setTimeout(r, 100); }); } return false; })()'
+    Check "handshake raw tab opens" ([bool]$hsRaw)
+    Invoke-Js 'document.querySelector("#tab-hs-visual").click(); true' | Out-Null
+    Check-Wait "handshake form tab returns" 'document.querySelector("#tab-hs-visual").getAttribute("aria-selected") === "true"' 8
+
+    # Protocol variables: card grid <-> table view (choice persisted in localStorage)
+    Invoke-Js 'window.__smoke.clickText(".pform .el-tabs__item", "\u534f\u8bae\u53d8\u91cf")' | Out-Null
+    Check-Wait "protocol vars section opens" '!!document.querySelector(".vars-card")' 10
+    Check-Js "variable table defaults to cards" '!!document.querySelector(".vars-card .vt-cards") && !document.querySelector(".vars-card .vt-head-row")'
+    Invoke-Js 'window.__smoke.clickText(".vars-layout .el-radio-button", "\u8868\u683c")' | Out-Null
+    Check-Wait "variable table switches to table" '!!document.querySelector(".vars-card .vt-head-row") && !document.querySelector(".vars-card .vt-cards")' 8
+    Invoke-Js 'window.__smoke.clickText(".vars-layout .el-radio-button", "\u5361\u7247")' | Out-Null
+    Check-Wait "variable table switches back to cards" '!!document.querySelector(".vars-card .vt-cards") && !document.querySelector(".vars-card .vt-head-row")' 8
 
     Invoke-Js 'window.__smoke.setInput(".cfg-search input", "modbus")' | Out-Null
     Start-Sleep -Milliseconds 300
@@ -554,21 +586,45 @@ true
 
     Invoke-Js 'window.__smoke.clickText(".cfg-items li", "modbus-tcp")' | Out-Null
     Check-Wait "switch to modbus-tcp" 'window.__smoke.txt(".file-name").indexOf("modbus-tcp") === 0' 15
+
+    # Operation profiles (operationProfiles): 用带原型的 modbus-tcp 断言 (首位协议可能没有原型)
+    Invoke-Js 'window.__smoke.clickText(".pform .el-tabs__item", "\u64cd\u4f5c\u5b9a\u4e49")' | Out-Null
+    Check-Wait "operation tab opens" '!!document.querySelector(".profiles-collapse")' 10
+    Check-Js "operation profiles are listed" 'document.querySelectorAll(".profiles-collapse .profile-item").length >= 1'
+    Check-Js "profile extends is shown" 'window.__smoke.qa(".profile-item .el-tag").some(function (t) { return (t.innerText || "").indexOf("extends") >= 0; })'
+    Check-Js "profile editor is available" '!!document.querySelector(".profiles-collapse textarea")'
+    Check-Js "operation can select a profile" '!!document.querySelector(".profile-select")'
+    Check-Js "inherited outputs are displayed" '!!document.querySelector(".inherited-out") && document.querySelectorAll(".inherited-row").length >= 1'
+
+    # 输出双模页签: out- 前缀; 三组 tabs 不得再生成重复 DOM id
+    Invoke-Js 'document.querySelector("#tab-out-form").click(); true' | Out-Null
+    Check-Wait "output form tab opens" 'document.querySelector("#tab-out-form").getAttribute("aria-selected") === "true" && getComputedStyle(document.querySelector("#pane-out-form")).display !== "none"' 8
+    Invoke-Js 'document.querySelector("#tab-out-visual").click(); true' | Out-Null
+    Check-Wait "output expression tab returns" 'document.querySelector("#tab-out-visual").getAttribute("aria-selected") === "true"' 8
+    Check-Js "tab pane ids are unique" '["pane-visual","pane-raw","pane-hs-visual","pane-hs-raw","pane-out-visual","pane-out-form","tab-visual"].every(function (id) { return document.querySelectorAll("[id=\"" + id + "\"]").length === 1; })'
     # Backups are user-generated and not tracked in git: assert either branch.
     $backupResp = Invoke-RestMethod -Uri ($baseUrl + "/api/config/protocols/modbus-tcp/backups") -TimeoutSec 5
     $backupCount = 0
     if ($null -ne $backupResp) { $backupCount = @($backupResp).Count }
     if ($backupCount -gt 0) {
-        Check-Wait "backup dropdown is available" 'window.__smoke.qa(".toolbar button").some(function (b) { return b.innerText.indexOf("\u5386\u53f2\u5907\u4efd") >= 0; })' 10
+        Invoke-Js 'window.__smoke.clickText(".toolbar .btn", "\u66f4\u591a")' | Out-Null
+        Check-Wait "backup entries are in the More menu" 'window.__smoke.qa(".el-dropdown-menu__item").some(function (b) { return b.innerText.indexOf("\u56de\u6eda\u5230") >= 0; })' 10
+        Invoke-Js 'document.body.click(); true' | Out-Null
+        Start-Sleep -Milliseconds 300
     } else {
-        Check-Js "backup dropdown hidden without backups" '!window.__smoke.qa(".toolbar button").some(function (b) { return b.innerText.indexOf("\u5386\u53f2\u5907\u4efd") >= 0; })'
+        Invoke-Js 'window.__smoke.clickText(".toolbar .btn", "\u66f4\u591a")' | Out-Null
+        Check-Js "backup menu explains there are no backups" 'window.__smoke.qa(".el-dropdown-menu__item").some(function (b) { return b.innerText.indexOf("\u6682\u65e0\u5386\u53f2\u5907\u4efd") >= 0; })'
+        Invoke-Js 'document.body.click(); true' | Out-Null
+        Start-Sleep -Milliseconds 300
     }
 
-    Invoke-Js 'window.__smoke.clickText(".toolbar button", "\u81ea\u68c0")' | Out-Null
+    Invoke-Js 'window.__smoke.clickText(".toolbar .btn", "\u66f4\u591a")' | Out-Null
+    Check-Wait "More menu opens" 'window.__smoke.qa(".el-dropdown-menu__item").length >= 1' 5
+    Invoke-Js 'window.__smoke.clickText(".el-dropdown-menu__item", "\u81ea\u68c0")' | Out-Null
     Check-Wait "self-check reports a result" '!!document.querySelector(".msg.ok") || !!document.querySelector(".issue-banner")' 20
 
     # Unsaved-changes guard: dirty the JSON, then try to leave the page.
-    Invoke-Js 'document.querySelectorAll(".segmented button")[1].click(); true' | Out-Null
+    Invoke-Js 'document.querySelectorAll(".toolbar .segmented button")[1].click(); true' | Out-Null
     Check-Wait "JSON mode for dirty guard" '!!document.querySelector("textarea.area")' 8
     Invoke-Js '(function () { var t = document.querySelector("textarea.area"); t.value = t.value.replace("{", "{\"__smoke_dirty\":true,"); t.dispatchEvent(new Event("input", { bubbles: true })); return true; })()' | Out-Null
     Check-Wait "editing marks the config dirty" '!!document.querySelector(".dirty-mark")' 8
@@ -582,7 +638,9 @@ true
 
     # =======================================================================
     Write-Head "TAGS"
-    Invoke-Js 'window.__smoke.nav(5); true' | Out-Null
+    Invoke-Js 'window.__smoke.nav(4); true' | Out-Null
+    Check-Wait "config page reopens for tags" '!!document.querySelector(".scope-switch")' 10
+    Invoke-Js 'window.__smoke.setScope("tags"); true' | Out-Null
     Check-Wait "tags workbench opens" '!!document.querySelector(".tform")' 20
     Check-Wait "device tree is populated" 'document.querySelectorAll(".dt-dev").length >= 1' 15
     Check-Js "device tree matches the overview table" ('document.querySelectorAll(".dt-dev").length === ' + $overviewDevices)
@@ -593,9 +651,21 @@ true
     Check-Js "device view shows info and connection together" '!!document.querySelector(".dev-pane") && document.querySelectorAll(".dev-pane .blk").length === 2'
     Check-Js "device view has no tabs" '!document.querySelector(".dev-pane .el-tabs")'
     Check-Js "device connection fields visible" 'document.querySelectorAll(".dev-pane .el-form-item").length >= 6'
+    Check-Js "copy-device action is available" 'window.__smoke.qa(".ctx-bar button").some(function (b) { return (b.innerText || "").indexOf("\u590d\u5236\u8bbe\u5907") >= 0; })'
     Invoke-Js 'document.querySelector(".dt-tags li").click(); true' | Out-Null
     Start-Sleep -Milliseconds 300
     Check-Js "selecting a tag shows its breadcrumb" '!!document.querySelector(".ctx-bar .ctx-dev") && !!document.querySelector(".ctx-bar .ctx-cur")'
+    Check-Js "copy-tag action is available" 'window.__smoke.qa(".ctx-bar button").some(function (b) { return (b.innerText || "").indexOf("\u590d\u5236\u6807\u7b7e") >= 0; })'
+
+    # Batch add dialog: range/paste tabs + preview; open then cancel (never writes config)
+    Check-Js "batch-add entry is available" 'window.__smoke.qa(".dt-actions button").some(function (b) { return (b.innerText || "").indexOf("\u6279\u91cf\u65b0\u589e") >= 0; })'
+    Invoke-Js 'window.__smoke.clickText(".dt-actions button", "\u6279\u91cf\u65b0\u589e")' | Out-Null
+    Check-Wait "batch dialog opens" '!!document.querySelector(".batch-dialog")' 8
+    Check-Js "batch dialog has range and preview" '!!document.querySelector(".batch-tabs") && !!document.querySelector(".batch-preview")'
+    Check-Js "batch paste tab exists" 'window.__smoke.qa(".batch-tabs .el-tabs__item").some(function (t) { return (t.innerText || "").indexOf("\u8868\u683c\u7c98\u8d34") >= 0; })'
+    Invoke-Js 'window.__smoke.clickText(".batch-dialog .el-dialog__footer button", "\u53d6\u6d88")' | Out-Null
+    Start-Sleep -Milliseconds 400
+    Check-Js "batch dialog closes" '!window.__smoke.visible(".batch-dialog")'
 
     # =======================================================================
     Write-Head "LIVE"
@@ -654,15 +724,19 @@ true
     Check-Js "1024: status chip hidden" 'getComputedStyle(document.querySelector(".tb-status")).display === "none"'
     Set-Viewport 900 800
     Check-Js "900: brand name hidden" 'getComputedStyle(document.querySelector(".brand-name")).display === "none"'
+    # 先切到最后一项「配置」, 再缩到 560: 验证 resize 后高亮项自动滚入导航可视区
+    Invoke-Js 'window.__smoke.nav(4); true' | Out-Null
+    Start-Sleep -Milliseconds 300
     Set-Viewport 560 800
     Check-Js "560: brand block hidden" 'getComputedStyle(document.querySelector(".brand")).display === "none"'
     Check-Js "560: no horizontal page overflow" 'document.documentElement.scrollWidth <= window.innerWidth + 1'
     Check-Js "560: nav stays on one row" 'document.querySelector(".nav").getBoundingClientRect().height <= 36'
+    Check-Wait "560: active nav item is revealed" '(function () { var nav = document.querySelector(".nav"); var a = nav.querySelector(".nav-item.active"); if (!a) return false; var n = nav.getBoundingClientRect(), r = a.getBoundingClientRect(); return r.left >= n.left - 1 && r.right <= n.right + 1; })()' 5
     Set-Viewport 1440 900
 
     # =======================================================================
     Write-Head "GLOBAL ACTIONS"
-    Invoke-Js 'document.querySelectorAll(".tb-actions .tb-btn")[0].click(); true' | Out-Null
+    Invoke-Js 'window.__smoke.clickText(".tb-actions .tb-btn", "\u70ed\u91cd\u8f7d")' | Out-Null
     Check-Wait "hot reload reports success" '!!document.querySelector(".banner.ok")' 20
 
     # =======================================================================

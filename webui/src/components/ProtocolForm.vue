@@ -18,6 +18,10 @@ import HandshakeEditor from './HandshakeEditor.vue'
 import FieldHelp from './FieldHelp.vue'
 import FrameBuilder from './FrameBuilder.vue'
 import ExprBuilder from './ExprBuilder.vue'
+import { clone, hasOwn } from '../utils/object'
+import { resolveProfiles, migrateVars, migrateOpVars } from '../utils/protocol'
+import { advanced } from '../composables/useAdvancedMode'
+import { openHelp } from '../composables/useHelp'
 
 const props = defineProps({
   modelValue: { type: Object, required: true }
@@ -41,11 +45,27 @@ const OP_KINDS = [
 const local = reactive(ensureShape(props.modelValue))
 const opTemplate = ref('')   // 新增操作时的模板名 ('' = 空白)
 const activeTemplateTab = ref('visual')  // 请求模板编辑模式：visual | raw
-const activeHandshakeTab = ref('visual') // v5 (C4): 握手编辑模式 visual | raw
-const activeOutputTab = ref('visual')    // 输出编辑模式：visual | form
+const activeHandshakeTab = ref('hs-visual') // v5 (C4): 握手编辑模式 hs-visual | hs-raw (加前缀避免与请求模板页签生成重复 DOM id)
+const activeOutputTab = ref('out-visual') // 输出编辑模式：out-visual | out-form (前缀避免与请求模板页签生成重复 DOM id)
 // v2 增: 区块导航 — 常规/变量/操作/高级 四页签, 消除长滚动堆叠 (默认首个页签, 与 TagsForm 一致)
-// v4.9 改: 五段并为三段 — 基础信息(含传输与成帧/握手, 段内 divider 分节) / 全局变量 / 操作定义
-const activeSection = ref('basic')   // 区块 tab: basic | vars | ops
+// v6 改: 三段按配置顺序 — 传输与成帧 → 操作定义 → 协议变量, 页签带步骤号
+const activeSection = ref('basic')   // 区块 tab: basic | ops | vars
+const STEPS = [
+  { name: 'basic', no: 1, label: '传输与成帧' },
+  { name: 'ops', no: 2, label: '操作定义' },
+  { name: 'vars', no: 3, label: '协议变量' }
+]
+const stepIndex = computed(() => STEPS.findIndex(s => s.name === activeSection.value))
+const nextStep = computed(() => STEPS[stepIndex.value + 1] || null)
+function goStep(name) { activeSection.value = name }
+
+// 简单视图不展示 JSON / 原始文本入口; 切回简单时把正在编辑的原始页收起来
+watch(advanced, v => {
+  if (!v) {
+    if (activeTemplateTab.value === 'raw') activeTemplateTab.value = 'visual'
+    if (activeHandshakeTab.value === 'hs-raw') activeHandshakeTab.value = 'hs-visual'
+  }
+})
 const fbRef = ref(null)   // FrameBuilder 实例 (chips 点击插入占位符)
 
 // 全局变量呈现方式: cards = 卡片网格 (字段随来源/策略变化, 默认) / table = 紧凑四列表格
@@ -126,28 +146,7 @@ const profileNames = computed(() => Object.keys(local.operationProfiles || {}))
 const profilesDraft = ref(JSON.stringify((props.modelValue && props.modelValue.operationProfiles) || {}, null, 2))
 const profilesError = ref('')
 
-const resolvedProfiles = computed(() => {
-  const raw = local.operationProfiles || {}
-  const out = {}
-  const visiting = new Set()
-  function resolve(name) {
-    if (out[name]) return out[name]
-    if (!hasOwn(raw, name) || visiting.has(name)) return null
-    visiting.add(name)
-    const p = raw[name] || {}
-    const base = p.extends ? resolve(p.extends) : null
-    visiting.delete(name)
-    const merged = {
-      description: p.description || (base && base.description) || '',
-      outputs: Object.assign({}, (base && base.outputs) || {}, p.outputs || {}),
-      responseParser: Object.assign({}, (base && base.responseParser) || {}, p.responseParser || {})
-    }
-    out[name] = merged
-    return merged
-  }
-  for (const n of Object.keys(raw)) resolve(n)
-  return out
-})
+const resolvedProfiles = computed(() => resolveProfiles(local.operationProfiles || {}))
 
 function profileOf(op) {
   return (op && op.profile && resolvedProfiles.value[op.profile]) || null
@@ -157,7 +156,7 @@ function profileSummary(name) {
   if (!p) return ''
   const outs = Object.keys(p.outputs || {}).length
   const rp = Object.keys(p.responseParser || {}).length
-  return [p.description, outs ? t('{n} 个派生输出', { n: outs }) : '', rp ? t('{n} 个应答字段', { n: rp }) : '']
+  return [p.description, outs ? t('{n} 个自动计算字段', { n: outs }) : '', rp ? t('{n} 个应答字段', { n: rp }) : '']
     .filter(Boolean).join(' · ')
 }
 function setProfile(op, name) {
@@ -205,6 +204,10 @@ function overrideOutput(name) {
   curOp.value.outputs[name] = clone(item.def)
   emitDoc()
 }
+/// 字段名排序 — 与 VariableTable 表格顺序一致 (表达式区此前按配置原始顺序, 两处观感不一致)
+function sortedEntries(obj) {
+  return Object.entries(obj || {}).sort((a, b) => a[0].localeCompare(b[0]))
+}
 
 // ── responseParser 稀疏编辑 ──
 // 只有用户确实改过的字段才写出; 未改字段展示原型/协议提供的值并标记继承。
@@ -246,119 +249,7 @@ function restoreRp(op, field) {
   emitDoc()
 }
 
-function clone(v) {
-  return JSON.parse(JSON.stringify(v))
-}
-
-function hasOwn(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k) }
-
-// ── 旧 schema → v1.20 迁移 ──
-// 旧三段 (defaultVariables + autoCompute + metadata.placeholderHints) 或统一 variables 段
-// 合并为 inputs (static/auto) + outputs (derivedLength)
-function migrateVars(d) {
-  if (!d.inputs || typeof d.inputs !== 'object') d.inputs = {}
-  if (!d.outputs || typeof d.outputs !== 'object') d.outputs = {}
-  // 已存在新结构 → 仅清理旧字段
-  if (Object.keys(d.inputs).length || Object.keys(d.outputs).length) {
-    delete d.variables; delete d.defaultVariables; delete d.autoCompute
-    if (d.metadata && Object.keys(d.metadata).length === 0) delete d.metadata
-    return
-  }
-  const hints = (d.metadata && d.metadata.placeholderHints) || {}
-  const put = (n, v) => {
-    if (!v || !v.source) return
-    if (v.source === 'auto' && v.strategy === 'derivedLength') {
-      d.outputs[n] = { source: 'auto', strategy: 'derivedLength', expr: v.expr || '' }
-      if (v.label) d.outputs[n].label = v.label
-      if (v.unit) d.outputs[n].unit = v.unit
-    } else if (v.source === 'auto') {
-      const e = { source: 'auto', strategy: v.strategy || 'autoIncrement' }
-      if (v.params && Object.keys(v.params).length) e.params = v.params
-      if (v.label) e.label = v.label
-      d.inputs[n] = e
-    } else {
-      const e = { source: 'static' }
-      if (v.value !== undefined) e.value = v.value
-      if (v.label) e.label = v.label
-      if (v.unit) e.unit = v.unit
-      if (Array.isArray(v.enum) && v.enum.length) e.enum = v.enum.slice()
-      d.inputs[n] = e
-    }
-  }
-  if (d.variables && typeof d.variables === 'object') {
-    for (const [n, v] of Object.entries(d.variables)) put(n, v)
-  }
-  if (d.defaultVariables && typeof d.defaultVariables === 'object') {
-    for (const [n, val] of Object.entries(d.defaultVariables)) {
-      const h = hints[n] || {}
-      d.inputs[n] = { source: 'static', value: val }
-      if (h.label) d.inputs[n].label = h.label
-      if (h.unit) d.inputs[n].unit = h.unit
-      if (Array.isArray(h.enum) && h.enum.length) d.inputs[n].enum = h.enum.slice()
-    }
-  }
-  if (d.autoCompute && typeof d.autoCompute === 'object') {
-    for (const [n, rule] of Object.entries(d.autoCompute)) {
-      const h = hints[n] || {}
-      const e = { source: 'auto', strategy: (rule && rule.strategy) || 'autoIncrement' }
-      if (rule && rule.params && Object.keys(rule.params).length) e.params = rule.params
-      if (h.label) e.label = h.label
-      d.inputs[n] = e
-    }
-  }
-  for (const [n, h] of Object.entries(hints)) {
-    if (d.inputs[n] || d.outputs[n]) continue
-    const e = { source: 'static' }
-    if (h.label) e.label = h.label
-    if (h.unit) e.unit = h.unit
-    if (Array.isArray(h.enum) && h.enum.length) e.enum = h.enum.slice()
-    d.inputs[n] = e
-  }
-  delete d.variables; delete d.defaultVariables; delete d.autoCompute
-  if (d.metadata && Object.keys(d.metadata).length === 0) delete d.metadata
-}
-
-function migrateOpVars(op) {
-  if (!op.inputs || typeof op.inputs !== 'object') op.inputs = {}
-  if (!op.outputs || typeof op.outputs !== 'object') op.outputs = {}
-  if (Object.keys(op.inputs).length || Object.keys(op.outputs).length) {
-    delete op.variables; delete op.placeholderHints
-    return
-  }
-  if (op.variables && typeof op.variables === 'object') {
-    for (const [n, v] of Object.entries(op.variables)) {
-      if (!v || !v.source) continue
-      if (v.source === 'auto' && v.strategy === 'derivedLength') {
-        op.outputs[n] = { source: 'auto', strategy: 'derivedLength', expr: v.expr || '' }
-        if (v.label) op.outputs[n].label = v.label
-        if (v.unit) op.outputs[n].unit = v.unit
-      } else if (v.source === 'auto') {
-        const e = { source: 'auto', strategy: v.strategy || 'autoIncrement' }
-        if (v.params && Object.keys(v.params).length) e.params = v.params
-        if (v.label) e.label = v.label
-        op.inputs[n] = e
-      } else {
-        const e = { source: 'static' }
-        if (v.value !== undefined) e.value = v.value
-        if (v.label) e.label = v.label
-        if (v.unit) e.unit = v.unit
-        if (Array.isArray(v.enum) && v.enum.length) e.enum = v.enum.slice()
-        op.inputs[n] = e
-      }
-    }
-  }
-  if (op.placeholderHints && typeof op.placeholderHints === 'object') {
-    for (const [n, h] of Object.entries(op.placeholderHints)) {
-      if (op.inputs[n] || op.outputs[n]) continue
-      const e = { source: 'static' }
-      if (h.label) e.label = h.label
-      if (h.unit) e.unit = h.unit
-      if (Array.isArray(h.enum) && h.enum.length) e.enum = h.enum.slice()
-      op.inputs[n] = e
-    }
-  }
-  delete op.variables; delete op.placeholderHints
-}
+// 旧 schema → v1.20 的迁移规则在 utils/protocol.js (migrateVars / migrateOpVars)
 
 // 半成品文档补全骨架, 保证表单可安全绑定; 每个 operation 附带 _rows/_rpSet (编辑态)
 function ensureShape(src) {
@@ -578,7 +469,7 @@ const handshakeDraft = ref('')
 function syncHandshakeDraft() {
   handshakeDraft.value = JSON.stringify(local.handshake || [], null, 2)
 }
-watch(activeHandshakeTab, tab => { if (tab === 'raw') syncHandshakeDraft() })
+watch(activeHandshakeTab, tab => { if (tab === 'hs-raw') syncHandshakeDraft() })
 function onHandshakeText(text) {
   try {
     const v = JSON.parse(text)
@@ -633,6 +524,22 @@ function getOpVars(op) {
         existing.source = 'protocol'
       } else {
         vars.push({ name, label: def.label, type: 'derived', unit: def.unit, expr: def.expr, isDerived: true, source: 'protocol' })
+      }
+    }
+  }
+  // 操作模板 (含 extends 链) 的 outputs — 模板可直接引用原型定义的计算字段;
+  //   漏收会让 FrameBuilder 误报「变量未声明」(操作级 outputs 为空时尤其明显)
+  const prof = profileOf(op)
+  if (prof && prof.outputs) {
+    for (const [name, def] of Object.entries(prof.outputs)) {
+      if (def.strategy !== 'derivedLength') continue
+      const existing = vars.find(v => v.name === name)
+      if (existing) {
+        existing.isDerived = true
+        existing.expr = def.expr
+        existing.source = 'profile'
+      } else {
+        vars.push({ name, label: def.label, type: 'derived', unit: def.unit, expr: def.expr, isDerived: true, source: 'profile' })
       }
     }
   }
@@ -695,54 +602,15 @@ onMounted(async () => {
   <div class="pform">
     <!-- v4: 区块 tab 化 — 基础/传输/握手/变量/操作 五段单选 (原左栏 5 卡改为 tab, 编辑区吃满宽度) -->
     <el-tabs v-model="activeSection" class="sec-tabs">
-      <!-- ① 基础信息 (协议名 + 传输与成帧 + 握手; 概念速查默认折叠为一行) -->
-      <el-tab-pane :label="t('基础信息')" name="basic">
+      <!-- ① 传输与成帧 (协议名 + 传输/成帧 + 握手) -->
+      <el-tab-pane name="basic">
+        <template #label>
+          <span class="step-label"><i>1</i>{{ t('传输与成帧') }}</span>
+        </template>
   <div id="basic-head"></div>
-    <el-card shadow="never" class="blk cheat-card">
-      <el-collapse>
-        <el-collapse-item name="cheat">
-          <template #title>
-            <span class="sec-title">{{ t('概念速查 · 配协议前先看 (4 条)') }}</span>
-          </template>
-          <div class="cheat-body">
-            <div class="cheat-g">
-              <b>{{ t('① 四层变量与覆盖顺序') }}</b>
-              <ul>
-                <li><code>{{ t('协议 inputs') }}</code> — {{ t('全协议默认值 (引擎按') }} <code>StartByteAddress</code> / <code>ByteCount</code> {{ t('查表)') }}</li>
-                <li><code>{{ t('操作 inputs') }}</code> — {{ t('仅该操作生效, 同名') }}<b>{{ t('整条替换') }}</b>{{ t('协议级') }}</li>
-                <li><code>{{ t('操作 outputs') }}</code> — <b>{{ t('派生量') }}</b>: {{ t('由 inputs 算出协议族字段 (如 Modbus 寄存器号 = 起始字节 ÷ 2)') }}</li>
-                <li><code>{{ t('标签 variables') }}</code> — {{ t('运行时最终覆盖 (在「设备与标签」页配)') }}</li>
-              </ul>
-            </div>
-            <div class="cheat-g">
-              <b>{{ t('② 请求模板 (requestTemplate) 的两种占位符') }}</b>
-              <ul>
-                <li><code>{Name:X4}</code> — {{ t('定宽十六进制, 查变量池渲染 (如') }} <code>{UnitID:X2}</code>)</li>
-                <li><code>{Name:raw}</code> — {{ t('变长字节注入, 写请求的载荷; 运行时注入, 键 = 标签的') }} <code>writeVariable</code></li>
-                <li><code>00 06</code> — {{ t('直接写字面量固定字节; 长度域等可变字段用') }} <code>{PDULength:X4}</code> {{ t('派生') }}</li>
-              </ul>
-            </div>
-            <div class="cheat-g">
-              <b>{{ t('③ 变量来源 (source)') }}</b>
-              <ul>
-                <li><code>static</code> — {{ t('固定值; 不写') }} <code>value</code> {{ t('则仅作 UI 提示, 不进变量池') }}</li>
-                <li><code>auto</code> — {{ t('运行时生成, 需') }} <code>strategy</code>: <code>autoIncrement</code> / <code>frameSlice</code> / <code>expr</code> / <code>crc</code></li>
-                <li><code>outputs</code> {{ t('段固定') }} <code>derivedLength</code> — {{ t('按载荷字节数算:') }} <code>{名称:len}</code>、<code>{Frame:fixed}</code></li>
-              </ul>
-            </div>
-            <div class="cheat-g">
-              <b>{{ t('④ 写能力怎么声明 (均在标签层, 协议层不声明)') }}</b>
-              <ul>
-                <li>{{ t('操作标') }} <code>kind = write</code> — {{ t('该操作可作写模板 (本页「操作定义」里设置)') }}</li>
-                <li>{{ t('标签') }} <code>writeOperation</code> — {{ t('可标量写') }} (<code>POST value</code>)</li>
-                <li>{{ t('标签') }} <code>writeBytesOperation</code> — {{ t('可变长写') }} (<code>POST bytes</code>)</li>
-                <li>{{ t('标签') }} <code>direction = write</code> — {{ t('只写标签, 不参与轮询') }}</li>
-              </ul>
-            </div>
-          </div>
-        </el-collapse-item>
-      </el-collapse>
-    </el-card>
+    <div class="concept-link">
+      <button class="link-btn" @click="openHelp">{{ t('第一次配协议? 看 4 条概念速查') }}</button>
+    </div>
 
     <!-- 基础信息 -->
     <el-card shadow="never" class="blk">
@@ -905,7 +773,7 @@ onMounted(async () => {
     <el-card shadow="never" class="blk">
       <!-- v5 (C4): 握手双模编辑 — 表单 (步骤卡片 + FrameBuilder) / 原始 JSON -->
       <el-tabs v-model="activeHandshakeTab" class="template-tabs">
-        <el-tab-pane :label="t('表单编辑')" name="visual">
+        <el-tab-pane :label="t('表单编辑')" name="hs-visual">
           <HandshakeEditor
             :model-value="local.handshake || []"
             @update:model-value="v => { local.handshake = v; emitDoc() }"
@@ -914,7 +782,7 @@ onMounted(async () => {
             {{ t('每步按序执行; 模板仅支持 hex 字面量与') }} {'{'}会话变量{'}'} / {'{'}Username{'}'} / {'{'}Password{'}'}{{ t('(定长帧渲染, 不支持派生长度 / autoIncrement / raw)。') }}
           </div>
         </el-tab-pane>
-        <el-tab-pane :label="t('JSON 模式')" name="raw">
+        <el-tab-pane v-if="advanced" :label="t('JSON 模式')" name="hs-raw">
           <el-input
             type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" :model-value="handshakeDraft"
             spellcheck="false"
@@ -925,45 +793,22 @@ onMounted(async () => {
         </el-tab-pane>
       </el-tabs>
     </el-card>
+      <div v-if="nextStep" class="step-foot">
+        <button class="btn small primary" @click="goStep(nextStep.name)">{{ t('下一步: {name} →', { name: t(nextStep.label) }) }}</button>
+      </div>
       </el-tab-pane>
 
-      <!-- ④ 全局变量 (v4.2: 默认卡片呈现 — 字段数随来源/策略变化; 可在卡头切换为紧凑表格) -->
-      <el-tab-pane :label="t('全局变量')" name="vars">
-  <div id="vars-head"></div>
-    <el-card shadow="never" class="blk vars-card">
-      <template #header>
-        <div class="blk-head">
-          <span class="blk-title">{{ t('全局变量') }}</span>
-          <span class="blk-desc">{{ t('协议级 inputs 为默认值, outputs 为派生量; 操作与标签可覆盖') }}</span>
-          <el-radio-group v-model="varLayout" size="small" class="vars-layout">
-            <el-radio-button value="cards">{{ t('卡片') }}</el-radio-button>
-            <el-radio-button value="table">{{ t('表格') }}</el-radio-button>
-          </el-radio-group>
-        </div>
-      </template>
-      <div v-if="aliasEntries.length" class="alias-note">
-        <span class="alias-title">{{ t('别名映射') }}</span>
-        <span v-for="[a, alias] in aliasEntries" :key="a" class="alias-item">
-          <code>{{ a }}</code> → <code>{{ alias }}</code>
-        </span>
-        <span class="alias-hint">{{ t('模板与变量名可用别名书写, 加载期改写为契约名 (只读, JSON 模式编辑)') }}</span>
-      </div>
-      <VariableTable :model-value="local.inputs" mode="inputs" :title="t('inputs · 全局共享')" :layout="varLayout" @change="emitDoc" />
-      <VariableTable :model-value="local.outputs" mode="outputs" :title="t('outputs · 全局派生')" :layout="varLayout" @change="emitDoc" />
-      <div class="field-hint" style="margin-top: 8px">
-        <code>static</code>{{ t('=默认值/提示') }}, <code>auto</code>{{ t('=运行时生成') }}; {{ t('派生长度声明为') }} <code>derivedLength</code>, <code>expr</code> {{ t('用') }} <code>{name:len}</code> {{ t('取变量字节长度。') }}
-      </div>
-    </el-card>
-      </el-tab-pane>
-
-      <!-- ⑤ 操作定义 (操作 tabs + 详情) — v4.8: 去掉外层卡片壳, 与其他 tab 的单卡布局统一 -->
-      <el-tab-pane :label="t('操作定义')" name="ops" class="pane-ops">
+    <!-- ② 操作定义 (操作 tabs + 详情) -->
+      <el-tab-pane name="ops" class="pane-ops">
+        <template #label>
+          <span class="step-label"><i>2</i>{{ t('操作定义') }}</span>
+        </template>
       <el-collapse class="profiles-collapse">
         <el-collapse-item name="profiles">
           <template #title>
-            <span class="profiles-title">{{ t('操作原型 (operationProfiles)') }}</span>
+            <span class="profiles-title">{{ t('操作模板') }}</span>
             <span class="profiles-count">{{ profileNames.length }}</span>
-            <span class="profiles-tip">{{ t('原型提供 outputs/responseParser 默认值; 支持 extends 单继承; 操作显式字段优先') }}</span>
+            <span class="profiles-tip">{{ t('模板提供 outputs/responseParser 默认值; 支持 extends 单继承; 操作显式字段优先') }}</span>
           </template>
           <div class="profiles-body">
             <div v-if="profileNames.length" class="profiles-list">
@@ -1045,7 +890,7 @@ onMounted(async () => {
                 <div class="field-hint">{{ t('read = 只读标签; write = 可作写请求模板') }}</div>
               </el-form-item>
               <el-form-item>
-                <template #label>{{ t('操作原型') }}<FieldHelp :text="t('operationProfiles: 可复用的 outputs/responseParser; 支持 extends 单继承; 本操作显式字段优先')" /></template>
+                <template #label>{{ t('操作模板') }}<FieldHelp :text="t('operationProfiles: 可复用的 outputs/responseParser; 支持 extends 单继承; 本操作显式字段优先')" /></template>
                 <el-select
                   :model-value="curOp.profile || ''" clearable filterable style="width: 220px" class="profile-select"
                   :placeholder="t('不使用原型')"
@@ -1056,8 +901,8 @@ onMounted(async () => {
                   </el-option>
                 </el-select>
                 <div class="field-hint">
-                  <template v-if="curOp.profile && !profileOf(curOp)">{{ t('原型 {name} 未定义', { name: curOp.profile }) }}</template>
-                  <template v-else>{{ t('原型提供默认值; 下方继承项只读, 点「覆盖」可改写') }}</template>
+                  <template v-if="curOp.profile && !profileOf(curOp)">{{ t('模板 {name} 未定义', { name: curOp.profile }) }}</template>
+                  <template v-else>{{ t('模板提供默认值; 下方继承项只读, 点「覆盖」可改写') }}</template>
                 </div>
               </el-form-item>
               <el-form-item>
@@ -1095,7 +940,7 @@ onMounted(async () => {
                       >{{ chip.name }}</el-tag>
                     </template>
                   </template>
-                  <span v-else class="text-muted">{{ t('此协议暂无变量声明 (「全局变量」页添加后在此提示)') }}</span>
+                  <span v-else class="text-muted">{{ t('此协议暂无变量声明 (「协议变量」页添加后在此提示)') }}</span>
                 </div>
                 <el-tabs v-model="activeTemplateTab" class="template-tabs">
                   <el-tab-pane :label="t('可视化构建')" name="visual">
@@ -1107,7 +952,7 @@ onMounted(async () => {
                       @update:model-value="v => { curOp.requestTemplate = v; emitDoc() }"
                     />
                   </el-tab-pane>
-                  <el-tab-pane :label="t('原始文本')" name="raw">
+                  <el-tab-pane v-if="advanced" :label="t('原始文本')" name="raw">
                     <div class="tpl-editor">
                       <div class="tpl-hint">{{ t('每行填十六进制字节 (如') }} <code>00 06</code>{{ t(') 或占位符 (如') }} <code>{StartAddress:X4}</code>、<code>{TransactionID:X4}</code>)</div>
                       <div v-for="(seg, j) in curOp._rows" :key="j" class="tpl-row">
@@ -1137,8 +982,8 @@ onMounted(async () => {
               <div class="op-vars">
                 <div v-if="inheritedOutputs.length" class="inherited-out">
                   <div class="inherited-head">
-                    <span class="chips-group">{{ t('继承的派生输出') }}</span>
-                    <span class="field-hint">{{ t('来自协议或操作原型, 只读; 需要改写时点「覆盖」') }}</span>
+                    <span class="chips-group">{{ t('继承的自动计算字段') }}</span>
+                    <span class="field-hint">{{ t('来自协议或操作模板, 只读; 需要改写时点「覆盖」') }}</span>
                   </div>
                   <div v-for="it in inheritedOutputs" :key="it.name" class="inherited-row">
                     <code>{{ it.name }}</code>
@@ -1149,8 +994,8 @@ onMounted(async () => {
                   </div>
                 </div>
                 <el-tabs v-model="activeOutputTab" class="template-tabs">
-                  <el-tab-pane :label="t('可视化表达式')" name="visual">
-                    <div v-for="[outName, outDef] in Object.entries(curOp.outputs || {})" :key="outName" class="output-expr-row">
+                  <el-tab-pane :label="t('可视化表达式')" name="out-visual">
+                    <div v-for="[outName, outDef] in sortedEntries(curOp.outputs)" :key="outName" class="output-expr-row">
                       <div class="output-expr-header">
                         <code>{{ outName }}</code>
                         <el-tag v-if="outDef.label" size="small" effect="plain">{{ outDef.label }}</el-tag>
@@ -1163,11 +1008,11 @@ onMounted(async () => {
                       />
                     </div>
                     <div v-if="!Object.keys(curOp.outputs || {}).length" class="text-muted">
-                      {{ inheritedOutputs.length ? t('本操作未覆盖任何派生输出, 直接使用上方继承项') : t('暂无派生输出, 可在下方表单添加') }}
+                      {{ inheritedOutputs.length ? t('本操作未覆盖任何自动计算字段, 直接使用上方继承项') : t('暂无自动计算字段, 可在下方表单添加') }}
                     </div>
                   </el-tab-pane>
-                  <el-tab-pane :label="t('表单编辑')" name="form">
-                    <VariableTable :model-value="curOp.outputs" mode="outputs" :title="t('派生输出 (outputs · 本操作)')" @change="emitDoc" />
+                  <el-tab-pane :label="t('表单编辑')" name="out-form">
+                    <VariableTable :model-value="curOp.outputs" mode="outputs" :title="t('自动计算字段 (outputs · 本操作)')" @change="emitDoc" />
                   </el-tab-pane>
                 </el-tabs>
               </div>
@@ -1218,24 +1063,47 @@ onMounted(async () => {
           </el-card>
         </section>
       </div>
+      <div v-if="nextStep" class="step-foot">
+        <button class="btn small primary" @click="goStep(nextStep.name)">{{ t('下一步: {name} →', { name: t(nextStep.label) }) }}</button>
+      </div>
+      </el-tab-pane>
+
+    <!-- ③ 协议变量 (协议级 inputs/outputs; 操作与标签可覆盖) -->
+    <el-tab-pane name="vars">
+      <template #label>
+        <span class="step-label"><i>3</i>{{ t('协议变量') }}</span>
+      </template>
+  <div id="vars-head"></div>
+    <el-card shadow="never" class="blk vars-card">
+      <template #header>
+        <div class="blk-head">
+          <span class="blk-title">{{ t('协议变量') }}</span>
+          <span class="blk-desc">{{ t('协议级 inputs 为默认值, outputs 为自动计算字段; 操作与标签可覆盖') }}</span>
+          <el-radio-group v-model="varLayout" size="small" class="vars-layout">
+            <el-radio-button value="cards">{{ t('卡片') }}</el-radio-button>
+            <el-radio-button value="table">{{ t('表格') }}</el-radio-button>
+          </el-radio-group>
+        </div>
+      </template>
+      <div v-if="aliasEntries.length" class="alias-note">
+        <span class="alias-title">{{ t('别名映射') }}</span>
+        <span v-for="[a, alias] in aliasEntries" :key="a" class="alias-item">
+          <code>{{ a }}</code> → <code>{{ alias }}</code>
+        </span>
+        <span class="alias-hint">{{ t('模板与变量名可用别名书写, 加载期改写为契约名 (只读, JSON 模式编辑)') }}</span>
+      </div>
+      <VariableTable :model-value="local.inputs" mode="inputs" :title="t('inputs · 全局共享')" :layout="varLayout" @change="emitDoc" />
+      <VariableTable :model-value="local.outputs" mode="outputs" :title="t('自动计算字段 (outputs · 全局)')" :layout="varLayout" @change="emitDoc" />
+      <div class="field-hint" style="margin-top: 8px">
+        <code>static</code>{{ t('=默认值/提示') }}, <code>auto</code>{{ t('=运行时生成') }}; {{ t('派生长度声明为') }} <code>derivedLength</code>, <code>expr</code> {{ t('用') }} <code>{name:len}</code> {{ t('取变量字节长度。') }}
+      </div>
+    </el-card>
       </el-tab-pane>
     </el-tabs>
   </div>
 </template>
 
 <style scoped>
-  /* 概念速查卡: 首次配协议的入口说明 */
-  .cheat-card { border-left: 3px solid var(--mp-accent-line); }
-  .cheat-card :deep(.el-collapse-item__header) { font-weight: 600; }
-  .cheat-body { display: flex; flex-direction: column; gap: 10px; }
-  .cheat-g { font-size: var(--mp-fs-sm); color: var(--mp-ink-2); line-height: 1.6; }
-  .cheat-g ul { margin: 4px 0 0 18px; padding: 0; }
-  .cheat-g li { margin: 2px 0; }
-  .cheat-g code {
-    background: var(--mp-surface-3); border-radius: 3px; padding: 0 4px;
-    font-size: var(--mp-fs-xs); color: var(--mp-ink);
-    font-family: var(--mp-font-mono);
-  }
 /* v4: 区块 tab 化 — 提示条(常驻) + tab 容器, 纵向填满 */
 .pform {
   height: 100%;
@@ -1250,7 +1118,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
 }
-/* 段内导航: 吸顶分段控件 (基础信息 / 全局变量 / 操作定义) */
+/* 段内导航: 吸顶分段控件 (1 传输与成帧 / 2 操作定义 / 3 协议变量) */
 .sec-tabs :deep(.el-tabs__header) {
   position: sticky;
   top: 0;
@@ -1282,6 +1150,36 @@ onMounted(async () => {
   font-weight: 600;
   box-shadow: var(--mp-shadow-1);
 }
+/* 步骤号: 页签即配置顺序, 不必再额外画一条步骤条 */
+.step-label { display: inline-flex; align-items: center; gap: 6px; }
+.step-label i {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  background: var(--mp-surface-3);
+  color: var(--mp-muted);
+}
+.sec-tabs :deep(.el-tabs__item.is-active) .step-label i {
+  background: var(--mp-accent-soft);
+  color: var(--mp-accent-hover);
+}
+/* 段尾「下一步」: 只给前进方向, 不重复罗列全部页签 */
+.step-foot { display: flex; justify-content: flex-end; padding: var(--mp-sp-3) 0 var(--mp-sp-2); }
+.concept-link { margin: -2px 0 var(--mp-sp-2); }
+.concept-link .link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--mp-muted);
+  font-size: var(--mp-fs-xs);
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+.concept-link .link-btn:hover { color: var(--mp-accent-hover); }
 /* 卡片头部: 标题 + 说明 */
 .blk-head {
   display: flex;

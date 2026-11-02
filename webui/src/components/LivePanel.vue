@@ -96,6 +96,14 @@ function qualityKind(q) {
   return 'warn'
 }
 
+// 质量码中文化: 引擎仍吐 Good/Bad/Uncertain, 界面统一显示可读文案
+function qualityText(q) {
+  if (q === 'Good') return t('正常')
+  if (q === 'Bad') return t('异常')
+  if (q === 'Uncertain') return t('不确定')
+  return q
+}
+
 function fmtValue(v) {
   if (v === null || v === undefined) return '-'
   if (typeof v === 'number') return formatFloat(v)
@@ -451,7 +459,7 @@ onUnmounted(() => {
     <PageHeader :title="t('实时监控')" :desc="t('采集值快照与标签写入; 双击数值可快速写入 (Enter 提交 / Esc 取消); 名称优先显示配置的中文名, 数值后为单位。')">
       <template #meta>
         <StatusBadge :kind="streaming ? 'ok' : 'off'" :text="streaming ? t('推送中') : t('已暂停')" />
-        <span>{{ t('{n} 标签 · {good} Good', { n: rows.length, good: goodCount }) }}</span>
+        <span>{{ t('{n} 标签 · {good} 正常', { n: rows.length, good: goodCount }) }}</span>
         <span v-if="runtimeState.lastUpdate">· {{ t('更新于 {time}', { time: fmtTime(runtimeState.lastUpdate) }) }}</span>
       </template>
     </PageHeader>
@@ -505,7 +513,7 @@ onUnmounted(() => {
               <div class="group-line">
                 <span class="group-arrow">{{ collapsed[g.device] ? '▸' : '▾' }}</span>
                 <span class="group-name">{{ g.device }}</span>
-                <span class="group-meta">{{ t('{n} 标签 · {good} Good', { n: g.rows.length, good: g.goodCount }) }}</span>
+                <span class="group-meta">{{ t('{n} 标签 · {good} 正常', { n: g.rows.length, good: g.goodCount }) }}</span>
                 <span v-if="g.lastTs" class="group-time">{{ t('更新于 {time}', { time: fmtTime(g.lastTs) }) }}</span>
               </div>
             </td>
@@ -554,7 +562,7 @@ onUnmounted(() => {
               </template>
             </td>
             <td>
-              <StatusBadge :kind="qualityKind(r.quality)" :text="r.quality" />
+              <StatusBadge :kind="qualityKind(r.quality)" :text="qualityText(r.quality)" />
             </td>
             <td v-if="hasTrend" class="spark-cell">
               <svg

@@ -13,6 +13,7 @@ import {
   listBackups, restoreBackup, validateConfig
 } from '../api'
 import { t, locale } from '../i18n'
+import { advanced } from '../composables/useAdvancedMode'
 import { parseConfigJson } from '../jsonText'
 // 新建协议的起点直接复用仓库内配置, 避免前端再维护一份模板 (v1.30)
 import modbusTcpDoc from '../../../configs/protocols/modbus-tcp.json'
@@ -25,10 +26,9 @@ const props = defineProps({
   //   { create:true } 新建协议 | { add:'device'|'tag' } | { device:'PLC-001' } | { focus:issue }
   intent: { type: Object, default: null }
 })
-const emit = defineEmits(['changed', 'dirty'])   // changed: 保存/删除/回滚后刷新全局统计; dirty: 顶栏切页守卫
+const emit = defineEmits(['changed', 'dirty', 'scope-change'])   // changed: 保存/删除/回滚后刷新全局统计; dirty: 顶栏切页守卫
 
 const isProtocols = props.scope === 'protocols'
-const titles = { protocols: '协议配置', tags: '设备与标签' }
 
 const items = ref([])
 const selected = ref('')
@@ -194,6 +194,19 @@ function showForm() {
   activeTab.value = 'form'
 }
 function showJson() { activeTab.value = 'json' }
+
+/// 「更多」菜单: 低频动作收进下拉, 工具栏只留 保存 与 模式切换
+function onMore(cmd) {
+  if (cmd === 'selfcheck') onSelfCheck()
+  else if (cmd === 'preview') showPreview.value = true
+  else if (cmd === 'delete') onDelete()
+  else if (cmd.indexOf('restore:') === 0) onRestore(cmd.slice(8))
+}
+
+// 切回简单视图时收起 JSON 页 (语法错误期间仍保留, 否则无法修复)
+watch(advanced, v => {
+  if (!v && activeTab.value === 'json' && !parseError.value) showForm()
+})
 
 async function onSave() {
   try {
@@ -460,10 +473,16 @@ watch(() => props.scope, () => {
 
 <template>
   <div class="workbench">
-    <PageHeader :title="t(titles[scope] || scope)" :desc="pageDesc">
+    <PageHeader :title="t('配置')" :desc="pageDesc">
       <template #meta>
         <span v-if="isProtocols">{{ t('共 {n} 个协议', { n: items.length }) }}</span>
         <span v-else>{{ t('设备与标签统一维护在同一个文件') }}</span>
+      </template>
+      <template #actions>
+        <div class="segmented scope-switch">
+          <button :class="{ active: isProtocols }" @click="emit('scope-change', 'protocols')">{{ t('协议') }}</button>
+          <button :class="{ active: !isProtocols }" @click="emit('scope-change', 'tags')">{{ t('设备与标签') }}</button>
+        </div>
       </template>
     </PageHeader>
 
@@ -526,26 +545,25 @@ watch(() => props.scope, () => {
           <span class="file-name mono">{{ selected }}.json</span>
           <span v-if="dirty" class="dirty-mark">{{ t('未保存') }}</span>
           <span class="spacer"></span>
-          <!-- 历史备份: 低频动作收进下拉, 不再常驻一行 -->
-          <el-dropdown v-if="backups.length" trigger="click" @command="onRestore">
-            <button class="btn small">{{ t('历史备份 ({n})', { n: backups.length }) }}</button>
+          <!-- 简单视图只留表单; JSON 与诊断类动作收进「更多」 -->
+          <div v-if="advanced || parseError" class="segmented">
+            <button :class="{ active: activeTab === 'form' }" :disabled="!!parseError" @click="showForm">{{ t('表单') }}</button>
+            <button :class="{ active: activeTab === 'json' }" @click="showJson">JSON</button>
+          </div>
+          <el-dropdown trigger="click" @command="onMore">
+            <button class="btn small">{{ t('更多') }} ▾</button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item v-for="tag in backups" :key="tag" :command="tag">
+                <el-dropdown-item command="selfcheck" :disabled="!selected">{{ t('自检') }}</el-dropdown-item>
+                <el-dropdown-item v-if="isProtocols" command="preview" :disabled="!!parseError">{{ t('试渲染') }}</el-dropdown-item>
+                <el-dropdown-item v-for="tag in backups" :key="tag" :command="'restore:' + tag" divided>
                   {{ t('回滚到 {tag}', { tag }) }}
                 </el-dropdown-item>
+                <el-dropdown-item v-if="!backups.length" disabled>{{ t('暂无历史备份') }}</el-dropdown-item>
+                <el-dropdown-item v-if="isProtocols" command="delete" divided>{{ t('删除该协议') }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <div class="segmented">
-            <button :class="{ active: activeTab === 'form' }" @click="showForm">{{ t('表单') }}</button>
-            <button :class="{ active: activeTab === 'json' }" @click="showJson">JSON</button>
-          </div>
-          <button v-if="isProtocols" class="btn danger small" @click="() => onDelete()">{{ t('删除') }}</button>
-          <!-- 试渲染: 用当前编辑器内容渲染一帧 (只读, 不落盘/不重载) -->
-          <button v-if="isProtocols" class="btn small" :disabled="!!parseError" @click="showPreview = true">{{ t('试渲染') }}</button>
-          <!-- 方案 2: 只读自检 (不落盘) — 保存前先看问题 -->
-          <button class="btn small" :disabled="!selected" @click="onSelfCheck">{{ t('自检') }}</button>
           <button class="btn primary small" :disabled="!dirty" @click="onSave">{{ t('保存') }}</button>
         </div>
 
@@ -854,6 +872,9 @@ watch(() => props.scope, () => {
   flex-shrink: 0;
 }
 .spacer { flex: 1; }
+
+/* 页头子页切换: 比工具栏里的模式切换略大一号 */
+.scope-switch button { height: 28px; padding: 0 14px; font-size: var(--mp-fs-sm); }
 
 /* 表单/JSON 模式切换 (分段控件) */
 .segmented {

@@ -1,15 +1,16 @@
 <script setup>
 // 应用骨架 — 顶部导航 (品牌 / 分组菜单 / 全局状态 / 热重载与帮助)
 // 页面为组件内状态 (无路由); 默认落地「总览」, 之后记住上次页面。
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch, defineAsyncComponent } from 'vue'
 import { ElConfigProvider } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import enLocale from 'element-plus/es/locale/lang/en'
 import LoginGate from './components/LoginGate.vue'
-import ScopeManager from './components/ScopeManager.vue'
-import SimPanel from './components/SimPanel.vue'
-import LivePanel from './components/LivePanel.vue'
-import MqttTestPanel from './components/MqttTestPanel.vue'
+// 面板按需加载: 首屏只带总览, 其余页面各自成 chunk (配置工作台含两个 2000 行级组件)
+const ScopeManager = defineAsyncComponent(() => import('./components/ScopeManager.vue'))
+const SimPanel = defineAsyncComponent(() => import('./components/SimPanel.vue'))
+const LivePanel = defineAsyncComponent(() => import('./components/LivePanel.vue'))
+const MqttTestPanel = defineAsyncComponent(() => import('./components/MqttTestPanel.vue'))
 import OverviewPanel from './components/OverviewPanel.vue'
 import HelpDrawer from './components/HelpDrawer.vue'
 import { listConfigs, setToken, reloadConfig, setAuthLostHandler, health } from './api'
@@ -18,6 +19,8 @@ import {
   startRuntimeStatus, stopRuntimeStatus, refreshAll,
   goodCount, onlineDevices, deviceStats, runtimeState, recordReload
 } from './composables/useRuntimeStatus'
+import { advanced, toggleAdvanced } from './composables/useAdvancedMode'
+import { helpOpen } from './composables/useHelp'
 
 const VIEW_KEY = 'mp.ui.view'
 
@@ -36,10 +39,7 @@ const NAV = [
   },
   {
     group: '配置',
-    items: [
-      { key: 'protocols', label: '协议配置' },
-      { key: 'tags', label: '设备与标签' }
-    ]
+    items: [{ key: 'config', label: '配置' }]
   }
 ]
 
@@ -48,9 +48,14 @@ const authed = ref(false)
 // 管理面是否启用 token 认证 — 来自 /health, 未启用时无需登录页与「退出」
 const authRequired = ref(true)
 const activeView = ref('overview')
+// 配置工作台的子页: protocols = 协议, tags = 设备与标签 (右侧切换, 不再占顶层导航)
+const configScope = ref('protocols')
 const banner = ref('')
 const bannerKind = ref('ok')
-const showHelp = ref(false)
+const showHelp = computed({
+  get: () => helpOpen.value,
+  set: v => { helpOpen.value = v }
+})
 const reloadBusy = ref(false)
 // 跨页跳转意图 (总览的「开始使用」/快捷动作 → 设备与标签页定位或新建)
 const navIntent = ref(null)
@@ -92,6 +97,17 @@ function revealActiveNavItem() {
   else if (item.left < box.left + pad) el.scrollLeft += item.left - box.left - pad
 }
 
+// 窗口尺寸变化: 从宽屏拖窄后高亮项可能停在可视区外, 需重新滚入
+let navResizeRaf = 0
+function onWindowResize() {
+  if (navResizeRaf) return
+  navResizeRaf = requestAnimationFrame(() => {
+    navResizeRaf = 0
+    revealActiveNavItem()
+    updateNavFade()
+  })
+}
+
 watch([authed, locale, activeView], async () => {
   await nextTick()
   updateNavFade()
@@ -103,7 +119,7 @@ watch([authed, locale, activeView], async () => {
 const elLocale = computed(() => (locale.value === 'zh' ? zhCn : enLocale))
 const statusText = computed(() => {
   const dev = deviceStats.value.length
-  return t('{online}/{total} 设备在线 · {good} Good', {
+  return t('{online}/{total} 设备在线 · {good} 点正常', {
     online: onlineDevices.value,
     total: dev,
     good: goodCount.value
@@ -120,8 +136,14 @@ async function probeAuthRequired() {
 
 // 启动探测: 先问 /health 是否启用认证, 再用已存 token 试探一次受保护端点
 onMounted(async () => {
-  window.addEventListener('resize', updateNavFade)
-  const saved = localStorage.getItem(VIEW_KEY)
+  window.addEventListener('resize', onWindowResize)
+  let saved = localStorage.getItem(VIEW_KEY)
+  // 旧版本把「协议配置 / 设备与标签」作为两个顶层页; 合并后落到配置页并保留子页
+  if (saved === 'protocols' || saved === 'tags') {
+    configScope.value = saved
+    saved = 'config'
+    localStorage.setItem(VIEW_KEY, saved)
+  }
   if (saved && NAV.some(g => g.items.some(i => i.key === saved))) activeView.value = saved
   // 任意请求 401 → 统一切回登录页 (此前各组件只各自报错, 用户被困在全按钮报错界面)
   setAuthLostHandler(() => {
@@ -152,7 +174,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', updateNavFade)
+  window.removeEventListener('resize', onWindowResize)
+  if (navResizeRaf) cancelAnimationFrame(navResizeRaf)
   stopRuntimeStatus()
 })
 
@@ -183,13 +206,24 @@ function showBanner(kind, msg) {
 }
 
 function go(view, intent) {
-  const leaving = view !== activeView.value
-  if (leaving && configDirty.value &&
+  // 兼容旧入口 (protocols / tags): 统一落到配置页, 并把子页切过去
+  let target = view
+  let nextScope = configScope.value
+  if (view === 'protocols' || view === 'tags') {
+    target = 'config'
+    nextScope = view
+  } else if (view === 'config' && intent && intent.scope) {
+    nextScope = intent.scope
+  }
+  const leaving = target !== activeView.value
+  const scopeChanged = target === 'config' && nextScope !== configScope.value
+  if ((leaving || scopeChanged) && configDirty.value &&
       !confirm(t('当前配置有未保存的修改，离开后将丢失。确定离开？'))) return
-  if (leaving) configDirty.value = false
+  if (leaving || scopeChanged) configDirty.value = false
+  configScope.value = nextScope
   navIntent.value = intent || null
-  activeView.value = view
-  localStorage.setItem(VIEW_KEY, view)
+  activeView.value = target
+  localStorage.setItem(VIEW_KEY, target)
 }
 
 function onNav(key) {
@@ -257,6 +291,11 @@ async function onConfigChanged() {
         </div>
 
         <div class="tb-actions">
+          <button
+            class="tb-btn adv" :class="{ on: advanced }"
+            :title="advanced ? t('当前为高级模式, 点击切回简单视图') : t('当前为简单视图, 点击显示 JSON 与原始文本')"
+            @click="toggleAdvanced"
+          >{{ advanced ? t('高级模式') : t('简单模式') }}</button>
           <button class="tb-btn" :disabled="reloadBusy" @click="onReload">
             {{ reloadBusy ? t('重载中…') : t('热重载') }}
           </button>
@@ -279,13 +318,14 @@ async function onConfigChanged() {
         <SimPanel v-else-if="activeView === 'sim'" @navigate="go" />
         <MqttTestPanel v-else-if="activeView === 'mqtt'" />
         <ScopeManager
-          v-else :key="activeView" :scope="activeView" :intent="navIntent"
+          v-else :key="configScope" :scope="configScope" :intent="navIntent"
           @changed="onConfigChanged"
           @dirty="configDirty = $event"
+          @scope-change="go('config', { scope: $event })"
         />
       </main>
 
-      <HelpDrawer v-model="showHelp" :view="activeView" />
+      <HelpDrawer v-model="showHelp" :view="activeView === 'config' ? configScope : activeView" />
     </div>
   </el-config-provider>
 </template>
@@ -448,6 +488,11 @@ async function onConfigChanged() {
 .tb-btn.subtle { color: var(--mp-topbar-muted); border-color: transparent; background: transparent; }
 .tb-btn.subtle:hover { color: var(--mp-topbar-ink); background: rgba(255, 255, 255, .08); }
 .tb-btn.lang { min-width: 34px; font-weight: 600; letter-spacing: .02em; }
+.tb-btn.adv.on {
+  color: var(--mp-topbar-active-ink);
+  border-color: var(--mp-accent);
+  background: rgba(255, 255, 255, .12);
+}
 
 .banner {
   margin: var(--mp-sp-3) var(--mp-sp-5) 0;

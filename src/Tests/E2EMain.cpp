@@ -1673,6 +1673,20 @@ int RunE2E() {
               listResp.find("200") != std::string::npos);
         Check("列表包含 modbus", listResp.find("modbus") != std::string::npos);
 
+        // 路径参数 %XX 解码 (与 query 同一实现): %70rotocols 等价于 protocols
+        const std::string encListResp = HttpGet(
+            "GET /api/config/%70rotocols HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n",
+            18080);
+        Check("路径参数支持 %XX 解码",
+              encListResp.find("200") != std::string::npos &&
+              encListResp.find("modbus") != std::string::npos);
+
+        // 请求头有界读取: 无 CRLFCRLF 的超长头在 16KB 处被拒 (431), 不再无限累积
+        std::string hugeHead = "GET / HTTP/1.1\r\nHost: t\r\nX-Pad: ";
+        hugeHead.append(16 * 1024 - hugeHead.size(), 'A');
+        const std::string hugeResp = HttpGet(hugeHead, 18080);
+        Check("超长请求头 → 431", hugeResp.find("431") != std::string::npos);
+
         // schema 缁旑垳鍋?閳?FieldDescriptor 娉ㄥ唽琛?JSON (M2); 閸濆秴绨叉径? 鐠囨槒鍤?EOF
         const std::string schemaResp = [&]() {
             asio::io_context io;
@@ -2267,6 +2281,21 @@ int RunE2E() {
         Check("?device= 过滤只留 Pressure",
               fResp.find("Pressure") != std::string::npos &&
               fResp.find("Temperature") == std::string::npos);
+
+        // ?device= 百分号解码: PLC%2D002 等价于 PLC-002 (QueryParam 统一解 %XX)
+        const std::string decResp = HttpGet(
+            "GET /api/data/latest?device=PLC%2D002 HTTP/1.1\r\nHost: t\r\n"
+            "Connection: close\r\n\r\n");
+        Check("?device= 支持 %XX 解码后过滤",
+              decResp.find("Pressure") != std::string::npos &&
+              decResp.find("Temperature") == std::string::npos);
+
+        // 非法/截断序列原样保留: %2 不解成 '-'，不应命中 PLC-002
+        const std::string badResp = HttpGet(
+            "GET /api/data/latest?device=PLC%2 HTTP/1.1\r\nHost: t\r\n"
+            "Connection: close\r\n\r\n");
+        Check("?device= 非法 %XX 序列原样保留",
+              badResp.find("\"count\":0") != std::string::npos);
 
         // 未知路径 閳?404
         const std::string nfResp = HttpGet(

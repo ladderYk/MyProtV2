@@ -22,7 +22,7 @@ const props = defineProps({
 const emit = defineEmits(['change'])
 
 const isOutputs = () => props.mode === 'outputs'
-const headerTitle = () => props.title || t(isOutputs() ? '派生输出 (derivedLength)' : '输入变量 (inputs)')
+const headerTitle = () => props.title || t(isOutputs() ? '自动计算字段 (derivedLength)' : '输入变量 (inputs)')
 
 const AC_STRATEGIES = [
   { value: 'autoIncrement', label: '自增计数 (autoIncrement)', hint: '单调递增的 uint, seed=首次返回值' },
@@ -251,7 +251,7 @@ function removeEnum(name, idx) {
       v-if="!entries().length"
       type="info" :closable="false" show-icon
       :title="isOutputs()
-        ? t('尚无派生输出。长度/数量字段在此声明为 derivedLength。')
+        ? t('尚无自动计算字段。长度/数量字段在此声明为 derivedLength。')
         : t('尚无变量。模板 {占位符} 引用的变量须在此声明。')"
     />
 

@@ -3,6 +3,7 @@
 // 完整路由设计见 modules/07_WebApi.md + design-proposal/v2-config-ui-design。
 
 #include "MyProt/WebApi/WebApiServer.hpp"
+#include "MyProt/WebApi/QueryString.hpp"
 #include "MyProt/Core/Metrics.hpp"
 #include "MyProt/Core/Platform.hpp"     // 跨平台环境变量读取
 #include "MyProt/Service/SchemaRegistry.hpp"
@@ -13,6 +14,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <fstream>
+#include <vector>
 
 namespace MyProt { namespace WebApi {
 
@@ -21,6 +23,7 @@ namespace {
 const char* kTokenEnvVar = "MYPROT_API_TOKEN";
 const char* kDefaultPort = "8080";
 const size_t kMaxBodySize = 1u * 1024u * 1024u;      // 请求体上限 1MB
+const size_t kMaxHeaderSize = 16u * 1024u;           // 请求头上限 16KB (含请求行)
 
 std::string ReasonPhrase(int code) {
     switch (code) {
@@ -30,6 +33,7 @@ std::string ReasonPhrase(int code) {
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 413: return "Payload Too Large";
+        case 431: return "Request Header Fields Too Large";
         case 429: return "Too Many Requests";
         case 500: return "Internal Server Error";
         case 503: return "Service Unavailable";
@@ -150,36 +154,9 @@ std::string ReadEnvValue(const char* name) {
     return Core::Platform::GetEnv(name);
 }
 
-/// 从 "/path?key=v&..." 提取 query 参数值 (含最小 %XX 解码; 未找到返回空串)
+/// 从 "/path?key=v&..." 提取 query 参数值 (含 %XX 解码; 未找到返回空串)
 std::string QueryParamValue(const std::string& path, const char* key) {
-    const size_t q = path.find('?');
-    if (q == std::string::npos) return std::string();
-    const std::string needle = std::string(key) + "=";
-    size_t pos = q + 1;
-    while (pos <= path.size()) {
-        const size_t amp = path.find('&', pos);
-        const std::string pairStr = path.substr(pos,
-            (amp == std::string::npos) ? std::string::npos : amp - pos);
-        if (pairStr.compare(0, needle.size(), needle) == 0) {
-            const std::string val = pairStr.substr(needle.size());
-            std::string out;                              // 最小 %XX 解码
-            for (size_t i = 0; i < val.size(); ++i) {
-                if (val[i] == '%' && i + 2 < val.size()
-                        && std::isxdigit(static_cast<unsigned char>(val[i + 1]))
-                        && std::isxdigit(static_cast<unsigned char>(val[i + 2]))) {
-                    out += static_cast<char>(
-                        std::strtol(val.substr(i + 1, 2).c_str(), nullptr, 16));
-                    i += 2;
-                } else {
-                    out += val[i];
-                }
-            }
-            return out;
-        }
-        if (amp == std::string::npos) break;
-        pos = amp + 1;
-    }
-    return std::string();
+    return QueryParam(path, std::string(key));
 }
 
 } // namespace
@@ -253,107 +230,132 @@ static bool IsStreamPath(const std::string& path,
 
 void WebApiServer::HandleConnection(
         const std::shared_ptr<asio::ip::tcp::socket>& socket) {
-    auto buf = std::shared_ptr<asio::streambuf>(new asio::streambuf());
+    std::shared_ptr<std::string> header(new std::string());
+    ReadHeader(socket, header);
+}
 
-    asio::async_read_until(*socket, *buf, "\r\n\r\n",
-        [this, socket, buf](const asio::error_code& ec, size_t /*bytes*/) {
+void WebApiServer::ReadHeader(
+        const std::shared_ptr<asio::ip::tcp::socket>& socket,
+        const std::shared_ptr<std::string>& header) {
+    // 有界累积: 旧实现用 asio::streambuf + async_read_until,
+    // 头部无长度上限 —— 客户端只要不发 \r\n\r\n 就能把单连接内存推高。
+    std::shared_ptr<std::vector<char> > chunk(new std::vector<char>(4096));
+    socket->async_read_some(asio::buffer(&(*chunk)[0], chunk->size()),
+        [this, socket, header, chunk](const asio::error_code& ec, std::size_t n) {
             if (ec) return;
-
-            std::istream is(buf.get());
-
-            // ── 请求行 ──
-            std::string requestLine;
-            std::getline(is, requestLine);
-            if (!requestLine.empty() && requestLine[requestLine.size() - 1] == '\r') {
-                requestLine.erase(requestLine.size() - 1);
-            }
-            const size_t sp1 = requestLine.find(' ');
-            const size_t sp2 = (sp1 == std::string::npos)
-                ? std::string::npos : requestLine.find(' ', sp1 + 1);
-            if (sp1 == std::string::npos || sp2 == std::string::npos) {
-                RespondAndClose(socket, 400, "text/plain; charset=utf-8", "bad request");
-                return;
-            }
-            const std::string method = requestLine.substr(0, sp1);
-            const std::string path   = requestLine.substr(sp1 + 1, sp2 - sp1 - 1);
-
-            // ── 头部 ──
-            size_t contentLength = 0;
-            std::string authToken;
-            std::string headerLine;
-            bool malformed = false;
-            while (std::getline(is, headerLine)) {
-                if (!headerLine.empty() && headerLine[headerLine.size() - 1] == '\r') {
-                    headerLine.erase(headerLine.size() - 1);
+            header->append(&(*chunk)[0], n);
+            const std::size_t end = header->find("\r\n\r\n");
+            if (end == std::string::npos) {
+                if (header->size() >= kMaxHeaderSize) {
+                    RespondAndClose(socket, 431, "application/json",
+                                    "{\"error\":\"request header too large\"}");
+                    return;
                 }
-                if (headerLine.empty()) break;            // 头结束
-                const size_t colonPos = headerLine.find(':');
-                if (colonPos == std::string::npos) continue;
-                const std::string name = headerLine.substr(0, colonPos);
-                std::string value = headerLine.substr(colonPos + 1);
-                const size_t vbegin = value.find_first_not_of(" \t");
-                value = (vbegin == std::string::npos) ? "" : value.substr(vbegin);
-
-                if (HeaderIs(name, "content-length")) {
-                    // strtoll 跨平台 (MSVC _atoi64 仅 Windows 可用)
-                    const long long parsedLen = std::strtoll(value.c_str(), NULL, 10);
-                    contentLength = parsedLen > 0 ? static_cast<size_t>(parsedLen) : 0;
-                    if (contentLength > kMaxBodySize) malformed = true;
-                } else if (HeaderIs(name, "authorization")) {
-                    if (value.size() > 7 && value.compare(0, 7, "Bearer ") == 0) {
-                        authToken = value.substr(7);
-                    }
-                }
-            }
-
-            if (malformed) {                              // 413 → 写回后关闭
-                RespondAndClose(socket, 413, "application/json",
-                                "{\"error\":\"payload too large\"}");
+                ReadHeader(socket, header);          // 总量受 kMaxHeaderSize 约束
                 return;
             }
-
-            // ── SSE 流式路由 (独立于 Connection: close 模型; 仅 GET, 无 body) ──
-            // 事件流前缀优先匹配 (更具体), 再落到数据流快照路由
-            const bool streamMatched =
-                IsStreamPath(path, _streamProvider, _streamPrefix);
-            const bool eventMatched =
-                IsStreamPath(path, _eventProvider, _eventPrefix);
-            if (method == "GET" && (streamMatched || eventMatched)) {
-                const int intervalMs =
-                    eventMatched ? _eventIntervalMs : _streamIntervalMs;
-                const SnapshotProvider& provider =
-                    eventMatched ? _eventProvider : _streamProvider;
-                auto session = std::shared_ptr<StreamSession>(
-                    new StreamSession(_io, path, intervalMs, provider));
-                session->socket = socket;
-                HandleStream(session, authToken);
+            if (end + 4 > kMaxHeaderSize) {
+                RespondAndClose(socket, 431, "application/json",
+                                "{\"error\":\"request header too large\"}");
                 return;
             }
-
-            // ── Body (streambuf 中可能已含部分) ──
-            auto bodyStr = std::shared_ptr<std::string>(new std::string());
-            const size_t buffered = static_cast<size_t>(buf->in_avail());
-            const size_t take = (buffered < contentLength) ? buffered : contentLength;
-            if (take > 0) {
-                bodyStr->resize(take);
-                is.read(&(*bodyStr)[0], static_cast<std::streamsize>(take));
-            }
-
-            if (bodyStr->size() < contentLength) {        // 继续读剩余 body
-                const size_t remaining = contentLength - bodyStr->size();
-                const size_t oldSize = bodyStr->size();
-                bodyStr->resize(contentLength);
-                asio::async_read(*socket,
-                    asio::buffer(&(*bodyStr)[oldSize], remaining),
-                    [this, socket, bodyStr, method, path, authToken]
-                        (const asio::error_code& ec2, size_t) {
-                        if (ec2) return;
-                        FinishRequest(socket, method, path, authToken, *bodyStr);
-                    });
-            } else {
-                FinishRequest(socket, method, path, authToken, *bodyStr);
-            }
+            HandleRequest(socket, header->substr(0, end), header->substr(end + 4));
         });
+}
+
+void WebApiServer::HandleRequest(
+        const std::shared_ptr<asio::ip::tcp::socket>& socket,
+        const std::string& head, const std::string& rest) {
+    std::istringstream is(head);
+
+    // ── 请求行 ──
+    std::string requestLine;
+    std::getline(is, requestLine);
+    if (!requestLine.empty() && requestLine[requestLine.size() - 1] == '\r') {
+        requestLine.erase(requestLine.size() - 1);
+    }
+    const size_t sp1 = requestLine.find(' ');
+    const size_t sp2 = (sp1 == std::string::npos)
+        ? std::string::npos : requestLine.find(' ', sp1 + 1);
+    if (sp1 == std::string::npos || sp2 == std::string::npos) {
+        RespondAndClose(socket, 400, "text/plain; charset=utf-8", "bad request");
+        return;
+    }
+    const std::string method = requestLine.substr(0, sp1);
+    const std::string path   = requestLine.substr(sp1 + 1, sp2 - sp1 - 1);
+
+    // ── 头部 ──
+    size_t contentLength = 0;
+    std::string authToken;
+    std::string headerLine;
+    bool malformed = false;
+    while (std::getline(is, headerLine)) {
+        if (!headerLine.empty() && headerLine[headerLine.size() - 1] == '\r') {
+            headerLine.erase(headerLine.size() - 1);
+        }
+        if (headerLine.empty()) break;                // 头结束
+        const size_t colonPos = headerLine.find(':');
+        if (colonPos == std::string::npos) continue;
+        const std::string name = headerLine.substr(0, colonPos);
+        std::string value = headerLine.substr(colonPos + 1);
+        const size_t vbegin = value.find_first_not_of(" \t");
+        value = (vbegin == std::string::npos) ? "" : value.substr(vbegin);
+
+        if (HeaderIs(name, "content-length")) {
+            // strtoll 跨平台 (MSVC _atoi64 仅 Windows 可用)
+            const long long parsedLen = std::strtoll(value.c_str(), NULL, 10);
+            contentLength = parsedLen > 0 ? static_cast<size_t>(parsedLen) : 0;
+            if (contentLength > kMaxBodySize) malformed = true;
+        } else if (HeaderIs(name, "authorization")) {
+            if (value.size() > 7 && value.compare(0, 7, "Bearer ") == 0) {
+                authToken = value.substr(7);
+            }
+        }
+    }
+
+    if (malformed) {                                  // 413 → 写回后关闭
+        RespondAndClose(socket, 413, "application/json",
+                        "{\"error\":\"payload too large\"}");
+        return;
+    }
+
+    // ── SSE 流式路由 (独立于 Connection: close 模型; 仅 GET, 无 body) ──
+    // 事件流前缀优先匹配 (更具体), 再落到数据流快照路由
+    const bool streamMatched =
+        IsStreamPath(path, _streamProvider, _streamPrefix);
+    const bool eventMatched =
+        IsStreamPath(path, _eventProvider, _eventPrefix);
+    if (method == "GET" && (streamMatched || eventMatched)) {
+        const int intervalMs =
+            eventMatched ? _eventIntervalMs : _streamIntervalMs;
+        const SnapshotProvider& provider =
+            eventMatched ? _eventProvider : _streamProvider;
+        auto session = std::shared_ptr<StreamSession>(
+            new StreamSession(_io, path, intervalMs, provider));
+        session->socket = socket;
+        HandleStream(session, authToken);
+        return;
+    }
+
+    // ── Body (rest = 头部终止符之后已到达的字节) ──
+    std::shared_ptr<std::string> bodyStr(new std::string());
+    const size_t take = (rest.size() < contentLength) ? rest.size() : contentLength;
+    if (take > 0) bodyStr->assign(rest, 0, take);
+
+    if (bodyStr->size() < contentLength) {            // 继续读剩余 body
+        const size_t remaining = contentLength - bodyStr->size();
+        const size_t oldSize = bodyStr->size();
+        bodyStr->resize(contentLength);
+        asio::async_read(*socket,
+            asio::buffer(&(*bodyStr)[oldSize], remaining),
+            [this, socket, bodyStr, method, path, authToken]
+                (const asio::error_code& ec2, size_t) {
+                if (ec2) return;
+                FinishRequest(socket, method, path, authToken, *bodyStr);
+            });
+    } else {
+        FinishRequest(socket, method, path, authToken, *bodyStr);
+    }
 }
 
 /// JSON 响应统一补 charset=utf-8。

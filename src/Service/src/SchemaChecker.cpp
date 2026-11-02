@@ -53,7 +53,7 @@ void ConfigValidator::validateTransport(const Core::TransportConfig& t,
             }
             // 能力前移提示: TLS 运行期通道尚未实现 (tls 暂缓决策), 加载即告警
             r.addWarning("TLS 传输的运行期通道尚未实现, 设备将无法建立连接 "
-                         "(当前版本运行期仅支持 Tcp/Udp；Serial 配置合法但通道尚未接入工厂)");
+                         "(当前版本运行期支持 Tcp/Udp/Serial)");
             break;
         case Core::TransportType::Serial:
             if (t.serial.baudRate == 0) r.addError("Serial baudRate 必须 > 0 (规则2)");

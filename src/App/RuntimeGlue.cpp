@@ -37,6 +37,7 @@
 #include "MyProt/Polling/LatestValueStore.hpp"
 #include "MyProt/Engine/ResponseParser.hpp"   // 写路径 byteOrder 裁决共用 (读写
 #include "MyProt/Service/ConfigDirectoryLoader.hpp"
+#include "MyProt/WebApi/QueryString.hpp"   // query 解析 + %XX 解码 (与 WebApi 服务器同源)
 #include "MyProt/Simulation/SimulationServer.hpp"
 #include "MyProt/Northbound/MqttPublisher.hpp"   // 北向发布热重载
 #include "MyProt/Southbound/SouthboundManager.hpp"  // 南向入站热重载
@@ -47,23 +48,9 @@
 
 namespace MyProt { namespace App {
 
-/// URL query 参数提取 ("/api/x?start=3&count=8" → key=start 返回 "3")
+/// URL query 参数提取 ("/api/x?start=3&count=8" → key=start 返回 "3"; 值已做 %XX 解码)
 std::string QueryParam(const std::string& path, const std::string& key) {
-    const std::size_t q = path.find('?');
-    if (q == std::string::npos) return std::string();
-    std::size_t pos = q + 1;
-    while (pos < path.size()) {
-        const std::size_t amp = path.find('&', pos);
-        const std::string kv = path.substr(
-            pos, amp == std::string::npos ? std::string::npos : amp - pos);
-        const std::size_t eq = kv.find('=');
-        if (eq != std::string::npos && kv.substr(0, eq) == key) {
-            return kv.substr(eq + 1);
-        }
-        if (amp == std::string::npos) break;
-        pos = amp + 1;
-    }
-    return std::string();
+    return WebApi::QueryParam(path, key);
 }
 
     // ── reload 运行时联动 — 生产与 E2E 共用同一代码路径 (首次装配亦走此入口) ──

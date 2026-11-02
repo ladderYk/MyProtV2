@@ -118,6 +118,14 @@ private:
     void DoAccept();
     void HandleConnection(const std::shared_ptr<asio::ip::tcp::socket>& socket);
 
+    /// 有界累积请求头 (上限 16KB): 未找到 \r\n\r\n 时继续读, 超限回 431 并关闭
+    void ReadHeader(const std::shared_ptr<asio::ip::tcp::socket>& socket,
+                    const std::shared_ptr<std::string>& header);
+
+    /// 解析已完整的请求头 + 已到达的 body 前缀 (rest), 后续路由/继续读 body
+    void HandleRequest(const std::shared_ptr<asio::ip::tcp::socket>& socket,
+                       const std::string& head, const std::string& rest);
+
     /// SSE streaming session state bundle - held by the async callback chain for the connection's life (socket+timer live and die together)
     struct StreamSession {
         StreamSession(asio::io_context& io, const std::string& p,

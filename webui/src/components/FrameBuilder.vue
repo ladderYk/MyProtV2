@@ -310,7 +310,7 @@ const validationErrors = computed(() => {
       // 如 ADS AMS 头 targetNetId/sourceNetId 复用同一 NetID 变量
       // 检查变量是否在 availableVars 中定义
       if (!props.availableVars.some(v => v.name === f.name)) {
-        errors.push(t('第 {n} 字段: 变量 "{name}" 未在协议 inputs/outputs 中声明', { n: i + 1, name: f.name }))
+        errors.push(t('第 {n} 字段: 变量 "{name}" 未在协议或操作模板中声明', { n: i + 1, name: f.name }))
       }
     }
     if (f.type === 'hex' && !/^([0-9A-Fa-f]{2}\s*)+$/.test(f.hex)) {
@@ -469,7 +469,7 @@ const stats = computed(() => {
                   {{ av.label || av.name }} {{ av.unit ? '(' + av.unit + ')' : '' }}
                 </el-tag>
               </el-tooltip>
-              <span v-if="!matchingVarDef(scope.row.name).length" class="text-muted">{{ t('未在协议中声明') }}</span>
+              <span v-if="!matchingVarDef(scope.row.name).length" class="text-muted">{{ t('未在协议或操作模板中声明') }}</span>
             </div>
           </template>
         </el-table-column>

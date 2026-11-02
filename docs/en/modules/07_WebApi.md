@@ -108,7 +108,7 @@ GET /api/data/latest?device=plc-1&token=abc
 - `path = /api/data/latest`; `QueryParam` starts parsing after the `?`;
 - it returns the value for `key`, or the empty string `""` when missing;
 - **an empty value and a missing key are indistinguishable** (`?device=&token=abc` and `?token=abc` both return `""` for `QueryParam(..., "device")`);
-- **URL decoding is not implemented** (e.g. `?name=%E6%B5%8B` passes `%E6%B5%8B` through), so callers must handle it themselves or avoid non-ASCII/special characters in parameters.
+- **URL decoding**: `%XX` sequences are decoded (e.g. `?name=%E6%B5%8B` → `测`); malformed/truncated sequences are passed through. `+` is **not** treated as a space (tokens may contain a literal `+`; use `%20` for spaces). Implemented in `WebApi/QueryString.hpp` and shared by App extension routes and server-side token parsing.
 
 ---
 
@@ -311,7 +311,7 @@ value and the chain actually applied.
 
 | Method | Semantics |
 |------|------|
-| `GET /api/preview/response?scope=protocols&name=<n>&operation=<op>&hex=<hex>[&finalType=&bitOffset=&byteCount=&byteOrder=]` | Parse with the **protocol on disk**; `hex` must be compact or use POST (`QueryParam` does not URL-decode) |
+| `GET /api/preview/response?scope=protocols&name=<n>&operation=<op>&hex=<hex>[&finalType=&bitOffset=&byteCount=&byteOrder=]` | Parse with the **protocol on disk**; query values are `%XX`-decoded (`QueryParam`), so `hex` may be URL-encoded |
 | `POST /api/preview/response?scope=protocols&name=<n>` (body below) | Parse with the **candidate content** (`body.protocol` takes precedence over disk) |
 
 ```jsonc

@@ -38,7 +38,7 @@ main()                                                  [main.cpp L293-309]
        │    ├─ asio::io_context io
        │    ├─ RuntimeSnapshotHolder snapshotHolder     // 当前代配置唯一数据源
        │    ├─ ProtocolLookup 闭包(&snapshotHolder)     // 每次 Get() 后查协议
-       │    ├─ ChannelFactory 闭包(&snapshotHolder)     // 设备→协议→transport, v1 仅 Tcp
+       │    ├─ ChannelFactory 闭包(&snapshotHolder)     // 设备→协议→transport: Tcp/Udp/Serial
        │    ├─ ProtocolGateway gateway(io, lookup, factory)
        │    ├─ PollingEngine engine(io, gateway)
        │    ├─ LatestValueStore latest                  // /api/data/latest 快照源

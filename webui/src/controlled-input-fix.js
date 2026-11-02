@@ -10,8 +10,8 @@
 //   失焦/选择时照旧 emit('change'), 其余事件与属性原样透传。
 //   已用 v-model / @update:model-value 的调用点行为不变 (正常向上回传)。
 //
-// 用法: 必须在 app.use(ElementPlus) 之后调用 installControlledInputFix(app),
-//   以覆盖 Element 的全局注册 (本仓各组件均使用全局注册, 无局部 import)。
+// 用法: 必须在 installElement(app) 之后调用 installControlledInputFix(app),
+//   以覆盖 ElInput/ElSelect 的全局注册 (本仓各组件均使用全局注册, 无局部 import)。
 
 import { ElInput, ElSelect } from 'element-plus'
 import { defineComponent, h, nextTick, ref, watch } from 'vue'

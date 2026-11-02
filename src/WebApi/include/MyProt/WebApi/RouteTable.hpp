@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "MyProt/WebApi/QueryString.hpp"   // %XX 解码 (与 query 参数同一实现)
+
 namespace MyProt { namespace WebApi {
 
 /// HTTP 响应值类型（原 WebApiServer::Response 上移，路由表与服务器共用）
@@ -124,7 +126,9 @@ private:
         for (size_t i = 0; i < pattern.size(); ++i) {
             const std::string& p = pattern[i];
             if (!p.empty() && p[0] == ':') {
-                params[p.substr(1)] = seg[i];
+                // 浏览器对配置名等路径段做百分号编码 (encodeURIComponent),
+                // 分段之后再解码, 所以 %2F 不会重新变成路径分隔符。
+                params[p.substr(1)] = UrlDecode(seg[i]);
             } else if (p != seg[i]) {
                 return false;
             }

@@ -313,7 +313,7 @@ export const EN = {
   '(固定帧头长度)': '(fixed header length)',
   '请求模板中固定十六进制段的总字节数': 'Total bytes of fixed hex segments in the request template',
   '含运行期变量 {vars} — 运行期才有值, 此处无法静态求值': 'Contains runtime variables {vars} — values exist only at runtime and cannot be evaluated statically here',
-  '表达式包含非法字符, 仅支持数字、+ - * / % ( )': 'Expression contains invalid characters; only numbers and + - * / % ( ) are supported',
+  '表达式包含非法字符, 仅支持数字、算术与位运算符': 'Expression contains invalid characters; only numbers and arithmetic/bitwise operators are supported',
   '表达式语法错误: {msg}': 'Expression syntax error: {msg}',
   '将在光标处插入片段「{name}」, 继续？': 'Insert snippet "{name}" at the cursor?',
   '清空表达式？': 'Clear the expression?',
@@ -366,7 +366,7 @@ export const EN = {
   '导入 {n} 个字段': 'Imported {n} fields',
   '导入失败: {msg}': 'Import failed: {msg}',
   '第 {n} 字段: 变量名不能为空': 'Field {n}: variable name is required',
-  '第 {n} 字段: 变量 "{name}" 未在协议 inputs/outputs 中声明': 'Field {n}: variable "{name}" is not declared in protocol inputs/outputs',
+  '第 {n} 字段: 变量 "{name}" 未在协议或操作模板中声明': 'Field {n}: variable "{name}" is not declared in the protocol or operation profile',
   '第 {n} 字段: 无效十六进制 "{hex}"': 'Field {n}: invalid hex "{hex}"',
   '添加固定十六进制段': 'Add fixed hex segment',
   '添加变量占位符': 'Add variable placeholder',
@@ -388,7 +388,7 @@ export const EN = {
   '先选变量': 'Select a variable first',
   '变量信息': 'Variable info',
   '无描述': 'No description',
-  '未在协议中声明': 'Not declared in the protocol',
+  '未在协议或操作模板中声明': 'Not declared in the protocol or operation profile',
   '上移': 'Move up',
   '下移': 'Move down',
   '复制': 'Duplicate',
@@ -1018,4 +1018,99 @@ export const EN = {
     'It auto-subscribes the filter once listening starts; the gateway must have mqtt enabled in server.json and changing tags to keep receiving messages.',
   '「发布测试消息」用于回环自检: 所发主题若匹配订阅过滤器, 会立即出现在消息表。':
     '"Publish a test message" is a loopback self-check: if the topic matches the filter, it shows up in the table at once.',
+
+  // ── 协议编辑: 操作原型 (operationProfiles) / 继承输出 ──
+  '操作原型 (operationProfiles)': 'Operation profiles (operationProfiles)',
+  '原型提供 outputs/responseParser 默认值; 支持 extends 单继承; 操作显式字段优先':
+    'Profiles supply default outputs/responseParser; single inheritance via extends; explicit operation fields take precedence',
+  'JSON 对象: { 原型名: { extends?, description?, outputs?, responseParser? } }':
+    'JSON object: { profileName: { extends?, description?, outputs?, responseParser? } }',
+  '此协议暂无变量声明 (「协议变量」页添加后在此提示)':
+    'This protocol declares no variables yet — add them on the Protocol Variables tab',
+  '{n} 个自动计算字段': { one: '{n} computed field', other: '{n} computed fields' },
+  '{n} 个应答字段': { one: '{n} response field', other: '{n} response fields' },
+  '须为对象 ({ 原型名: { ... } })': 'must be an object ({ profileName: { ... } })',
+  '原型 {name} 须为对象': 'Profile {name} must be an object',
+  '操作原型': 'Operation profile',
+  '原型': 'Profile',
+  '不使用原型': 'No profile',
+  '原型 {name} 未定义': 'Profile {name} is not defined',
+  '原型提供默认值; 下方继承项只读, 点「覆盖」可改写':
+    'The profile supplies defaults; inherited items below are read-only — click Override to change them',
+  '继承的派生输出': 'Inherited derived outputs',
+  '来自协议或操作原型, 只读; 需要改写时点「覆盖」':
+    'From the protocol or an operation profile; read-only — click Override to change',
+  '本操作覆盖': 'Overridden by this operation',
+  '继承自原型 {name}': 'Inherited from profile {name}',
+  '覆盖': 'Override',
+  '恢复继承': 'Restore inheritance',
+  '本操作未覆盖任何派生输出, 直接使用上方继承项':
+    'This operation overrides no derived output; the inherited items above are used as-is',
+  'operationProfiles: 可复用的 outputs/responseParser; 支持 extends 单继承; 本操作显式字段优先':
+    'operationProfiles: reusable outputs/responseParser; single inheritance via extends; explicit fields on this operation take precedence',
+  '克隆已有操作作为起点': 'Clone an existing operation as a starting point',
+  '克隆': 'Clone',
+
+  // ── v6: 简单/高级模式 + 配置工作台合并 + 术语口语化 ──
+  '{online}/{total} 设备在线 · {good} 点正常':
+    '{online}/{total} devices online · {good} healthy points',
+  '高级模式': 'Advanced',
+  '简单模式': 'Simple',
+  '当前为高级模式, 点击切回简单视图': 'Advanced mode is on — click to switch back to the simple view',
+  '当前为简单视图, 点击显示 JSON 与原始文本':
+    'Simple view is on — click to reveal JSON and raw-text editing',
+  '更多': 'More',
+  '暂无历史备份': 'No backups yet',
+  '删除该协议': 'Delete this protocol',
+  '传输与成帧': 'Transport & Framing',
+  '协议变量': 'Protocol Variables',
+  '第一次配协议? 看 4 条概念速查': 'New to protocols? Read the 4 key concepts',
+  '「配置」→ 协议 → 选模板 (Modbus TCP / S7-1200 / SEER / 空白) → 填名称 → 新建。':
+    'Configuration → Protocols → pick a template (Modbus TCP / S7-1200 / SEER / blank) → enter a name → Create.',
+  '「配置」→ 设备与标签 →「+ 新增设备」→ 选协议、填主机与端口。':
+    'Configuration → Devices & Tags → "+ Add device" → choose a protocol and fill in host/port.',
+  '下一步: {name} →': 'Next: {name} →',
+  '操作模板': 'Operation template',
+  '模板提供 outputs/responseParser 默认值; 支持 extends 单继承; 操作显式字段优先':
+    'Templates supply default outputs/responseParser; single inheritance via extends; explicit operation fields take precedence',
+  '模板 {name} 未定义': 'Template {name} is not defined',
+  '模板提供默认值; 下方继承项只读, 点「覆盖」可改写':
+    'The template supplies defaults; inherited items below are read-only — click Override to change them',
+  '继承的自动计算字段': 'Inherited computed fields',
+  '来自协议或操作模板, 只读; 需要改写时点「覆盖」':
+    'From the protocol or an operation template; read-only — click Override to change',
+  '本操作未覆盖任何自动计算字段, 直接使用上方继承项':
+    'This operation overrides no computed field; the inherited items above are used as-is',
+  '暂无自动计算字段, 可在下方表单添加': 'No computed fields yet — add one in the form below',
+  '自动计算字段 (outputs · 本操作)': 'Computed fields (outputs · this operation)',
+  '自动计算字段 (outputs · 全局)': 'Computed fields (outputs · protocol-wide)',
+  '自动计算字段 (derivedLength)': 'Computed fields (derivedLength)',
+  '尚无自动计算字段。长度/数量字段在此声明为 derivedLength。':
+    'No computed fields yet. Declare length/count fields here as derivedLength.',
+  '协议级 inputs 为默认值, outputs 为自动计算字段; 操作与标签可覆盖':
+    'Protocol-level inputs are defaults and outputs are computed fields; operations and tags can override them',
+  '协议概念速查': 'Protocol concepts',
+  '协议分三步: 传输与成帧 → 操作定义 → 协议变量，页签上的序号就是推荐顺序。':
+    'A protocol has three steps: Transport & Framing → Operations → Protocol Variables; the tab numbers show the recommended order.',
+  '需要直接编辑 JSON 或原始请求文本时，在顶栏打开「高级模式」。':
+    'To edit JSON or raw request text directly, turn on Advanced in the top bar.',
+  '「更多」里的「试渲染」用当前编辑器内容渲染一帧请求, 不落盘也能核对成帧与长度槽位。':
+    'More → Trial render builds one frame from the current editor content without saving, so you can verify framing and length slots.',
+  '「更多」里的「自检」只做只读校验, 不写盘; 问题条目可点击跳转到对应区块。':
+    'More → Self-check runs read-only validation and never writes; click an issue to jump to the relevant section.',
+
+  // ── v6: 质量码口语化 (引擎仍返回 Good/Bad/Uncertain) ──
+  'Good': 'Good',
+  '正常': 'Good',
+  '异常': 'Bad',
+  '不确定': 'Uncertain',
+  '{n} 标签 · {good} 正常': '{n} tags · {good} good',
+  '正常点位': 'Healthy points',
+  '正常 / 异常': 'Good / Bad',
+  '看到第一个正常值': 'See the first good value',
+  '当前 {n} 个标签采集正常': '{n} tags are reporting good values',
+  '已配置但无正常值 — 检查设备连接, 或启动仿真':
+    'Configured but no good values — check device connectivity or start simulation',
+  '{n} 个异常或无值': '{n} bad or missing',
+  '至少一个点位正常视为在线': 'Online when at least one point reports a good value',
 }

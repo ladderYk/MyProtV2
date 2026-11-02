@@ -27,6 +27,7 @@
 #include "MyProt/Core/Log.hpp"
 #include "MyProt/Transport/TcpChannel.hpp"
 #include "MyProt/Transport/UdpChannel.hpp"
+#include "MyProt/Transport/SerialChannel.hpp"
 #include "MyProt/Gateway/ProtocolGateway.hpp"
 #include "MyProt/Polling/PollingEngine.hpp"
 #include "MyProt/Polling/LatestValueStore.hpp"
@@ -223,8 +224,14 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
             return std::make_shared<MyProt::Transport::UdpChannel>(
                 ioCtx, channelId);
         }
+        if (proto && proto->transport.type == MyProt::Core::TransportType::Serial) {
+            // 串口选项来自协议级 transport.serial; 设备级 connection.portName
+            // 由 SerialChannel::Connect 优先采用 (支持同一协议接不同 COM 口)。
+            return std::make_shared<MyProt::Transport::SerialChannel>(
+                ioCtx, proto->transport.serial, channelId);
+        }
         LOG_WARN("ChannelFactory",
-                 "设备 %s 的协议传输类型暂未支持通道创建 (仅 Tcp/Udp)",
+                 "设备 %s 的协议传输类型暂未支持通道创建 (仅 Tcp/Udp/Serial)",
                  channelId.c_str());
         return std::shared_ptr<MyProt::Transport::IChannel>();
     };

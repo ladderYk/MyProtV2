@@ -3,7 +3,7 @@
 # What it does:
 #   1. Build Release x64 via scripts\build.bat (reuses the same MSBuild discovery)
 #   2. Run every executable test (6 unit test exes + MyProt.E2E)
-#   3. Run the headless WebUI smoke test (scripts\webui-smoke.ps1)
+#   3. Run WebUI unit tests (Vitest) and the headless smoke test
 #   4. Print a summary table and exit with the number of failed steps
 #
 # Exit codes:  0 = all green, non-zero = failed step count (CI-friendly contract).
@@ -133,8 +133,26 @@ foreach ($t in $unitTests) {
 
 Invoke-Exe -Name "MyProt.E2E" -Path (Join-Path $binDir "MyProt.E2E.exe") -TimeoutSec $E2ETimeoutSec
 
-# ── 3. WebUI smoke (headless Edge CDP; builds dist/ and boots MyProt.App) ──
+# ── 3. WebUI (Vitest unit tests + headless Edge CDP smoke) ──
 if (-not $SkipWebUI) {
+    Write-Head "WEBUI UNIT"
+    $webuiDir = Join-Path $root "webui"
+    $swUnit = [System.Diagnostics.Stopwatch]::StartNew()
+    Push-Location $webuiDir
+    & cmd /c "npm run test"
+    $unitExit = $LASTEXITCODE
+    Pop-Location
+    $swUnit.Stop()
+    $okUnit = ($unitExit -eq 0)
+    Write-Host ("{0} WebUI.Unit  ({1}s, exit={2})" -f ($(if ($okUnit) { "  O K " } else { " FAIL " })), [int]$swUnit.Elapsed.TotalSeconds, $unitExit) `
+        -ForegroundColor $(if ($okUnit) { "Green" } else { "Red" })
+    [void]$results.Add([pscustomobject]@{
+        Name   = "WebUI.Unit"
+        Result = $(if ($okUnit) { "PASS" } else { "FAIL" })
+        Secs   = [int]$swUnit.Elapsed.TotalSeconds
+        Fail   = $(if ($okUnit) { 0 } else { 1 })
+    })
+
     Write-Head "WEBUI SMOKE"
     $smoke = Join-Path $PSScriptRoot "webui-smoke.ps1"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()

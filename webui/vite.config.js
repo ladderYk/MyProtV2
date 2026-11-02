@@ -8,6 +8,11 @@ export default defineConfig({
   // 相对路径 base: 生产部署到子路径 (如 http://host/myprot/) 时仍能正确加载
   // 资产; 默认 '/' 在非根路径部署下会 404。Localhost 部署不受影响。
   base: './',
+  build: {
+    // 入口 chunk ≈ Vue 运行时 + 实际用到的 Element Plus 组件 (543KB)。
+    // 面板已按页异步拆分, 再切 vendor 只会把 CSS 拆成多份并带来样式顺序风险。
+    chunkSizeWarningLimit: 700
+  },
   server: {
     port: 5173,
     // 新建协议模板直接 import 仓库根目录 configs/protocols/*.json (位于 webui 之外)

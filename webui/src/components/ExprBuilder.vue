@@ -126,6 +126,44 @@ watch([expr, () => JSON.stringify(props.contextVars)], async () => {
   }
 }, { deep: true, immediate: true })
 
+// 内建函数 (v1.33) — 与引擎 MiniExpression 的 hi8/lo8/hi16/lo16 语义一致:
+//   参数按 64 位无符号处理, 取低 8/16 位或相应高位。
+const BUILTIN_FUNCS = {
+  hi8: a => '(((' + a + ') >>> 8) & 255)',
+  lo8: a => '((' + a + ') & 255)',
+  hi16: a => '(((' + a + ') >>> 16) & 65535)',
+  lo16: a => '((' + a + ') & 65535)'
+}
+/// 把内建函数调用展开成等价位运算 (支持嵌套括号); 未闭合的调用原样保留,
+/// 由后续求值给出语法错误提示。
+function expandBuiltinCalls(input) {
+  const names = ['hi8', 'lo8', 'hi16', 'lo16']
+  let out = ''
+  let i = 0
+  while (i < input.length) {
+    let hit = null
+    for (const fn of names) {
+      if (input.startsWith(fn, i) && !/\w/.test(input[i - 1] || '')) {
+        let j = i + fn.length
+        while (input[j] === ' ' || input[j] === '\t') j++
+        if (input[j] === '(') { hit = { fn, open: j }; break }
+      }
+    }
+    if (!hit) { out += input[i]; i++; continue }
+    let depth = 0
+    let k = hit.open
+    for (; k < input.length; k++) {
+      if (input[k] === '(') depth++
+      else if (input[k] === ')') { depth--; if (depth === 0) break }
+    }
+    if (k >= input.length) { out += input[i]; i++; continue }
+    const arg = expandBuiltinCalls(input.slice(hit.open + 1, k))
+    out += BUILTIN_FUNCS[hit.fn](arg)
+    i = k + 1
+  }
+  return out
+}
+
 // 表达式求值引擎（简化版 MiniExpression）
 //   与引擎侧文法对齐 (ADR-0012 / MiniExpression):
 //     裸名 StartByteAddress | {Name} | {Name:len} | {Name:offset} | {Frame:fixed}
@@ -161,6 +199,9 @@ function evaluateExpression(exprStr, ctx) {
     runtimeRefs.push(name + ':offset')
     return 0
   })
+  // 内建函数 — 必须在裸标识符替换前展开:
+  //   否则 hi8/lo8 会被当成变量替换为 0, 变成 "0(...)" 误报 "0 is not a function"
+  str = expandBuiltinCalls(str)
   // 花括号兼容写法 {Name}
   str = str.replace(/\{(\w+)\}/g, (_, name) => {
     refs.push(name)
@@ -183,8 +224,8 @@ function evaluateExpression(exprStr, ctx) {
 function safeEval(str) {
   // 简单的表达式求值器，支持 + - * / % ( )
   // 使用 Function 构造器但限制字符集
-  if (!/^[\d\s+\-*/%().]+$/.test(str)) {
-    throw new Error(t('表达式包含非法字符, 仅支持数字、+ - * / % ( )'))
+  if (!/^[\d\s+\-*/%().<>&|^~]+$/.test(str)) {
+    throw new Error(t('表达式包含非法字符, 仅支持数字、算术与位运算符'))
   }
   try {
     // eslint-disable-next-line no-new-func
@@ -294,7 +335,7 @@ onMounted(() => {
             {{ t('依赖变量：') }}
             <el-tag
               v-for="rv in previewRefs" :key="rv.name" size="small" effect="plain"
-              :type="rv.runtime ? 'warning' : ''"
+              :type="rv.runtime ? 'warning' : 'info'"
               :title="rv.runtime ? t('运行期注入, 静态预览按 0 试算') : ''"
             >{{ rv.name }}{{ rv.runtime ? t(' (运行期)') : (rv.val !== undefined ? ' = ' + rv.val : '') }}</el-tag>
           </div>

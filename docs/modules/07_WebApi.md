@@ -96,7 +96,7 @@ GET /api/data/latest?device=plc-1&token=abc
 - `path = /api/data/latest`，`QueryParam` 内部从 `?` 后开始解析；
 - 返回 `key` 对应的 value，未找到返回空字符串 `""`；
 - **空值与缺失不可区分**（`?device=&token=abc` 与 `?token=abc` 在 `QueryParam("?device=&token=abc", "device")` 上都返回 `""`）；
-- **URL 解码**：当前**未实现** `url-decode`（如 `?name=%E6%B5%8B` 直传 `%E6%B5%8B`），调用方需自行处理或参数中避免中文/特殊字符。
+- **URL 解码**：已实现 `%XX` 解码（如 `?name=%E6%B5%8B` → `测`），非法/截断序列原样保留；`+` 不当作空格（token 等参数可能含裸 `+`，需要空格请用 `%20`）。实现见 `WebApi/QueryString.hpp`，App 扩展路由与服务器 token 解析共用同一实现。
 
 ---
 
