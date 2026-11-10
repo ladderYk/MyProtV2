@@ -92,6 +92,8 @@
 | [ADR-0022 操作原型与解析期展开](./adr/0022-operation-profiles.md) | 新增协议级 `operationProfiles`：只承载可复用的 `outputs`（派生）/ `responseParser`，支持 `extends` 单继承；合并顺序「父原型 → 子原型 → 操作显式字段」，在 `ProtocolJsonParser` 解析期展开，POCO 与引擎零改动 |
 | [ADR-0023 南向 HTTP 拉取](./adr/0023-southbound-http-pull.md) | 网关作 HTTP 客户端定时拉取设备 REST API：`device.pull` + 标签 `source=pull` 三值来源；`HttpPuller` 复用 `IInboundTransport` 帧回调与 `TagValueSink` 唯一写入口；自实现最小 HTTP 客户端（仅 `http://`、Content-Length / chunked / EOF，无 TLS/gzip）；失败 → `Bad`（同一故障段不叠加）、HTTP 成功但无命中标签的静默 → `Uncertain`；提供 6 条 `myprot_pull_*` 指标，纯 pull 设备失败→`Degraded`、恢复→`Connected` |
 
+> 📖 ADR 英文镜像：[`en/adr/`](./en/adr/)（ADR-0001 … ADR-0023 全量翻译；中文文档仍为唯一事实来源）。
+
 > ⚠️ 若 `modules/` 中的 POCO/示例与 [配置 Schema 定稿](./Config_Schema.md) 冲突时，以 Schema 定稿为准。
 
 ## 阅读路径

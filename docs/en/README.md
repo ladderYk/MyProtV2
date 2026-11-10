@@ -5,10 +5,11 @@
 > **Translation status.** This `docs/en/` tree mirrors the authoritative Chinese
 > docs under [`docs/`](../README.md). All architecture chapters, all 12 module
 > deep-dives (including the southbound **push ingest** and **HTTP pull** paths),
-> the protocol tutorials and [Config_Schema.md](./Config_Schema.md) are translated.
-> The ADR set ([../adr/](../adr/)) and [ROADMAP.md](../ROADMAP.md) are still
-> Chinese-only and are marked *zh* where linked. The Chinese documents remain the
-> single source of truth; this mirror is kept in sync as translations land.
+> the protocol tutorials, [Config_Schema.md](./Config_Schema.md) and the full ADR
+> set ([`adr/`](./adr/), ADR-0001 … ADR-0023) are translated.
+> [ROADMAP.md](../ROADMAP.md) is still Chinese-only and is marked *zh* where
+> linked. The Chinese documents remain the single source of truth; this mirror is
+> kept in sync as translations land.
 
 ## Documentation principles
 
@@ -78,7 +79,7 @@ Validate after editing: `MyProt.App.exe --validate configs` (same validators as 
 | Doc | Contents |
 |------|------|
 | [Config Schema](./Config_Schema.md) | Single source of truth for the config contract: JSON↔POCO mapping, template grammar, validation checklist |
-| [ADR index](../adr/) *zh* | Architecture Decision Records ADR-0001 … ADR-0023 |
+| [ADR index](./adr/) | Architecture Decision Records ADR-0001 … ADR-0023 (English translation) |
 
 > ⚠️ If POCOs/examples in `modules/` conflict with
 > [Config_Schema.md](./Config_Schema.md), the Schema document wins.
