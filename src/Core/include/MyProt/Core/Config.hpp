@@ -483,6 +483,39 @@ struct IngestConfig {
     IngestConfig() {}
 };
 
+/// HTTP pull config (ADR-0023): the gateway is the HTTP client and polls a REST endpoint.
+/// One request per round; the next round starts intervalMs after the previous one finished.
+struct HttpPullConfig {
+    std::string url;               // http://host[:port][/path]; https is not supported in v1
+    std::string method;            // "GET" | "POST"
+    int intervalMs;                // pause between rounds (>= 100)
+    int timeoutMs;                 // per-round total timeout (connect + request + response)
+    std::map<std::string, std::string> headers;  // static request headers (credentials stay out of logs)
+    std::string body;              // POST body, sent verbatim
+    std::string tagField;          // array item tag-name field (default "tag")
+    std::string valueField;        // array item value field (default "value")
+    std::string tsField;           // array item timestamp field (default "ts"; empty = local receive time)
+    bool arrayOfItems;             // true = [{"tag":...,"value":...}] items; false = whole array is one value
+    int maxSilenceMs;              // 0 = no silence watchdog
+    int backoffBaseMs;             // consecutive-failure backoff base; 0 = always use intervalMs
+    int backoffMaxMs;              // backoff cap
+    bool keepAlive;                // reuse the TCP connection across rounds (HTTP/1.1 keep-alive)
+
+    HttpPullConfig()
+        : method("GET"), intervalMs(1000), timeoutMs(3000)
+        , arrayOfItems(true), maxSilenceMs(0)
+        , backoffBaseMs(1000), backoffMaxMs(30000), keepAlive(true) {}
+};
+
+/// Device-level pull binding. Absent = the device never issues HTTP requests.
+/// Coexists with ingest: a device may both push (ingest) and expose a REST snapshot (pull).
+struct PullConfig {
+    std::string type;              // "http"
+    HttpPullConfig http;
+
+    PullConfig() {}
+};
+
 struct DeviceConfig {
     std::string id;
     std::string protocol;
@@ -494,7 +527,8 @@ struct DeviceConfig {
     Optional<std::string> username;  // protocol-level auth credentials: injected as a template variable during handshake, masked in logs
     Optional<std::string> password;
     Optional<ResilienceConfig> resilience; // per-device resilience override; unset = use the global ConfigRoot.resilience
-    Optional<IngestConfig> ingest;         // southbound push binding (mqtt subscribe / tcp listen); unset = poll-only device
+    Optional<IngestConfig> ingest;         // southbound push binding (mqtt subscribe / tcp listen); unset = no push adapter
+    Optional<PullConfig> pull;             // southbound pull binding (HTTP client, ADR-0023); unset = no pull adapter
     // device-level template-variable defaults (§4): merged at load time into each tag's effective variable set, with the tag's explicit declaration taking precedence
     std::map<std::string, uint32_t> variables;
 
@@ -609,10 +643,12 @@ struct TagDefinition {
     // variables carry the full write semantics (TransportSize/Length/DBNumber/AddrLo/...),
     // and it does not participate in polling; /api/data/write routes to this tag by tag name.
     std::string direction;              // "read" (default, participates in polling) | "write" (write-only tag, does not participate in polling)
-        // -- value provenance: a tag has exactly one source (no arbitration between poll and push) --
+        // -- value provenance: a tag has exactly one source (no arbitration between poll / push / pull) --
     // "poll" (default): acquired by PollingEngine through the protocol operation template;
     // "push": produced by the device-level ingest adapter (MQTT subscribe / TCP listen) and written
     //   to LatestValueStore through the single TagValueSink; push tags are excluded from polling.
+    // "pull": produced by the device-level pull adapter (HTTP client, ADR-0023); excluded from polling
+    //   and mutually exclusive with "push" so two adapters never write the same tag.
     std::string source;
     std::string writeVariable;          // template variable name the value/bytes are injected into (default "WriteValue",
                                         //   templates consume {WriteValue:X4} or {WriteValue:raw} as needed)

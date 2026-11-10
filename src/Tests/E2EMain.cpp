@@ -200,6 +200,65 @@ private:
 };
 
 // ─────────────────────────────────────────────────────────────
+//  一次性 HTTP 响应服务端 (供 /api/preview/pull 试拉取用例)
+//  固定返回一段 JSON, 每个连接应答后即关闭 (Connection: close)
+//
+class CannedHttpServer {
+public:
+    CannedHttpServer(uint16_t port, const std::string& body)
+        : _acceptor(_io, asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), port))
+        , _body(body) {}
+
+    void Start() {
+        AcceptLoop();
+        _thread = std::thread([this]() { _io.run(); });
+    }
+
+    void Stop() {
+        asio::error_code ec;
+        _acceptor.close(ec);
+        _io.stop();
+        if (_thread.joinable()) _thread.join();
+    }
+
+private:
+    void AcceptLoop() {
+        std::shared_ptr<asio::ip::tcp::socket> socket =
+            std::make_shared<asio::ip::tcp::socket>(_io);
+        _acceptor.async_accept(*socket,
+            [this, socket](const asio::error_code& ec) {
+                if (ec) return;
+                std::shared_ptr<std::string> req = std::make_shared<std::string>();
+                asio::async_read_until(*socket, asio::dynamic_buffer(*req), "\r\n\r\n",
+                    [this, socket, req](const asio::error_code& readEc, size_t /*n*/) {
+                        asio::error_code ignored;
+                        if (readEc) { socket->close(ignored); return; }
+                        std::ostringstream oss;
+                        oss << "HTTP/1.1 200 OK\r\n"
+                            << "Content-Type: application/json\r\n"
+                            << "Content-Length: " << _body.size() << "\r\n"
+                            << "Connection: close\r\n\r\n"
+                            << _body;
+                        std::shared_ptr<std::string> resp =
+                            std::make_shared<std::string>(oss.str());
+                        asio::async_write(*socket, asio::buffer(*resp),
+                            [socket, resp](const asio::error_code&, size_t) {
+                                asio::error_code closeEc;
+                                socket->shutdown(asio::ip::tcp::socket::shutdown_both, closeEc);
+                                socket->close(closeEc);
+                            });
+                    });
+                AcceptLoop();
+            });
+    }
+
+    asio::io_context _io;
+    asio::ip::tcp::acceptor _acceptor;
+    std::string _body;
+    std::thread _thread;
+};
+
+// ─────────────────────────────────────────────────────────────
 //  测试辅助
 //
 int g_passed = 0;
@@ -1326,6 +1385,52 @@ int RunE2E() {
                   && VrHas::Error(res.value(), "规则12"));
         }
 
+        // 11-17/18: 南向 HTTP 拉取 (ADR-0023) — device.pull + source=pull 的
+        //   配置层契约: 合法形态零错误; https / header 注入 / 缺 pull 块均被拒.
+        {
+            const char* kPullOk =
+                "{\"schemaVersion\":2,"
+                "\"devices\":[{\"id\":\"m1\",\"protocol\":\"ModbusTCP\","
+                "\"connection\":{\"host\":\"127.0.0.1\"},"
+                "\"pull\":{\"type\":\"http\",\"http\":{"
+                "\"url\":\"http://127.0.0.1:8080/api/values\","
+                "\"intervalMs\":1000,\"timeoutMs\":2000}}}],"
+                "\"tags\":[{\"name\":\"m1.Temp\",\"deviceId\":\"m1\","
+                "\"source\":\"pull\",\"finalType\":\"Double\"}]}";
+            std::vector<std::string> protos(1, kValidProto);
+            auto res = ConfigValidator::validateConfigRootJson(kPullOk, protos, 2);
+            if (!res.has_value() || !res.value().errors.empty()) DumpVr("11-17", res);
+            Check("11-17: device.pull + source=pull 合法",
+                  res.has_value() && res.value().errors.empty());
+
+            const std::string badUrl = Patch(kPullOk, "http://127.0.0.1:8080",
+                                                  "https://127.0.0.1:8080");
+            auto resUrl = ConfigValidator::validateConfigRootJson(badUrl, protos, 2);
+            Check("11-18a: https url 被拒",
+                  resUrl.has_value()
+                  && VrHas::Error(resUrl.value(), "必须以 http:// 开头"));
+
+            // JSON 转义 \r\n -> 实际 CR/LF, 模拟头注入
+            const std::string badHeader = Patch(kPullOk, "\"intervalMs\":1000",
+                "\"headers\":{\"X-Evil\":\"a\\r\\nX-Injected: 1\"},"
+                "\"intervalMs\":1000");
+            auto resHdr = ConfigValidator::validateConfigRootJson(badHeader, protos, 2);
+            Check("11-18b: headers 含 CR/LF 被拒",
+                  resHdr.has_value()
+                  && VrHas::Error(resHdr.value(), "不得含 CR/LF"));
+
+            const char* kNoPull =
+                "{\"schemaVersion\":2,"
+                "\"devices\":[{\"id\":\"m1\",\"protocol\":\"ModbusTCP\","
+                "\"connection\":{\"host\":\"127.0.0.1\"}}],"
+                "\"tags\":[{\"name\":\"m1.Temp\",\"deviceId\":\"m1\","
+                "\"source\":\"pull\",\"finalType\":\"Double\"}]}";
+            auto resNoPull = ConfigValidator::validateConfigRootJson(kNoPull, protos, 2);
+            Check("11-18c: source=pull 但设备未配 pull 被拒",
+                  resNoPull.has_value()
+                  && VrHas::Error(resNoPull.value(), "未配置 pull"));
+        }
+
                 // 11-14/15/16: enum 候选形态 (Config_Schema §3.2 契约) —
         //   裸数字简写 + {value,label} 对象混合合法; 值重复 / 非法元素 → 加载期拒绝
         //   注: 枚举元素检查在解析阶段, 失败经 validateProtocolJson 包装为
@@ -1639,16 +1744,21 @@ int RunE2E() {
 
         // 路由表可枚举 (P2-3): method + pattern 统一注册, 不再散落 if 链
         const std::vector<std::string> routes = server.DescribeRoutes();
-        Check("路由表: 内置 10 条", routes.size() == 10);
+        Check("路由表: 内置 11 条", routes.size() == 11);
         bool hasScopeList = false;
+        bool hasBackupContent = false;
         bool hasRestore = false;
         for (size_t i = 0; i < routes.size(); ++i) {
             if (routes[i] == "GET /api/config/:scope") hasScopeList = true;
+            if (routes[i] == "GET /api/config/:scope/:name/backups/:tag") {
+                hasBackupContent = true;
+            }
             if (routes[i] == "POST /api/config/:scope/:name/backups/:tag/restore") {
                 hasRestore = true;
             }
         }
         Check("路由表含 GET /api/config/:scope", hasScopeList);
+        Check("路由表含 backup content", hasBackupContent);
         Check("路由表含 backup restore", hasRestore);
 
         // /metrics 免认证 (Prometheus)
@@ -2635,6 +2745,140 @@ int RunE2E() {
 
         pApi.Stop();
         pThread.join();
+        std::cout << std::endl;
+    }
+
+    // ── (HTTP) /api/preview/pull: 试拉取 (ADR-0023, 路由须先于 /api/preview) ──
+    std::cout << "--- Test 13f: /api/preview/pull ---" << std::endl;
+    {
+        MyProt::Service::ConfigStoreOptions fOpts;
+        fOpts.configDir = "configs";
+        MyProt::Service::ConfigStore fStore(fOpts);
+
+        // 固定响应 (根数组 = arrayOfItems 契约): 4 条标签; METER-01.Unknown 不在 declaredTags 中 -> extra
+        CannedHttpServer pullSrv(18088,
+            "["
+            "{\"tag\":\"METER-01.Temp\",\"value\":21.5},"
+            "{\"tag\":\"METER-01.Pressure\",\"value\":101.3},"
+            "{\"tag\":\"METER-01.Level\",\"value\":42},"
+            "{\"tag\":\"METER-01.Unknown\",\"value\":7}]");
+        pullSrv.Start();
+
+        MyProt::Core::WebApiConfig fCfg;
+        fCfg.bindAddress = "127.0.0.1:18089";
+        fCfg.requireAuth = false;
+        fCfg.rateLimitRps = 200;
+        fCfg.rateLimitBurst = 200;
+        MyProt::WebApi::WebApiServer fApi(fCfg, fStore);
+
+        asio::io_context fIo;
+        SimServerMap fSims;
+        std::vector<std::unique_ptr<MyProt::Simulation::SimulationServer> > fOwners;
+        MyProt::Polling::LatestValueStore fLatest;
+        // 试拉取只读 ConfigStore; 其余运行时成员可为空
+        AppContext fCtx = {
+            &fIo, nullptr, nullptr, EngineStarter(), nullptr,
+            &fLatest, &fSims, &fOwners, &fStore, nullptr, nullptr };
+
+        // 与 main.cpp 同序注册: 子路径先于 "/api/preview" (前缀匹配, 后者会吞掉它)
+        HttpRouter fRoutes;
+        fRoutes.Add("/api/preview/response",
+            [](const AppContext& c, const HttpRequest& r) {
+                return HandleResponsePreviewApi(*c.store, r);
+            });
+        fRoutes.Add("/api/preview/pull",
+            [](const AppContext& c, const HttpRequest& r) {
+                return HandlePullPreviewApi(*c.store, r);
+            });
+        fRoutes.Add("/api/preview",
+            [](const AppContext& c, const HttpRequest& r) {
+                return HandlePreviewApi(*c.store, r);
+            });
+        fApi.SetExtHandler([&fCtx, &fRoutes](const std::string& m, const std::string& p,
+                                             const std::string& b) {
+            HttpRequest req;
+            req.method = m;
+            req.path = p;
+            req.body = b;
+            return fRoutes.Dispatch(fCtx, req);
+        });
+        std::thread fThread([&fApi]() { fApi.Start(); });
+
+        asio::io_context fClientIo;
+        SyncTcpClient fClient(fClientIo);
+        auto FReq = [&fClient](const std::string& req) -> std::string {
+            if (!fClient.Connect("127.0.0.1", 18089)) return std::string();
+            const std::vector<uint8_t> raw = fClient.SendReceiveAll(
+                std::vector<uint8_t>(req.begin(), req.end()));
+            fClient.Close();
+            return std::string(raw.begin(), raw.end());
+        };
+        auto FPost = [&FReq](const std::string& path, const std::string& body) -> std::string {
+            const std::string req = "POST " + path + " HTTP/1.1\r\nHost: t\r\n"
+                "Content-Type: application/json\r\nContent-Length: "
+                + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+            return FReq(req);
+        };
+        for (int i = 0; i < 20; ++i) {
+            if (!FReq("GET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n").empty()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        // 正常路径: 真实 HTTP 请求 + 映射命中/未命中/额外标签
+        nlohmann::json pullBody;
+        pullBody["url"] = "http://127.0.0.1:18088/tags";
+        pullBody["method"] = "GET";
+        pullBody["timeoutMs"] = 2000;
+        pullBody["arrayOfItems"] = true;
+        pullBody["tagField"] = "tag";
+        pullBody["valueField"] = "value";
+        pullBody["declaredTags"] = nlohmann::json::array();
+        pullBody["declaredTags"].push_back("METER-01.Temp");
+        pullBody["declaredTags"].push_back("METER-01.Pressure");
+        pullBody["declaredTags"].push_back("METER-01.Level");
+        pullBody["declaredTags"].push_back("METER-01.Missing");
+        const std::string fOk = FPost("/api/preview/pull", pullBody.dump());
+        Check("POST 试拉取 → 200 + ok:true + status:200 + 3 条映射",
+              fOk.find("HTTP/1.1 200") != std::string::npos &&
+              fOk.find("\"ok\":true") != std::string::npos &&
+              fOk.find("\"status\":200") != std::string::npos &&
+              fOk.find("\"tag\":\"METER-01.Temp\"") != std::string::npos &&
+              fOk.find("\"tag\":\"METER-01.Pressure\"") != std::string::npos &&
+              fOk.find("\"tag\":\"METER-01.Level\"") != std::string::npos);
+        Check("POST 试拉取 → declaredTags 未命中/额外标签如实回报",
+              fOk.find("\"unmapped\":[\"METER-01.Missing\"]") != std::string::npos &&
+              fOk.find("\"extra\":[\"METER-01.Unknown\"]") != std::string::npos &&
+              fOk.find("\"mappingError\":\"\"") != std::string::npos);
+
+        // 路由不被 /api/preview 吞掉: 缺 url 的报错只存在于试拉取 handler
+        const std::string fNoUrl = FPost("/api/preview/pull", "{}");
+        Check("POST 试拉取缺 url → 400 + url 须为字符串 (未被 /api/preview 吞掉)",
+              fNoUrl.find("HTTP/1.1 400") != std::string::npos &&
+              fNoUrl.find("url 须为字符串") != std::string::npos);
+        const std::string fGet = FReq(
+            "GET /api/preview/pull HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n");
+        Check("GET 试拉取 → 405", fGet.find("HTTP/1.1 405") != std::string::npos);
+
+        // 目标不可达: 预览本身成功处理 (200), 业务结果 ok:false
+        nlohmann::json pullDown = pullBody;
+        pullDown["url"] = "http://127.0.0.1:18090/tags";
+        pullDown["timeoutMs"] = 500;
+        const std::string fDown = FPost("/api/preview/pull", pullDown.dump());
+        Check("POST 试拉取目标不可达 → 200 + ok:false + status:0 + error 非空",
+              fDown.find("HTTP/1.1 200") != std::string::npos &&
+              fDown.find("\"ok\":false") != std::string::npos &&
+              fDown.find("\"status\":0") != std::string::npos &&
+              fDown.find("\"error\":\"\"") == std::string::npos);
+
+        // 兄弟路由仍可达: 通用试渲染不受影响
+        const std::string fGeneric = FPost("/api/preview?scope=protocols", "{}");
+        Check("POST /api/preview 仍走通用试渲染 (缺 name → 400)",
+              fGeneric.find("HTTP/1.1 400") != std::string::npos &&
+              fGeneric.find("缺少 name") != std::string::npos);
+
+        fApi.Stop();
+        fThread.join();
+        pullSrv.Stop();
         std::cout << std::endl;
     }
 

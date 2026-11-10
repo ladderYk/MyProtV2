@@ -31,7 +31,8 @@
 | 18 | 南向 MQTT 请求-应答（`MqttChannel`） | P2 | 📋 | `Transport` 新通道 | 把 MQTT 作为设备侧协议：需多路复用 + `requestId` correlation + 超时映射；与 `IChannel` 单在途语义冲突，需先定通道契约（见 [modules/11 §11.1](./modules/11_Northbound.md)） |
 | 19 | 南向 MQTT 订阅上报（设备主动推送） | P2 | ✅ 2026-10-25 已销账 | `src/Southbound` | 新增 `IInboundTransport`（MQTT 订阅 / TCP 监听）+ `device.ingest` + 标签 `source=push`；事件流入站经 `TagValueSink` 写入 `LatestValueStore`，不经轮询引擎。见 [modules/12](./modules/12_Southbound.md) / [ADR-0019](./adr/0019-southbound-push-ingest.md)。TCP 入站与 MQTT 订阅同一入口；二进制载荷/入站鉴权仍待扩展 |
 | 20 | UDP 数据报传输（`UdpChannel`） | P1 | ✅ 2026-10-27 已交付 | `transport/UdpChannel.{hpp,cpp}` | 无连接、**一个数据报=一帧**（framing 退化为接收上限保护），复用整条字节管线；`TransportType::Udp` + 端点缓存 `udp:host:port`。见 [ADR-0002 §7](./adr/0002-transport-abstraction.md)。单播请求-应答已覆盖；组播 / UDP 入站监听未做 |
-| 21 | 南向 HTTP 轮询设备 REST API | P1 | 📋 | `Transport` / `App` 工厂 | 网关作 HTTP 客户端定时 GET/POST 设备取数；响应约定 `[{tag,value,ts}]` JSON 数组，复用 `PayloadMapper::MapJson` + `TagValueSink`。属应用集成层，不是 `IChannel` 字节流语义 → 届时另立 ADR |
+| 21 | 南向 HTTP 轮询设备 REST API | P1 | ✅ 2026-11-03 已销账 | `src/Southbound` | 网关作 HTTP 客户端定时 GET/POST 设备取数；新增 `device.pull` + 标签 `source=pull`，响应 `[{tag,value,ts}]` 数组经 `PayloadMapper::MapJson(arrayAsItems)` 逐元素映射后写 `LatestValueStore`。见 [ADR-0023](./adr/0023-southbound-http-pull.md) / [Config_Schema §4.2](./Config_Schema.md#42-pull南向-http-拉取接入设备级)。v1 仅 `http://`（无 TLS/gzip/重定向；chunked 已支持）；拉取失败→`Bad`（同一故障段不叠加 `Uncertain`），HTTP 成功但无命中标签的静默→`Uncertain`；连续失败按 `backoffBaseMs/backoffMaxMs` 指数退避，`keepAlive` 默认复用 TCP 连接（陈旧连接自动重试一次）；6 条 `myprot_pull_*` 指标 + 纯 pull 设备失败→`Degraded`、恢复→`Connected` |
+| 22 | CI 流水线（GitHub Actions） | P1 | ✅ 2026-11-05 已交付 | `.github/workflows/ci.yml` | 三通道：Linux（CMake + GCC 跑 6 套单测 + E2E）、Windows（MSBuild `/p:PlatformToolset=v143` + `scripts/ci.ps1`）、WebUI（Vitest + Vite 构建）；顺带修正 CMake 源文件清单漏项（`HttpPuller.cpp` / `HttpPullTests.cpp` / `OperationProfileTests.cpp`）。本地门禁仍为 `scripts\ci.ps1`（含 WebUI smoke） |
 
 ---
 

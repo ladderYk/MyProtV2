@@ -6,7 +6,7 @@
 
 A **pure config-driven industrial protocol gateway** in C++11. Every communication behavior is defined by JSON configuration files — the engine only interprets and executes, with zero protocol-specific hardcoding. Loading a different JSON config adds support for Modbus TCP, Siemens S7, SEER, or any binary/text protocol: **"definition is execution"**.
 
-> Design docs (architecture, modules, ADRs) live in [docs/en/README.md](docs/en/README.md) — an English mirror of the authoritative Chinese docs; architecture, protocols and the config schema are translated, while some deep-dive pages (modules, ADRs) are still Chinese-only (marked *zh* in the index).
+> Design docs (architecture, modules, ADRs) live in [docs/en/README.md](docs/en/README.md) — an English mirror of the authoritative Chinese docs; architecture, all 12 module deep-dives, the protocol tutorials and the config schema are translated, while the ADRs and ROADMAP are still Chinese-only (marked *zh* in the index).
 > The first-generation prototype is archived under [archive/MyProtCpp/](archive/MyProtCpp/) and no longer maintained.
 
 ---
@@ -24,12 +24,15 @@ MyProt-master/
 │   ├── Service/        # Config store, deep validation, directory loading, session circuit breaker
 │   ├── Gateway/        # ProtocolGateway facade, ChannelManager pool, TagReader, TagGrouper
 │   ├── Polling/        # Grouped polling engine, latest-value cache (results go straight to consumers)
+│   ├── Northbound/     # MQTT publication of the live snapshot (codec / session / client)
+│   ├── Southbound/     # Inbound adapters: MQTT subscribe / TCP ingest / HTTP pull + payload mapping
 │   ├── WebApi/         # REST management plane (auth middleware)
 │   ├── Simulation/     # Config-driven protocol simulator (response synthesis, template matching)
 │   └── App/            # main.cpp entry + RuntimeGlue shared by production and tests
-├── tests/              # Unit test projects (Core/Engine/Transport.Tests)
+├── tests/              # Unit test projects (Core/Engine/Transport/Service/Northbound/Southbound)
 ├── src/Tests/          # MyProt.E2E — end-to-end tests as a separate process
 ├── configs/            # Runtime config: protocols/*.json + tags.json
+├── configs_pull_demo/  # Runnable southbound HTTP pull demo (protocols + tags.json)
 ├── scripts/            # Build & environment scripts
 ├── third_party/        # asio (VS2015-compatible build) and other third-party libraries
 ├── docs/               # Design docs, module references, ADRs
@@ -52,10 +55,11 @@ MyProt-master/
    - No arguments = start the gateway with the default `configs/` directory (Web API on port 8080)
    - `--config <dir>` selects a config directory; `--port N` sets the Web API port
 3. Run end-to-end tests: execute `MyProt.E2E.exe` from the same directory
-4. One-shot regression gate (Release x64 build + 4 unit test suites + E2E; any failure exits non-zero — see [ADR-0013](docs/adr/0013-infrastructure-admission.md)):
+4. One-shot regression gate (Release x64 build + 6 unit test suites + E2E; any failure exits non-zero — see [ADR-0013](docs/adr/0013-infrastructure-admission.md)):
    ```bat
    powershell -ExecutionPolicy Bypass -File scripts\ci.ps1
    ```
+5. Continuous integration: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs three lanes on every push/PR — Linux (CMake + GCC: 6 unit suites + E2E), Windows (MSBuild with `PlatformToolset=v143` + `scripts\ci.ps1`), and WebUI (Vitest + Vite build). The local gate above still covers the WebUI smoke, which needs Edge.
 
 ### Linux
 
@@ -68,8 +72,8 @@ The same sources build with CMake; `MyProt.sln` stays untouched. Requirements:
 cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release
 cmake --build build-linux -j
 
-# build + 4 unit suites + E2E (exit code 0 = all green)
-./scripts/ci-linux.sh
+# 6 unit suites + E2E (exit code 0 = all green)
+ctest --test-dir build-linux --output-on-failure
 ```
 
 Binaries are written to `bin/<Config>/` (e.g. `bin/Release/MyProt.App`). Relative paths
@@ -188,7 +192,10 @@ MyProt.App.exe --config configs_write_test
 | **Response validation** | Expression checks (e.g. `resp[7] == 0x03`) via a recursive-descent evaluator |
 | **Data extraction** | Dynamic segment extraction with four byte orders (ABCD/DCBA/CDAB/BADC) and type conversion |
 | **Concurrency control** | Per-device connection pool + session circuit breaker (Closed/Open/HalfOpen), timeout-retry time budget |
-| **Management plane** | REST API with config hot-reload, metrics, token auth |
+| **Northbound** | MQTT 3.1.1 publication of the live snapshot (codec / session / client, QoS0/1, keep-alive and reconnect) |
+| **Southbound ingest** | Device-initiated push over MQTT subscription or TCP listen (`device.ingest`, `source=push`), with JSON payload → tag mapping |
+| **Southbound pull** | The gateway polls a device REST API (`device.pull`, `source=pull`): GET/POST, chunked, keep-alive reuse, exponential backoff, pull metrics and lifecycle; one-click trial pull in the WebUI |
+| **Management plane** | REST API with config hot-reload, structured validate / trial-render / trial-pull endpoints, metrics, token auth |
 
 Single source of truth for the config schema: [docs/en/Config_Schema.md](docs/en/Config_Schema.md).
 

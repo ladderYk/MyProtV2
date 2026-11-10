@@ -5,7 +5,7 @@ import { ref, computed, onMounted } from 'vue'
 import PageHeader from './PageHeader.vue'
 import StatusBadge from './StatusBadge.vue'
 import EmptyState from './EmptyState.vue'
-import { validateConfig } from '../api'
+import { listConfigs, getConfig, saveConfig, validateConfig } from '../api'
 import { t } from '../i18n'
 import {
   runtimeState, refreshAll, deviceStats, goodCount, badCount, onlineDevices, tagTotal
@@ -43,6 +43,168 @@ onMounted(async () => {
   loadHealth()
 })
 
+
+// ── 全局体检: 逐个校验全部协议 + 标签 ──
+// 后端限流 5 rps: 串行且留间隔, 否则 429 会被误读成「配置有问题」
+const checkup = ref({ state: 'idle', items: [], errorCount: 0, warningCount: 0 })
+let checkupRun = 0
+async function runCheckup() {
+  const run = ++checkupRun
+  const targets = runtimeState.protocols.map(n => ({ scope: 'protocols', name: n }))
+  if (runtimeState.tagConfigName) targets.push({ scope: 'tags', name: runtimeState.tagConfigName })
+  checkup.value = { state: 'running', items: [], errorCount: 0, warningCount: 0 }
+  const items = []
+  for (let i = 0; i < targets.length; i++) {
+    if (run !== checkupRun) return
+    const tg = targets[i]
+    try {
+      const rep = await validateConfig(tg.scope, tg.name)
+      items.push({
+        ...tg, ok: true,
+        errorCount: rep.errorCount || 0,
+        warningCount: rep.warningCount || 0,
+        issues: rep.issues || []
+      })
+    } catch (e) {
+      items.push({ ...tg, ok: false, errorCount: 0, warningCount: 0, issues: [], error: e.message })
+    }
+    if (run !== checkupRun) return
+    checkup.value = { ...checkup.value, items: items.slice() }
+    if (i < targets.length - 1) await new Promise(r => setTimeout(r, 230))
+  }
+  if (run !== checkupRun) return
+  checkup.value = {
+    state: 'done',
+    items,
+    // 「无法校验」也算一项错误: 体检没跑通不能报全部通过
+    errorCount: items.reduce((s, x) => s + (x.ok ? x.errorCount : 1), 0),
+    warningCount: items.reduce((s, x) => s + x.warningCount, 0)
+  }
+}
+
+// ── 配置包: 整包导出/导入 ──
+// 导出保留原文本(含注释); 导入先 POST /api/validate 逐项校验(不落盘),
+// 有任何错误就整体不导, 避免半套配置写进去导致热重载失败
+const bundleBusy = ref(false)
+const bundleMsg = ref('')
+const fileEl = ref(null)
+const NAME_RE = /^[A-Za-z0-9_-]+$/
+const delay = ms => new Promise(r => setTimeout(r, ms))
+
+async function exportBundle() {
+  if (bundleBusy.value) return
+  bundleBusy.value = true
+  bundleMsg.value = ''
+  try {
+    const protocols = []
+    for (const name of await listConfigs('protocols')) {
+      protocols.push({ name, content: await getConfig('protocols', name) })
+    }
+    const tagNames = await listConfigs('tags')
+    const tagName = tagNames[0] || 'tags'
+    const bundle = {
+      bundleVersion: 1,
+      app: 'MyProt',
+      exportedAt: new Date().toISOString(),
+      tags: { name: tagName, content: await getConfig('tags', tagName) },
+      protocols
+    }
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `myprot-bundle-${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    bundleMsg.value = t('已导出 {n} 个协议与标签配置', { n: protocols.length })
+  } catch (e) {
+    bundleMsg.value = t('导出失败: {msg}', { msg: e.message })
+  } finally {
+    bundleBusy.value = false
+  }
+}
+
+function pickBundle() {
+  if (bundleBusy.value) return
+  if (fileEl.value) {
+    fileEl.value.value = ''   // 允许重复选同一个文件
+    fileEl.value.click()
+  }
+}
+
+/// 解析并校验导入包: 结构不对直接报, 校验错误汇总后整体拒绝
+async function onBundleFile(ev) {
+  const file = ev.target.files && ev.target.files[0]
+  if (!file) return
+  bundleBusy.value = true
+  bundleMsg.value = ''
+  try {
+    const bundle = JSON.parse(await file.text())
+    const items = []
+    for (const it of (bundle.protocols || [])) {
+      if (!it || typeof it.name !== 'string' || !NAME_RE.test(it.name) || typeof it.content !== 'string') {
+        throw new Error(t('配置包格式不对：协议项缺少合法的 name/content'))
+      }
+      items.push({ scope: 'protocols', name: it.name, content: it.content })
+    }
+    if (bundle.tags && typeof bundle.tags.content === 'string') {
+      const tn = bundle.tags.name || 'tags'
+      if (!NAME_RE.test(tn)) throw new Error(t('配置包格式不对：标签配置名非法'))
+      items.push({ scope: 'tags', name: tn, content: bundle.tags.content })
+    }
+    if (!items.length) throw new Error(t('配置包里没有任何配置项'))
+
+    // 1) 逐项校验 (串行 + 间隔, 避开 5 rps 限流)
+    const bad = []
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]
+      try {
+        const rep = await validateConfig(it.scope, it.name, it.content)
+        it.errorCount = rep.errorCount || 0
+        it.warningCount = rep.warningCount || 0
+      } catch (e) {
+        it.errorCount = 1
+        it.warningCount = 0
+        it.error = e.message
+      }
+      if (it.errorCount) bad.push(it)
+      if (i < items.length - 1) await delay(230)
+    }
+    if (bad.length) {
+      const names = bad.map(x => x.name).join(', ')
+      bundleMsg.value = t('导入已取消：{n} 项未通过校验（{names}）', { n: bad.length, names })
+      return
+    }
+
+    // 2) 覆盖确认 (按名称比对现有配置)
+    const existing = { protocols: new Set(await listConfigs('protocols')), tags: new Set(await listConfigs('tags')) }
+    const overwrite = items.filter(x => existing[x.scope].has(x.name)).map(x => x.name)
+    if (overwrite.length &&
+        !confirm(t('将覆盖 {n} 项现有配置（{names}），确定导入？', { n: overwrite.length, names: overwrite.join(', ') }))) {
+      return
+    }
+
+    // 3) 先协议后标签, 逐项落盘
+    items.sort((a, b) => (a.scope === b.scope ? 0 : a.scope === 'protocols' ? -1 : 1))
+    let done = 0
+    for (const it of items) {
+      await saveConfig(it.scope, it.name, it.content)
+      done++
+      bundleMsg.value = t('正在导入 {done}/{total}…', { done, total: items.length })
+      if (done < items.length) await delay(230)
+    }
+    bundleMsg.value = t('已导入 {n} 项配置', { n: items.length })
+    await refreshAll()
+    loadHealth()
+  } catch (e) {
+    bundleMsg.value = t('导入失败: {msg}', { msg: e.message })
+  } finally {
+    bundleBusy.value = false
+    ev.target.value = ''
+  }
+}
 
 // ── 开始使用清单 ──
 // 首屏数值快照未就绪时卡片显示「—」, 避免瞬间误报「0/4 在线、0/28 Good」
@@ -224,6 +386,65 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
         </button>
       </section>
 
+      <!-- ⑤ 全局体检: 协议 + 标签逐个校验, 结果可直达问题 -->
+      <section class="panel block checkup">
+        <header class="block-head">
+          <h2 class="block-title">{{ t('全局配置体检') }}</h2>
+          <span v-if="checkup.state === 'done'" class="block-meta">{{ t('共 {n} 项配置', { n: checkup.items.length }) }}</span>
+          <button class="btn small" :disabled="checkup.state === 'running'" @click="runCheckup">
+            {{ checkup.state === 'running' ? t('体检中…') : (checkup.state === 'done' ? t('重新体检') : t('开始体检')) }}
+          </button>
+        </header>
+
+        <p v-if="checkup.state === 'idle'" class="checkup-hint">
+          {{ t('逐个校验全部协议与标签配置，找出会阻断热重载的问题。') }}
+        </p>
+        <p v-else-if="checkup.state === 'running' && !checkup.items.length" class="checkup-hint">
+          {{ t('体检中…') }}
+        </p>
+        <template v-else>
+          <div class="checkup-summary">
+            <StatusBadge v-if="checkup.errorCount" kind="bad" :text="t('{n} 错误', { n: checkup.errorCount })" />
+            <StatusBadge v-else-if="checkup.warningCount" kind="warn" :text="t('{n} 警告', { n: checkup.warningCount })" />
+            <StatusBadge v-else kind="ok" :text="t('全部通过')" />
+            <span v-if="checkup.state === 'running'" class="health-muted">{{ t('体检中…') }}</span>
+          </div>
+          <ul class="checkup-list">
+            <li v-for="it in checkup.items" :key="it.scope + '/' + it.name" class="checkup-item">
+              <span class="checkup-scope">{{ it.scope === 'tags' ? t('标签') : t('协议') }}</span>
+              <span class="checkup-name" :title="it.name">{{ it.name }}</span>
+              <template v-if="!it.ok">
+                <StatusBadge kind="bad" :text="t('无法校验')" />
+                <span class="checkup-error" :title="it.error">{{ it.error }}</span>
+              </template>
+              <StatusBadge v-else-if="it.errorCount" kind="bad" :text="t('{n} 错误', { n: it.errorCount })" />
+              <StatusBadge v-else-if="it.warningCount" kind="warn" :text="t('{n} 警告', { n: it.warningCount })" />
+              <StatusBadge v-else kind="ok" :text="t('通过')" />
+              <button v-if="it.issues.length" class="link-btn" @click="nav(it.scope, { focus: it.issues[0] })">
+                {{ t('查看问题 →') }}
+              </button>
+            </li>
+          </ul>
+        </template>
+      </section>
+
+      <!-- ⑤ 配置包: 整包导出/导入 -->
+      <section class="panel block bundle">
+        <header class="block-head">
+          <h2 class="block-title">{{ t('配置包') }}</h2>
+          <span class="block-meta">{{ t('导出全部协议与标签；导入前先逐项校验') }}</span>
+        </header>
+        <div class="bundle-actions">
+          <button class="btn small" :disabled="bundleBusy" @click="exportBundle">{{ t('导出配置包') }}</button>
+          <button class="btn small" :disabled="bundleBusy" @click="pickBundle">{{ t('导入配置包') }}</button>
+          <input
+            ref="fileEl" type="file" accept="application/json,.json"
+            class="bundle-file" @change="onBundleFile"
+          />
+          <span v-if="bundleMsg" class="health-muted">{{ bundleMsg }}</span>
+        </div>
+      </section>
+
       <!-- ⑤ 设备概览表 -->
       <section class="panel block">
         <header class="block-head">
@@ -347,6 +568,59 @@ function nav(view, intent) { emit('navigate', view, intent || null) }
 }
 .ready-summary { font-size: var(--mp-fs-sm); color: var(--mp-ink-2); }
 .ready-spacer { flex: 1; min-width: 0; }
+
+/* 配置包 */
+.bundle-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--mp-sp-2);
+  flex-wrap: wrap;
+}
+.bundle-file { display: none; }
+
+/* 全局体检 */
+.checkup-hint { margin: 0; font-size: var(--mp-fs-sm); color: var(--mp-ink-2); }
+.checkup-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--mp-sp-2);
+  padding: 6px 0 10px;
+}
+.checkup-list { list-style: none; display: flex; flex-direction: column; }
+.checkup-item {
+  display: flex;
+  align-items: center;
+  gap: var(--mp-sp-2);
+  padding: 7px 0;
+  border-top: 1px solid var(--mp-border);
+  font-size: var(--mp-fs-sm);
+  min-width: 0;
+}
+.checkup-item:first-child { border-top: 0; }
+.checkup-scope {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-surface-2);
+  color: var(--mp-ink-2);
+  font-size: var(--mp-fs-xs);
+}
+.checkup-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mp-font-mono, ui-monospace, Consolas, monospace);
+}
+.checkup-error {
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mp-err-ink);
+  font-size: var(--mp-fs-xs);
+}
 
 /* 清单 */
 .checklist { list-style: none; display: flex; flex-direction: column; }

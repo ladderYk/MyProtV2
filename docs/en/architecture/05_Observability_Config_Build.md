@@ -33,7 +33,7 @@ Log-level usage convention:
 | `error` | circuit breaker open, config validation failure, WebApi 400/500 |
 | `critical` | unrecoverable internal error |
 
-### 10.2 Metrics (v1: internal facade; HTTP exposure is v2)
+### 10.2 Metrics (v1 facade, exposed through /metrics)
 
 ```
 # v1 actual: Core/Metrics.hpp internal facade (counter + gauge + Device label), each module instruments write points:
@@ -42,12 +42,19 @@ Log-level usage convention:
 #                      myprot_device_lifecycle_transitions_total counter,
 #                      myprot_circuit_state gauge, myprot_circuit_opens_total counter)
 #   - write path:        Gateway::WriteService (write-path counting)
+#   - southbound pull:   HttpPuller (myprot_pull_rounds_total / myprot_pull_failures_total,
+#                      myprot_pull_consecutive_failures / myprot_pull_backoff_ms gauges,
+#                      myprot_pull_last_success_timestamp_seconds / myprot_pull_connections_total)
 # GET /metrics is implemented (Prometheus text v0.0.4, no auth; registered in the route table). Target metric shape:
 myprot_reads_total{device="PLC1",status="success"} 12345
 myprot_reads_total{device="PLC1",status="failed"} 3
 myprot_device_lifecycle_state{device="PLC1"} 2   # New/Connecting/Connected/Degraded/Disabled
 myprot_circuit_state{device="PLC1"} 0            # 0=closed, 1=open, 2=half_open
 myprot_write_queue_size{device="PLC1"} 2         # per-device write-mutex queue length (ADR-0011 P1 C)
+myprot_pull_rounds_total{device="METER-01"} 1440        # southbound HTTP pull rounds
+myprot_pull_consecutive_failures{device="METER-01"} 0   # consecutive failures, reset by a successful round
+myprot_pull_backoff_ms{device="METER-01"} 1000          # actual wait applied after the current round
+myprot_pull_connections_total{device="METER-01"} 1      # approaching 1 in steady state: keep-alive is effective
 ```
 
 > The metric set excludes `myprot_dispatch_queue_size` (no standalone DataDispatcher) and `myprot_deadband_filtered_total` (deadband filtering not enabled); the `TagDefinition.deadband` / `reportMode` fields are retained but do not participate in computation.

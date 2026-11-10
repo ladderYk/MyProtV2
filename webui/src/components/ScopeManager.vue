@@ -10,11 +10,12 @@ import TagsForm from './TagsForm.vue'
 import TrialPreviewPanel from './TrialPreviewPanel.vue'
 import {
   listConfigs, getConfig, saveConfig, deleteConfig,
-  listBackups, restoreBackup, validateConfig
+  listBackups, getBackupContent, restoreBackup, validateConfig
 } from '../api'
 import { t, locale } from '../i18n'
 import { advanced } from '../composables/useAdvancedMode'
 import { parseConfigJson } from '../jsonText'
+import { diffLines, collapseSame } from '../lineDiff'
 // 新建协议的起点直接复用仓库内配置, 避免前端再维护一份模板 (v1.30)
 import modbusTcpDoc from '../../../configs/protocols/modbus-tcp.json'
 import s7Doc from '../../../configs/protocols/s7-1200.json'
@@ -48,6 +49,19 @@ const newName = ref('')
 const newTemplate = ref('modbus')   // 新建起点: 内置模板 'modbus'|'s7'|'seer'|'blank'，或 'copy:<协议名>' 复制现有协议
 const itemKw = ref('')              // 协议列表搜索关键字
 const showPreview = ref(false)      // 试渲染抽屉 (仅 protocols; 用当前编辑器内容渲染一帧)
+// 删除协议前查设备引用: tags.json 的 devices[].protocol 指向它
+const deleteDialog = ref(false)
+const deleteTarget = ref('')
+const deleteDeviceRefs = ref([])    // [{id, tags}]
+const deleteChecking = ref(false)
+const deleteCheckFailed = ref(false)
+// 回滚前 diff: 先看清备份与当前内容的差异, 再决定是否覆盖
+const restoreDialog = ref(false)
+const restoreTag = ref('')
+const restoreLoading = ref(false)
+const restoreError = ref('')
+const restoreRows = ref([])          // [{kind:'same'|'add'|'del', text}]
+const restoreSummary = ref({ add: 0, del: 0 })
 
 // ── 方案 2: 结构化校验问题 (自检 / 保存被拒) ──
 const issues = ref([])              // [{severity,ruleId,subject,field,message}]
@@ -200,7 +214,7 @@ function onMore(cmd) {
   if (cmd === 'selfcheck') onSelfCheck()
   else if (cmd === 'preview') showPreview.value = true
   else if (cmd === 'delete') onDelete()
-  else if (cmd.indexOf('restore:') === 0) onRestore(cmd.slice(8))
+  else if (cmd.indexOf('restore:') === 0) openRestorePreview(cmd.slice(8))
 }
 
 // 切回简单视图时收起 JSON 页 (语法错误期间仍保留, 否则无法修复)
@@ -289,7 +303,32 @@ async function onDelete(name) {
   // 左侧列表项直接传入名称; toolbar 按钮不传参 (click 事件对象) → 回退到当前选中项
   const target = (typeof name === 'string' && name) ? name : selected.value
   if (!target) return
-  if (!confirm(t('确定删除协议配置「{name}」？其备份将一并删除。', { name: target }))) return
+  deleteTarget.value = target
+  deleteDeviceRefs.value = []
+  deleteCheckFailed.value = false
+  deleteChecking.value = true
+  deleteDialog.value = true
+  try {
+    // tags.json 的 devices[].protocol 指向本协议: 协议域校验看不到, 删除后设备会直接失联
+    const names = await listConfigs('tags')
+    const text = await getConfig('tags', (names && names[0]) || 'tags')
+    const root = parseConfigJson(text)
+    const tagCount = {}
+    for (const tag of (root.tags || [])) tagCount[tag.deviceId] = (tagCount[tag.deviceId] || 0) + 1
+    deleteDeviceRefs.value = (root.devices || [])
+      .filter(d => d.protocol === target)
+      .map(d => ({ id: d.id || '', tags: tagCount[d.id] || 0 }))
+  } catch (_) {
+    deleteCheckFailed.value = true   // 检查失败不阻断删除, 但必须让用户知道“没查过”
+  } finally {
+    deleteChecking.value = false
+  }
+}
+
+async function confirmDeleteProtocol() {
+  const target = deleteTarget.value
+  if (!target) return
+  deleteDialog.value = false
   try {
     await deleteConfig(props.scope, target)
     if (target === selected.value) {
@@ -401,11 +440,43 @@ async function onCreate() {
   }
 }
 
-async function onRestore(tag) {
-  if (!confirm(t('确定回滚「{name}」到 {tag}？当前未保存的修改将丢失。', { name: selected.value, tag }))) return
+async function openRestorePreview(tag) {
+  const name = selected.value
+  if (!name) return
+  restoreTag.value = tag
+  restoreDialog.value = true
+  restoreLoading.value = true
+  restoreError.value = ''
+  restoreRows.value = []
+  restoreSummary.value = { add: 0, del: 0 }
   try {
-    await restoreBackup(props.scope, selected.value, tag)
-    await open(selected.value)
+    const [cur, bak] = await Promise.all([
+      getConfig(props.scope, name),
+      getBackupContent(props.scope, name, tag)
+    ])
+    // 慢请求回来时用户可能已切走: 丢弃过期结果
+    if (selected.value !== name || restoreTag.value !== tag) return
+    const rows = diffLines(cur, bak)
+    restoreRows.value = collapseSame(rows)
+    restoreSummary.value = {
+      add: rows.filter(r => r.kind === 'add').length,
+      del: rows.filter(r => r.kind === 'del').length
+    }
+  } catch (e) {
+    restoreError.value = e.message
+  } finally {
+    restoreLoading.value = false
+  }
+}
+
+async function confirmRestore() {
+  const name = selected.value
+  const tag = restoreTag.value
+  if (!name || !tag) return
+  try {
+    await restoreBackup(props.scope, name, tag)
+    restoreDialog.value = false
+    await open(name)
     flash('ok', t('已回滚到 {tag}', { tag }))
     emit('changed')
   } catch (e) {
@@ -608,6 +679,72 @@ watch(() => props.scope, () => {
       </div><!-- /cfg-main -->
     </div>
 
+    <!-- 回滚前预览: 行级 diff (绿=备份带来, 红=将被覆盖掉) -->
+    <el-dialog v-model="restoreDialog" :title="t('回滚前确认')" width="760px" append-to-body destroy-on-close class="restore-diff-dialog">
+      <div class="restore-diff-head">
+        <span class="restore-diff-name"><code>{{ selected }}</code> → <code>{{ restoreTag }}</code></span>
+        <span v-if="!restoreLoading && !restoreError" class="restore-diff-stat">
+          <span class="stat-add">+{{ restoreSummary.add }}</span>
+          <span class="stat-del">-{{ restoreSummary.del }}</span>
+        </span>
+      </div>
+      <div v-if="restoreLoading" class="restore-diff-hint">{{ t('读取备份内容…') }}</div>
+      <el-alert
+        v-else-if="restoreError" type="error" :closable="false"
+        :title="t('读取备份内容失败: {msg}', { msg: restoreError })"
+      />
+      <template v-else>
+        <p class="restore-diff-hint">{{ t('+ 为备份新增的行，- 为将被删除的行。') }}</p>
+        <div class="restore-diff-body">
+          <div v-for="(r, i) in restoreRows" :key="i" :class="['diff-row', 'diff-' + r.kind]">
+            <span v-if="r.kind === 'gap'" class="diff-gap">{{ t('… {n} 行未改动 …', { n: r.text }) }}</span>
+            <template v-else>
+              <span class="diff-sign">{{ r.kind === 'add' ? '+' : (r.kind === 'del' ? '-' : ' ') }}</span>
+              <span class="diff-text">{{ r.text }}</span>
+            </template>
+          </div>
+        </div>
+      </template>
+      <template #footer>
+        <el-button @click="restoreDialog = false">{{ t('取消') }}</el-button>
+        <el-button type="primary" :disabled="restoreLoading || !!restoreError" @click="confirmRestore">{{ t('确定回滚') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 删除协议: 先列出引用它的设备, 避免删完设备失联 -->
+    <el-dialog v-model="deleteDialog" :title="t('删除协议配置')" width="480px" append-to-body destroy-on-close class="del-proto-dialog">
+      <div class="del-proto-body">
+        <p class="del-proto-name">{{ t('协议') }} <code>{{ deleteTarget }}</code></p>
+        <p class="del-proto-hint">{{ t('其历史备份将一并删除。') }}</p>
+        <div v-if="deleteChecking" class="del-proto-hint">{{ t('检查引用中…') }}</div>
+        <template v-else>
+          <el-alert
+            v-if="deleteCheckFailed" type="warning" :closable="false"
+            :title="t('未能读取设备与标签配置，无法确认引用')"
+          />
+          <template v-else-if="deleteDeviceRefs.length">
+            <el-alert
+              type="warning" :closable="false"
+              :title="t('{n} 台设备正在使用该协议，删除后它们将无法连接', { n: deleteDeviceRefs.length })"
+            />
+            <ul class="del-proto-refs">
+              <li v-for="(d, i) in deleteDeviceRefs" :key="i">
+                <code>{{ d.id }}</code>
+                <span class="del-proto-tagcount">{{ t('{n} 个标签', { n: d.tags }) }}</span>
+              </li>
+            </ul>
+          </template>
+          <div v-else class="del-proto-hint">{{ t('当前没有设备使用该协议。') }}</div>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="deleteDialog = false">{{ t('取消') }}</el-button>
+        <el-button type="danger" :loading="deleteChecking" @click="confirmDeleteProtocol">
+          {{ deleteDeviceRefs.length ? t('仍然删除') : t('删除') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <TrialPreviewPanel
       v-if="isProtocols"
       v-model="showPreview"
@@ -629,6 +766,31 @@ watch(() => props.scope, () => {
   font-size: var(--mp-fs-xs);
   color: var(--mp-muted-2);
 }
+/* 删除协议确认 */
+.del-proto-name { margin: 0 0 6px; }
+.del-proto-hint { margin: 0 0 10px; font-size: var(--mp-fs-sm); color: var(--mp-muted); }
+.del-proto-refs { margin: 10px 0 0; padding-left: 16px; max-height: 220px; overflow: auto; }
+.del-proto-refs li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.del-proto-tagcount { font-size: var(--mp-fs-sm); color: var(--mp-muted); }
+/* 回滚前 diff 预览 */
+.restore-diff-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.restore-diff-stat { display: flex; gap: 10px; font-variant-numeric: tabular-nums; font-size: var(--mp-fs-sm); }
+.restore-diff-stat .stat-add { color: var(--mp-ok-ink); }
+.restore-diff-stat .stat-del { color: var(--mp-err-ink); }
+.restore-diff-hint { margin: 0 0 8px; font-size: var(--mp-fs-sm); color: var(--mp-muted); }
+.restore-diff-body {
+  max-height: 420px; overflow: auto;
+  border: 1px solid var(--mp-line); border-radius: var(--mp-radius-sm);
+  background: var(--mp-bg-soft);
+  font-family: var(--mp-font-mono, ui-monospace, Consolas, monospace);
+  font-size: var(--mp-fs-xs); line-height: 1.5;
+}
+.diff-row { display: flex; gap: 6px; padding: 0 8px; white-space: pre; }
+.diff-sign { flex: none; width: 10px; color: var(--mp-muted-2); user-select: none; }
+.diff-text { flex: 1; min-width: 0; }
+.diff-add { background: var(--mp-ok-soft); }
+.diff-del { background: var(--mp-err-soft); }
+.diff-gap { color: var(--mp-muted-2); font-style: italic; }
 .msg {
   flex: none;
   padding: 9px 30px 9px 14px;

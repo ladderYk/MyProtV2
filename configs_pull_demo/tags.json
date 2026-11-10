@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 2,
+  "resilience": {
+    "maxAttempts": 3,
+    "backoffBaseMs": 100,
+    "backoffMaxMs": 1000,
+    "failureThreshold": 5,
+    "cooldownMs": 10000,
+    "halfOpenProbes": 1
+  },
+  "webApi": {
+    "bindAddress": "127.0.0.1",
+    "requireAuth": false,
+    "rateLimitRps": 20,
+    "rateLimitBurst": 40
+  },
+  "devices": [
+    {
+      "id": "PLC-001",
+      "protocol": "modbus-tcp",
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 11520,
+        "timeoutMs": 1000
+      }
+    },
+    {
+      "id": "METER-01",
+      "protocol": "modbus-tcp",
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 502,
+        "timeoutMs": 1000
+      },
+      "pull": {
+        "type": "http",
+        "http": {
+          "url": "http://127.0.0.1:18081/api/values",
+          "method": "GET",
+          "intervalMs": 1000,
+          "timeoutMs": 800,
+          "headers": {
+            "Accept": "application/json"
+          },
+          "arrayOfItems": true,
+          "maxSilenceMs": 10000
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "PLC-001.Temperature",
+      "deviceId": "PLC-001",
+      "operation": "ReadHoldingRegisters",
+      "variables": {
+        "StartByteAddress": 0,
+        "ByteCount": 4
+      },
+      "scanRateMs": 1000,
+      "finalType": "Float"
+    },
+    {
+      "name": "METER-01.Temp",
+      "label": "HTTP 拉取温度",
+      "unit": "°C",
+      "deviceId": "METER-01",
+      "source": "pull",
+      "finalType": "Double"
+    },
+    {
+      "name": "METER-01.Press",
+      "label": "HTTP 拉取压力",
+      "unit": "kPa",
+      "deviceId": "METER-01",
+      "source": "pull",
+      "finalType": "Double"
+    }
+  ]
+}

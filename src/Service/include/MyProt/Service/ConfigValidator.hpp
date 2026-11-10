@@ -133,6 +133,10 @@ private:
     void validateIngest(const Core::IngestConfig& ing,
                         const std::string& ctx, ValidationResult& r) const;
 
+    // ── Southbound pull (ADR-0023, device-level HTTP client) ──
+    void validatePull(const Core::PullConfig& pull,
+                      const std::string& ctx, ValidationResult& r) const;
+
     // ── Tag layer (§7 rules 12-15) ──
     void validateTag(const Core::TagDefinition& tag,
                      const std::unordered_map<std::string,

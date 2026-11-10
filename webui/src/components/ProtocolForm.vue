@@ -7,11 +7,12 @@
 import { reactive, ref, computed, onMounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { t } from '../i18n'
-import { getSchema } from '../api'
+import { getSchema, listConfigs, getConfig } from '../api'
 import {
   ElForm, ElFormItem, ElInput, ElInputNumber, ElSelect, ElOption,
   ElSwitch, ElCard, ElButton, ElCollapse, ElCollapseItem, ElAlert,
-  ElTabs, ElTabPane, ElDivider, ElRadioGroup, ElRadioButton
+  ElTabs, ElTabPane, ElDivider, ElRadioGroup, ElRadioButton,
+  ElDialog, ElTag
 } from 'element-plus'
 import VariableTable from './VariableTable.vue'
 import HandshakeEditor from './HandshakeEditor.vue'
@@ -19,6 +20,7 @@ import FieldHelp from './FieldHelp.vue'
 import FrameBuilder from './FrameBuilder.vue'
 import ExprBuilder from './ExprBuilder.vue'
 import { clone, hasOwn } from '../utils/object'
+import { parseConfigJson } from '../jsonText'
 import { resolveProfiles, migrateVars, migrateOpVars } from '../utils/protocol'
 import { advanced } from '../composables/useAdvancedMode'
 import { openHelp } from '../composables/useHelp'
@@ -43,7 +45,23 @@ const OP_KINDS = [
 // setup 阶段同步初始化: onMounted 晚于首次渲染, 空 local 会让模板
 // local.transport.type / local.framing.type 首帧抛 TypeError 导致整树崩溃
 const local = reactive(ensureShape(props.modelValue))
-const opTemplate = ref('')   // 新增操作时的模板名 ('' = 空白)
+// 新建操作向导: 命名 + 类型 + 起点(克隆/原型), 避免落进空白表单
+const newOpDialog = ref(false)
+const newOp = reactive({ name: '', kind: 'read', cloneFrom: '', profile: '' })
+// 简单视图: 低频帧参数默认收起, 高级模式直接平铺
+const moreFrame = ref(false)
+// 删除操作前的引用检查: 协议校验只看协议域, 看不到标签引用 — 删除前单独读一次 tags.json
+const removeDialog = ref(false)
+const removeTarget = ref('')
+const removeRefs = ref([])
+const removeChecking = ref(false)
+const removeCheckFailed = ref(false)
+// 重命名操作同样会断标签引用: 复用同一份 tags.json 扫描, 命中才弹确认
+const renameDialog = ref(false)
+const renameFrom = ref('')
+const renameTo = ref('')
+const renameRefs = ref([])
+const renameCheckFailed = ref(false)
 const activeTemplateTab = ref('visual')  // 请求模板编辑模式：visual | raw
 const activeHandshakeTab = ref('hs-visual') // v5 (C4): 握手编辑模式 hs-visual | hs-raw (加前缀避免与请求模板页签生成重复 DOM id)
 const activeOutputTab = ref('out-visual') // 输出编辑模式：out-visual | out-form (前缀避免与请求模板页签生成重复 DOM id)
@@ -182,10 +200,8 @@ function onProfilesText(text) {
   }
 }
 
-/// 继承的派生输出 (协议级 + 原型展开, 已被本操作覆盖的不列) — 只读, 可一键覆盖。
-const inheritedOutputs = computed(() => {
-  const op = curOp.value
-  if (!op) return []
+/// 继承来源表 (协议级 + 原型展开) — 用于来源徽标、已覆盖标记与还原
+function inheritedSourceMapFor(op) {
   const merged = {}
   for (const [n, d] of Object.entries(local.outputs || {})) merged[n] = { def: d, src: t('协议') }
   const p = profileOf(op)
@@ -194,9 +210,21 @@ const inheritedOutputs = computed(() => {
       merged[n] = { def: d, src: t('原型') + ' ' + op.profile }
     }
   }
-  for (const n of Object.keys(op.outputs || {})) delete merged[n]
-  return Object.entries(merged).map(([name, x]) => ({ name, def: x.def, src: x.src }))
+  return merged
+}
+const inheritedSourceMap = computed(() => inheritedSourceMapFor(curOp.value))
+
+/// 继承的派生输出 (协议级 + 原型展开, 已被本操作覆盖的不列) — 只读, 可一键覆盖。
+const inheritedOutputs = computed(() => {
+  const own = Object.keys((curOp.value && curOp.value.outputs) || {})
+  return Object.entries(inheritedSourceMap.value)
+    .filter(([n]) => !own.includes(n))
+    .map(([name, x]) => ({ name, def: x.def, src: x.src }))
 })
+/// 本操作 own outputs 中, 哪些是在继承值上做的覆盖
+function overriddenSource(name) {
+  return inheritedSourceMap.value[name] || null
+}
 function overrideOutput(name) {
   const item = inheritedOutputs.value.find(x => x.name === name)
   if (!item || !curOp.value) return
@@ -204,6 +232,87 @@ function overrideOutput(name) {
   curOp.value.outputs[name] = clone(item.def)
   emitDoc()
 }
+/// 还原: 删除本地覆盖, 回落到协议/原型提供的值
+function revertOutput(name) {
+  if (!curOp.value || !curOp.value.outputs) return
+  delete curOp.value.outputs[name]
+  emitDoc()
+}
+
+// ── 操作清单: 摘要 + 完整性诊断 ──
+function opRequestSegs(op) {
+  return ((op && op.requestTemplate) || []).filter(s => String(s || '').trim()).length
+}
+function opSummary(op) {
+  // 入/出要含协议级与原型继承, 否则全是「0 入 0 出」, 与模板里的占位符对不上
+  const ins = new Set([
+    ...Object.keys(local.inputs || {}),
+    ...Object.keys((op && op.inputs) || {})
+  ])
+  const outs = new Set([
+    ...Object.keys(inheritedSourceMapFor(op)),
+    ...Object.keys((op && op.outputs) || {})
+  ])
+  return t('{segs} 段 · {ins} 入 · {outs} 出', {
+    segs: opRequestSegs(op),
+    ins: ins.size,
+    outs: outs.size
+  })
+}
+/// 只报确定的缺口, 不做启发式猜测 — 误报会让徽标失去可信度
+/// 每条带 target (可定位锚点), 供诊断条点击跳转
+function opIssues(op) {
+  if (!op) return []
+  const issues = []
+  if (op.profile && !resolvedProfiles.value[op.profile]) {
+    issues.push({ code: 'profile-missing', target: '.profile-select', message: t('模板 {name} 未定义', { name: op.profile }) })
+  }
+  if (!opRequestSegs(op)) {
+    issues.push({ code: 'empty-template', target: '#op-tpl', message: t('请求模板为空') })
+  }
+  if ((op.kind || 'read') === 'read'
+      && !Object.keys(op.outputs || {}).length
+      && !Object.keys(inheritedSourceMapFor(op)).length) {
+    issues.push({ code: 'no-output', target: '#op-out', message: t('无输出字段') })
+  }
+  return issues
+}
+const curOpIssues = computed(() => opIssues(curOp.value))
+/// 点诊断条目 → 滚到需要补的字段并闪烁
+function focusOpIssue(iss) {
+  if (!iss || !iss.target) return
+  activeSection.value = 'ops'
+  scrollFlash(iss.target)
+}
+/// 点清单里带「待补」的徽标 → 选中该操作并展开诊断条
+function openOpIssues(row) {
+  selOp.value = row.name
+  nextTick(() => scrollFlash('#op-diag'))
+}
+const opRows = computed(() => opNames.value.map(name => {
+  const op = local.operations[name]
+  return { name, kind: op.kind || 'read', summary: opSummary(op), issues: opIssues(op) }
+}))
+// 操作清单过滤: 协议动辄十几~几十个操作, 按名称/说明搜 + 读/写筛选
+const opFilterKw = ref('')
+const opFilterKind = ref('')   // ''=全部 | 'read' | 'write'
+const opFilterActive = computed(() => !!(opFilterKw.value.trim() || opFilterKind.value))
+const visibleOpRows = computed(() => {
+  const kw = opFilterKw.value.trim().toLowerCase()
+  return opRows.value.filter(r => {
+    if (opFilterKind.value && r.kind !== opFilterKind.value) return false
+    if (!kw) return true
+    return r.name.toLowerCase().indexOf(kw) >= 0 ||
+      String(r.summary || '').toLowerCase().indexOf(kw) >= 0
+  })
+})
+/// 过滤后当前选中项可能被隐藏: 落到首个可见操作, 避免「列表无选中但详情还在显示」
+function syncSelOpToFilter() {
+  const rows = visibleOpRows.value
+  if (!rows.length) return
+  if (!rows.some(r => r.name === selOp.value)) selOp.value = rows[0].name
+}
+watch([opFilterKw, opFilterKind], syncSelOpToFilter)
 /// 字段名排序 — 与 VariableTable 表格顺序一致 (表达式区此前按配置原始顺序, 两处观感不一致)
 function sortedEntries(obj) {
   return Object.entries(obj || {}).sort((a, b) => a[0].localeCompare(b[0]))
@@ -340,23 +449,36 @@ function uniqueOpName(base) {
   return name
 }
 
-/// 新增: 空白操作 或 克隆本协议已有操作 (含 profile 引用, 不再复制前端硬编码模板)
-function addOperation() {
-  const tplName = opTemplate.value
-  let name
+/// 打开新建向导: 预填不冲突的名字, 其余由用户选
+function openNewOp() {
+  newOp.name = uniqueOpName('NewOperation')
+  newOp.kind = 'read'
+  newOp.cloneFrom = ''
+  newOp.profile = ''
+  newOpDialog.value = true
+}
+/// 创建: 克隆优先 (保留请求模板/变量/输出), 否则空白骨架
+function confirmNewOp() {
+  const name = (newOp.name || '').trim()
+  if (!name) { ElMessage.warning(t('请输入操作名')); return }
+  if (local.operations[name]) { ElMessage.warning(t('操作名「{name}」已存在', { name })); return }
   let op
-  if (tplName && local.operations[tplName]) {
-    name = uniqueOpName(tplName)
-    op = clone(local.operations[tplName])
+  if (newOp.cloneFrom && local.operations[newOp.cloneFrom]) {
+    op = clone(local.operations[newOp.cloneFrom])
     delete op._rows
     delete op._rpSet
+    op.kind = newOp.kind
+    if (newOp.profile) op.profile = newOp.profile
+    else delete op.profile
   } else {
-    name = uniqueOpName('NewOperation')
-    op = { kind: 'read', requestTemplate: [], inputs: {}, outputs: {} }
+    op = { kind: newOp.kind, requestTemplate: [], inputs: {}, outputs: {} }
+    if (newOp.profile) op.profile = newOp.profile
   }
+  if (op.kind !== 'write') delete op.expectResponse
   local.operations[name] = op
   prepareOp(op)
-  selOp.value = name   // v1.23: 新增后自动选中
+  selOp.value = name
+  newOpDialog.value = false
   emitDoc()
 }
 
@@ -380,6 +502,50 @@ function removeOperation(name) {
   emitDoc()
 }
 
+/// 扫描 tags.json 中引用了某操作的标签 (扁平结构: tags[].deviceId → devices[].protocol)
+/// 协议域校验看不到这个文件, 删/改操作名都要靠它提前暴露断引用
+async function scanTagRefs(opName) {
+  const names = await listConfigs('tags')
+  const text = await getConfig('tags', (names && names[0]) || 'tags')
+  const root = parseConfigJson(text)
+  const devById = {}
+  for (const dev of (root.devices || [])) devById[dev.id] = dev
+  const refs = []
+  for (const tag of (root.tags || [])) {
+    const dev = devById[tag.deviceId]
+    if (!dev || dev.protocol !== local.protocolName) continue
+    for (const field of ['operation', 'writeOperation', 'writeBytesOperation']) {
+      if (tag[field] === opName) refs.push({ device: dev.id || '', tag: tag.name || '', field })
+    }
+  }
+  return refs
+}
+
+/// 删除前先查标签引用: 断引用要到保存标签时才会暴露
+async function openRemoveOp(name) {
+  if (!name) return
+  removeTarget.value = name
+  removeRefs.value = []
+  removeCheckFailed.value = false
+  removeChecking.value = true
+  removeDialog.value = true
+  try {
+    removeRefs.value = await scanTagRefs(name)
+  } catch (_) {
+    removeCheckFailed.value = true   // 检查失败不阻断删除, 但必须告诉用户“没查过”
+  } finally {
+    removeChecking.value = false
+  }
+}
+
+function confirmRemoveOp() {
+  const name = removeTarget.value
+  if (!name) return
+  removeOperation(name)
+  removeDialog.value = false
+  ElMessage.success(t('已删除操作 {name}', { name }))
+}
+
 function renameOperation(oldName, newName) {
   newName = (newName || '').trim()
   if (!newName || newName === oldName) return false
@@ -396,11 +562,51 @@ function renameOperation(oldName, newName) {
   return true
 }
 
-/// 失焦提交操作名; 校验失败时草稿回退
-function commitOpName() {
-  if (!renameOperation(selOp.value, opNameDraft.value)) {
+/// 失焦提交操作名: 先做本地校验, 再查标签引用; 有引用先让用户确认
+/// 序号防止连续失焦的异步结果互相覆盖
+let renameSeq = 0
+async function commitOpName() {
+  const from = selOp.value
+  const to = (opNameDraft.value || '').trim()
+  if (!to || to === from) { opNameDraft.value = from; return }
+  if (local.operations[to]) {
+    ElMessage.warning(t('操作名「{name}」已存在', { name: to }))
+    opNameDraft.value = from
+    return
+  }
+  const seq = ++renameSeq
+  renameFrom.value = from
+  renameTo.value = to
+  renameRefs.value = []
+  renameCheckFailed.value = false
+  try {
+    const refs = await scanTagRefs(from)
+    if (seq !== renameSeq) return
+    if (!refs.length) { renameOperation(from, to); return }
+    renameRefs.value = refs
+    renameDialog.value = true
+  } catch (_) {
+    if (seq !== renameSeq) return
+    renameCheckFailed.value = true   // 没查过 → 交给用户决定, 不静默改名
+    renameDialog.value = true
+  }
+}
+
+function confirmRenameOp() {
+  if (renameOperation(renameFrom.value, renameTo.value)) {
+    renameDialog.value = false
+    if (renameRefs.value.length) {
+      ElMessage.warning(t('已改名，请同步修改 {n} 个标签的引用', { n: renameRefs.value.length }))
+    }
+  } else {
     opNameDraft.value = selOp.value
   }
+}
+
+function cancelRenameOp() {
+  renameSeq++
+  renameDialog.value = false
+  opNameDraft.value = selOp.value
 }
 
 // ── 方案 2: 校验问题 → 表单定位 ──────────────────────────────────
@@ -685,66 +891,75 @@ onMounted(async () => {
             <el-button size="small" @click="applyMbap">{{ t('套用 Modbus MBAP 帧参数') }}</el-button>
             <div class="field-hint">{{ t('一键填入 Modbus TCP 标准帧结构 (偏移 4 / 宽度 2 / 帧头 6)') }}</div>
           </el-form-item>
-          <el-form-item :label="t('长度域偏移')">
-            <el-input-number
-              :model-value="local.framing.lengthFieldOffset" :min="0"
-              controls-position="right" style="width: 120px"
-              @update:model-value="v => { local.framing.lengthFieldOffset = v; emitDoc() }"
-            />
-            <span class="unit">{{ t('字节') }}</span>
+          <!-- 简单视图: 帧结构细节默认收起, 高级模式直接平铺 -->
+          <el-form-item v-if="!advanced" class="span2 more-frame-toggle">
+            <el-button link type="primary" @click="moreFrame = !moreFrame">
+              {{ moreFrame ? t('收起帧参数') : t('更多帧参数 (7)') }}
+            </el-button>
+            <div class="field-hint">{{ t('偏移/宽度/修正量等属帧结构细节, 不确定时保持默认') }}</div>
           </el-form-item>
-          <el-form-item :label="t('长度域宽度')">
-            <el-select
-              :model-value="local.framing.lengthFieldLength"
-              style="width: 120px"
-              @change="v => { local.framing.lengthFieldLength = v; emitDoc() }"
-            >
-              <el-option :value="1" :label="t('1 字节')" />
-              <el-option :value="2" :label="t('2 字节')" />
-              <el-option :value="4" :label="t('4 字节')" />
-            </el-select>
-          </el-form-item>
-          <el-form-item :label="t('长度含帧头')">
-            <el-switch
-              :model-value="!!local.framing.lengthIncludesHeader"
-              @change="v => { local.framing.lengthIncludesHeader = v; emitDoc() }"
-            />
-          </el-form-item>
-          <el-form-item :label="t('长度域字节序')">
-            <el-select
-              :model-value="local.framing.byteOrder"
-              style="width: 160px"
-              @change="v => { local.framing.byteOrder = v; emitDoc() }"
-            >
-              <el-option label="BigEndian" value="BigEndian" />
-              <el-option label="LittleEndian" value="LittleEndian" />
-            </el-select>
-            <div class="field-hint">{{ t('仅长度字段的大小端, 与数据字节序无关') }}</div>
-          </el-form-item>
-          <el-form-item :label="t('帧头长度')">
-            <el-input-number
-              :model-value="local.framing.headerLength" :min="0"
-              controls-position="right" style="width: 120px"
-              @update:model-value="v => { local.framing.headerLength = v; emitDoc() }"
-            />
-            <span class="unit">{{ t('字节') }}</span>
-          </el-form-item>
-          <el-form-item :label="t('长度修正量')">
-            <el-input-number
-              :model-value="local.framing.lengthAdjustment"
-              controls-position="right" style="width: 120px"
-              @update:model-value="v => { local.framing.lengthAdjustment = v; emitDoc() }"
-            />
-            <span class="unit">{{ t('字节') }}</span>
-          </el-form-item>
-          <el-form-item :label="t('最大帧长')">
-            <el-input-number
-              :model-value="local.framing.maxFrameSize" :min="1"
-              controls-position="right" style="width: 120px"
-              @update:model-value="v => { local.framing.maxFrameSize = v; emitDoc() }"
-            />
-            <span class="unit">{{ t('字节') }}</span>
-          </el-form-item>
+          <template v-if="advanced || moreFrame">
+            <el-form-item :label="t('长度域偏移')">
+              <el-input-number
+                :model-value="local.framing.lengthFieldOffset" :min="0"
+                controls-position="right" style="width: 120px"
+                @update:model-value="v => { local.framing.lengthFieldOffset = v; emitDoc() }"
+              />
+              <span class="unit">{{ t('字节') }}</span>
+            </el-form-item>
+            <el-form-item :label="t('长度域宽度')">
+              <el-select
+                :model-value="local.framing.lengthFieldLength"
+                style="width: 120px"
+                @change="v => { local.framing.lengthFieldLength = v; emitDoc() }"
+              >
+                <el-option :value="1" :label="t('1 字节')" />
+                <el-option :value="2" :label="t('2 字节')" />
+                <el-option :value="4" :label="t('4 字节')" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="t('长度含帧头')">
+              <el-switch
+                :model-value="!!local.framing.lengthIncludesHeader"
+                @change="v => { local.framing.lengthIncludesHeader = v; emitDoc() }"
+              />
+            </el-form-item>
+            <el-form-item :label="t('长度域字节序')">
+              <el-select
+                :model-value="local.framing.byteOrder"
+                style="width: 160px"
+                @change="v => { local.framing.byteOrder = v; emitDoc() }"
+              >
+                <el-option label="BigEndian" value="BigEndian" />
+                <el-option label="LittleEndian" value="LittleEndian" />
+              </el-select>
+              <div class="field-hint">{{ t('仅长度字段的大小端, 与数据字节序无关') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('帧头长度')">
+              <el-input-number
+                :model-value="local.framing.headerLength" :min="0"
+                controls-position="right" style="width: 120px"
+                @update:model-value="v => { local.framing.headerLength = v; emitDoc() }"
+              />
+              <span class="unit">{{ t('字节') }}</span>
+            </el-form-item>
+            <el-form-item :label="t('长度修正量')">
+              <el-input-number
+                :model-value="local.framing.lengthAdjustment"
+                controls-position="right" style="width: 120px"
+                @update:model-value="v => { local.framing.lengthAdjustment = v; emitDoc() }"
+              />
+              <span class="unit">{{ t('字节') }}</span>
+            </el-form-item>
+            <el-form-item :label="t('最大帧长')">
+              <el-input-number
+                :model-value="local.framing.maxFrameSize" :min="1"
+                controls-position="right" style="width: 120px"
+                @update:model-value="v => { local.framing.maxFrameSize = v; emitDoc() }"
+              />
+              <span class="unit">{{ t('字节') }}</span>
+            </el-form-item>
+          </template>
         </template>
 
         <el-form-item v-else-if="local.framing.type === 'Fixed'" :label="t('定长帧长')">
@@ -838,27 +1053,49 @@ onMounted(async () => {
         :title="t('暂无操作定义, 点击操作 tabs 右侧「新增操作」创建')"
       />
 
-      <!-- v4.4 改: 操作列表用 tabs (原左侧 210px 索引移除, 详情表单吃满整行) -->
+      <!-- 操作清单: 每条给类型/摘要/完整性, 详情在下方; 平铺 tabs 超过 8 条就难扫读 -->
       <div v-else class="op-body">
-        <div class="op-tabs-row">
-        <el-tabs v-model="selOp" type="card" class="op-list-tabs">
-          <el-tab-pane v-for="n in opNames" :key="n" :name="n">
-            <template #label>
-              <span class="op-tab-name" :title="n">{{ n }}</span>
-              <span
-                class="md-kind"
-                :class="(local.operations[n] && local.operations[n].kind) === 'write' ? 'w' : 'r'"
-              >{{ (local.operations[n] && local.operations[n].kind) === 'write' ? t('写') : t('读') }}</span>
-            </template>
-          </el-tab-pane>
-        </el-tabs>
-        <div class="op-create">
-          <select v-model="opTemplate" class="op-tpl-select" :title="t('克隆已有操作作为起点')">
-            <option value="">{{ t('空白操作') }}</option>
-            <option v-for="name in opNames" :key="name" :value="name">{{ t('克隆') }} {{ name }}</option>
-          </select>
-          <el-button type="primary" size="small" plain @click="addOperation">{{ t('新增操作') }}</el-button>
+        <!-- 操作多时按名称/说明搜 + 读/写筛选 -->
+        <div class="op-filter">
+          <el-input
+            v-model="opFilterKw" size="small" clearable class="op-filter-kw"
+            :placeholder="t('搜索操作名/说明')"
+          />
+          <el-radio-group v-model="opFilterKind" size="small" class="op-filter-kind">
+            <el-radio-button value="">{{ t('全部') }}</el-radio-button>
+            <el-radio-button value="read">{{ t('读') }}</el-radio-button>
+            <el-radio-button value="write">{{ t('写') }}</el-radio-button>
+          </el-radio-group>
+          <span v-if="opFilterActive" class="op-filter-count">
+            {{ t('{n} / {total} 条', { n: visibleOpRows.length, total: opRows.length }) }}
+          </span>
         </div>
+        <div class="op-list">
+          <div v-if="!visibleOpRows.length" class="op-filter-empty">
+            {{ t('没有匹配的操作，请调整搜索条件') }}
+          </div>
+          <button
+            v-for="row in visibleOpRows" :key="row.name" type="button"
+            class="op-item" :class="{ active: selOp === row.name }"
+            @click="selOp = row.name"
+          >
+            <span class="op-kind" :class="row.kind === 'write' ? 'w' : 'r'">
+              {{ row.kind === 'write' ? t('写') : t('读') }}
+            </span>
+            <span class="op-item-main">
+              <span class="op-item-name" :title="row.name">{{ row.name }}</span>
+              <span class="op-item-meta">{{ row.summary }}</span>
+            </span>
+            <span
+              v-if="row.issues.length" class="op-badge warn"
+              :title="row.issues.map(i => i.message).join('; ')"
+              @click.stop="openOpIssues(row)"
+            >{{ t('{n} 项待补', { n: row.issues.length }) }}</span>
+            <span v-else class="op-badge ok">{{ t('完整') }}</span>
+          </button>
+          <button type="button" class="op-item op-add" @click="openNewOp">
+            <span class="op-add-icon" aria-hidden="true">＋</span>{{ t('新增操作') }}
+          </button>
         </div>
         <section class="md-detail" id="op-detail-head">
           <el-card v-if="curOp" shadow="never" class="op md-card">
@@ -872,11 +1109,27 @@ onMounted(async () => {
                 <el-button size="small" plain @click="duplicateOperation(selOp)">
                   {{ t('复制') }}
                 </el-button>
-                <el-button type="danger" size="small" plain @click="removeOperation(selOp)">
+                <el-button type="danger" size="small" plain @click="openRemoveOp(selOp)">
                   {{ t('删除') }}
                 </el-button>
               </div>
             </template>
+
+            <!-- 诊断: 只报确定缺口, 点条目直达字段 (比徽标的 title 更可操作) -->
+            <div v-if="curOpIssues.length" id="op-diag" class="op-diag">
+              <div class="op-diag-head">
+                <span class="op-diag-title">{{ t('{n} 项待补', { n: curOpIssues.length }) }}</span>
+                <span class="op-diag-hint">{{ t('点击条目定位到需要补充的字段') }}</span>
+              </div>
+              <button
+                v-for="(iss, i) in curOpIssues" :key="i"
+                type="button" class="op-diag-item" @click="focusOpIssue(iss)"
+              >
+                <span class="op-diag-dot" aria-hidden="true"></span>
+                <span class="op-diag-text">{{ iss.message }}</span>
+                <span class="op-diag-go">{{ t('去处理 →') }}</span>
+              </button>
+            </div>
 
             <el-form size="default" class="form-grid">
               <el-form-item>
@@ -917,7 +1170,7 @@ onMounted(async () => {
                 </el-select>
                 <div class="field-hint">{{ t('只发仅用于写类操作; 与写后读回 (readBack) 互斥') }}</div>
               </el-form-item>
-              <el-form-item :label="t('请求模板')" class="span2">
+              <el-form-item :label="t('请求模板')" class="span2" id="op-tpl">
                 <!-- v4.7: 变量提示 — 全局(协议级)/本操作(派生) 分组, 点击插入下方模板 -->
                 <div class="chips-bar">
                   <span class="chips-title">{{ t('变量提示') }}</span>
@@ -979,7 +1232,7 @@ onMounted(async () => {
               <div class="op-vars">
                 <VariableTable :model-value="curOp.inputs" mode="inputs" :title="t('操作变量 (inputs · 本操作)')" @change="emitDoc" />
               </div>
-              <div class="op-vars">
+              <div class="op-vars" id="op-out">
                 <div v-if="inheritedOutputs.length" class="inherited-out">
                   <div class="inherited-head">
                     <span class="chips-group">{{ t('继承的自动计算字段') }}</span>
@@ -1000,6 +1253,13 @@ onMounted(async () => {
                         <code>{{ outName }}</code>
                         <el-tag v-if="outDef.label" size="small" effect="plain">{{ outDef.label }}</el-tag>
                         <el-tag v-if="outDef.unit" size="small" type="info" effect="plain">{{ outDef.unit }}</el-tag>
+                        <el-tag v-if="overriddenSource(outName)" size="small" type="warning" effect="plain">
+                          {{ t('覆盖 {src}', { src: overriddenSource(outName).src }) }}
+                        </el-tag>
+                        <el-button
+                          v-if="overriddenSource(outName)" size="small" text type="primary"
+                          @click="revertOutput(outName)"
+                        >{{ t('还原') }}</el-button>
                       </div>
                       <ExprBuilder
                         v-model="outDef.expr"
@@ -1100,6 +1360,104 @@ onMounted(async () => {
     </el-card>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 新建操作向导: 名称/类型/起点一次选清, 不再落到空白页签 -->
+    <el-dialog v-model="newOpDialog" :title="t('新建操作')" width="460px" append-to-body destroy-on-close class="new-op-dialog">
+      <el-form size="default" label-width="88px">
+        <el-form-item :label="t('操作名')">
+          <el-input v-model="newOp.name" class="mono-input" @keyup.enter="confirmNewOp" />
+        </el-form-item>
+        <el-form-item :label="t('操作类型')">
+          <el-radio-group v-model="newOp.kind">
+            <el-radio-button value="read">{{ t('读') }}</el-radio-button>
+            <el-radio-button value="write">{{ t('写') }}</el-radio-button>
+          </el-radio-group>
+          <div class="field-hint">{{ t('读 = 供只读标签引用; 写 = 可作写请求模板') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('起点')">
+          <el-select v-model="newOp.cloneFrom" clearable :placeholder="t('空白操作')" style="width: 100%">
+            <el-option v-for="n in opNames" :key="n" :label="t('克隆 {name}', { name: n })" :value="n" />
+          </el-select>
+          <div class="field-hint">{{ t('克隆会复制请求模板、变量与输出, 适合在同协议内扩展') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('操作模板')">
+          <el-select v-model="newOp.profile" clearable :placeholder="t('不使用原型')" style="width: 100%">
+            <el-option v-for="n in profileNames" :key="n" :label="n" :value="n" />
+          </el-select>
+          <div class="field-hint">{{ t('原型提供默认输出/应答字段, 可在创建后覆盖') }}</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="newOpDialog = false">{{ t('取消') }}</el-button>
+        <el-button type="primary" @click="confirmNewOp">{{ t('创建') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 删除操作: 先展示引用它的设备/标签, 避免盲删后标签断引用 -->
+    <el-dialog v-model="removeDialog" :title="t('删除操作')" width="480px" append-to-body destroy-on-close class="del-op-dialog">
+      <div class="del-op-body">
+        <p class="del-op-name">{{ t('操作') }} <code>{{ removeTarget }}</code></p>
+        <div v-if="removeChecking" class="field-hint">{{ t('检查引用中…') }}</div>
+        <template v-else>
+          <el-alert
+            v-if="removeCheckFailed" type="warning" :closable="false"
+            :title="t('未能读取设备与标签配置，无法确认引用')"
+          />
+          <template v-else-if="removeRefs.length">
+            <el-alert
+              type="warning" :closable="false"
+              :title="t('被 {n} 个标签引用，删除后这些标签将失效', { n: removeRefs.length })"
+            />
+            <ul class="del-op-refs">
+              <li v-for="(r, i) in removeRefs" :key="i">
+                <code>{{ r.device }}</code>
+                <span class="del-op-tag">{{ r.tag }}</span>
+                <el-tag size="small" type="warning" effect="plain">{{ r.field }}</el-tag>
+              </li>
+            </ul>
+          </template>
+          <div v-else class="field-hint">{{ t('此操作未被任何标签引用。') }}</div>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="removeDialog = false">{{ t('取消') }}</el-button>
+        <el-button type="danger" :loading="removeChecking" @click="confirmRemoveOp">
+          {{ removeRefs.length ? t('仍然删除') : t('删除') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 重命名操作: 改名不会动 tags.json, 先列出会断掉的标签引用 -->
+    <el-dialog v-model="renameDialog" :title="t('重命名操作')" width="480px" append-to-body destroy-on-close class="rename-op-dialog" @closed="cancelRenameOp">
+      <div class="del-op-body">
+        <p class="del-op-name">
+          <code>{{ renameFrom }}</code>
+          <span class="rename-arrow">→</span>
+          <code>{{ renameTo }}</code>
+        </p>
+        <el-alert
+          v-if="renameCheckFailed" type="warning" :closable="false"
+          :title="t('未能读取设备与标签配置，无法确认引用')"
+        />
+        <template v-else>
+          <el-alert
+            type="warning" :closable="false"
+            :title="t('被 {n} 个标签引用，改名后需同步修改', { n: renameRefs.length })"
+          />
+          <ul class="del-op-refs">
+            <li v-for="(r, i) in renameRefs" :key="i">
+              <code>{{ r.device }}</code>
+              <span class="del-op-tag">{{ r.tag }}</span>
+              <el-tag size="small" type="warning" effect="plain">{{ r.field }}</el-tag>
+            </li>
+          </ul>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="cancelRenameOp">{{ t('取消') }}</el-button>
+        <el-button type="warning" @click="confirmRenameOp">{{ t('仍然改名') }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1329,29 +1687,111 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
 }
-/* v4.7: 操作 tabs 行 — tabs 左 (弹性), 新建区右 (固定) */
-.op-tabs-row {
+/* v4.7: 操作清单 — 旧 tabs 行已由 .op-list 取代 */
+/* 操作清单: 每条给类型/摘要/完整性, 详情在下方表单 */
+.op-filter {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
-.op-create {
-  flex-shrink: 0;
+.op-filter-kw { width: 220px; }
+.op-filter-count { font-size: var(--mp-fs-xs); color: var(--mp-muted); }
+.op-filter-empty {
+  grid-column: 1 / -1;
+  padding: 12px;
+  text-align: center;
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-muted);
+  border: 1px dashed var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+}
+.op-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.op-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-}
-.op-tpl-select {
-  height: var(--mp-control-h);
-  padding: 0 8px;
-  border: 1px solid var(--mp-border-strong);
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-radius-sm);
-  outline: none;
-  font-size: var(--mp-fs-sm);
-  color: var(--mp-ink-2);
   background: var(--mp-surface);
+  text-align: left;
+  transition: border-color .15s, background .15s;
 }
-.op-tpl-select:focus { border-color: var(--mp-accent); }
+.op-item:hover { border-color: var(--mp-border-strong); background: var(--mp-surface-2); }
+.op-item.active { border-color: var(--mp-accent); background: var(--mp-accent-soft); }
+.op-kind {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 16px;
+}
+.op-kind.r { background: var(--mp-accent-soft); color: var(--mp-accent-hover); }
+.op-kind.w { background: var(--mp-warn-soft); color: var(--mp-warn-ink); }
+.op-item-main { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.op-item-name {
+  font-family: var(--mp-font-mono);
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.op-item-meta { font-size: var(--mp-fs-xs); color: var(--mp-muted); }
+.op-badge {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 10px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+.op-badge.ok { background: var(--mp-ok-soft); color: var(--mp-ok-ink); }
+.op-badge.warn { background: var(--mp-warn-soft); color: var(--mp-warn-ink); cursor: pointer; }
+/* 诊断条: 选中操作的问题清单, 每条可点击定位 */
+.op-diag {
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--mp-warn);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-warn-soft);
+}
+.op-diag-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.op-diag-title { font-weight: 600; color: var(--mp-warn-ink); }
+.op-diag-hint { font-size: var(--mp-fs-sm); color: var(--mp-muted); }
+.op-diag-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px 0; border: 0; background: none; text-align: left;
+  color: var(--mp-warn-ink); font-size: var(--mp-fs-base);
+}
+.op-diag-item:hover .op-diag-go { text-decoration: underline; }
+.op-diag-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mp-warn); flex-shrink: 0; }
+.op-diag-text { flex: 1; min-width: 0; }
+.op-diag-go { font-size: var(--mp-fs-sm); white-space: nowrap; }
+/* 删除确认 */
+.del-op-name { margin: 0 0 10px; }
+.rename-arrow { margin: 0 6px; color: var(--mp-muted); }
+.del-op-refs { margin: 10px 0 0; padding-left: 16px; max-height: 220px; overflow: auto; }
+.del-op-refs li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.del-op-tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-add {
+  justify-content: center;
+  border-style: dashed;
+  color: var(--mp-muted);
+  font-size: var(--mp-fs-sm);
+}
+.op-add-icon { font-size: 14px; line-height: 1; }
+@media (max-width: 600px) {
+  .op-list { grid-template-columns: 1fr; }
+}
 .op {
   margin-bottom: 10px;
 }
@@ -1460,17 +1900,6 @@ onMounted(async () => {
   flex: 1;
   min-height: 0;   /* 填满操作段剩余高度, 详情内部滚动 */
 }
-.op-list-tabs {
-  flex: 1;
-  min-width: 0;
-}
-.op-list-tabs :deep(.el-tabs__header) {
-  margin-bottom: 10px;
-}
-.op-tab-name {
-  font-family: var(--mp-font-mono);
-  font-size: var(--mp-fs-sm);
-}
 .md-kind {
   font-size: 11px;
   padding: 0 5px;
@@ -1504,9 +1933,7 @@ onMounted(async () => {
   /* 顶栏吸顶占 56px, 段内页签贴在其下方; 缩小 padding 让 3 项一屏放下 */
   .sec-tabs :deep(.el-tabs__header) { top: var(--mp-topbar-h); padding: 3px; }
   .sec-tabs :deep(.el-tabs__item) { padding: 0 6px !important; }
-  /* 操作 tabs 与新建区各占一行: 否则 tabs 视口会被挤压到 0 */
-  .op-tabs-row { flex-wrap: wrap; }
-  .op-create { width: 100%; justify-content: flex-end; }
+  /* 操作清单在窄屏单列排列 (见 .op-list 的 600px 断点) */
   /* 宽表格限制在卡片内, 由 .fb-table-wrap 自己横向滚动 */
   .template-tabs,
   .template-tabs :deep(.el-tabs__content),

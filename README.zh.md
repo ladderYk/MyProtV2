@@ -24,12 +24,15 @@ MyProt-master/
 │   ├── Service/        # 配置存储、深度校验、目录加载、会话熔断
 │   ├── Gateway/        # ProtocolGateway 门面、ChannelManager 连接池、TagReader、TagGrouper
 │   ├── Polling/        # 分组轮询引擎、最新值缓存（结果回调直送消费者）
+│   ├── Northbound/     # 北向 MQTT 发布（编解码 / 会话 / 客户端）
+│   ├── Southbound/     # 南向入站适配器：MQTT 订阅 / TCP 监听 / HTTP 拉取 + 载荷映射
 │   ├── WebApi/         # REST 管理面（鉴权中间件）
 │   ├── Simulation/     # 协议仿真从站（响应合成、模板匹配）
 │   └── App/            # main.cpp 入口与生产/测试共享胶水层 RuntimeGlue
-├── tests/              # 单元测试工程（Core/Engine/Transport.Tests）
+├── tests/              # 单元测试工程（Core/Engine/Transport/Service/Northbound/Southbound）
 ├── src/Tests/          # MyProt.E2E — 端到端测试独立进程
 ├── configs/            # 运行配置：protocols/*.json + tags.json
+├── configs_pull_demo/  # 可运行的南向 HTTP 拉取示例（protocols + tags.json）
 ├── scripts/            # 构建与环境脚本
 ├── third_party/        # asio（VS2015 兼容版）等第三方库
 ├── docs/               # 设计文档、模块说明、ADR
@@ -182,7 +185,10 @@ MyProt.App.exe --config configs_write_test
 | **响应验证** | 表达式校验（如 `resp[7] == 0x03`），递归下降求值器 |
 | **数据提取** | 动态截取数据段，支持字节序四模式（ABCD/DCBA/CDAB/BADC）与类型转换 |
 | **并发控制** | 每设备连接池 + 会话熔断（Closed/Open/HalfOpen），超时重试时间预算模型 |
-| **管理面** | REST API 支持配置热更新、指标查询，token 鉴权 |
+| **北向发布** | MQTT 3.1.1 发布实时快照（编解码 / 会话 / 客户端，QoS0/1，心跳与重连） |
+| **南向推送接入** | 设备主动上报：MQTT 订阅 / TCP 监听（`device.ingest`、`source=push`），JSON 载荷 → 标签映射 |
+| **南向拉取接入** | 网关定时拉取设备 REST API（`device.pull`、`source=pull`）：GET/POST、chunked、keep-alive 复用、指数退避、pull 指标与生命周期；WebUI 支持一键「试拉取」 |
+| **管理面** | REST API 支持配置热更新、校验 / 试渲染 / 试拉取端点、指标查询、token 鉴权 |
 
 配置 Schema 的唯一事实来源：[docs/Config_Schema.md](docs/Config_Schema.md)。
 

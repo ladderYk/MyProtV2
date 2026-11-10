@@ -21,6 +21,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\MyProt\Southbound\HttpPuller.hpp">
+      <Filter>Header Files\include_MyProt_Southbound</Filter>
+    </ClInclude>
     <ClInclude Include="include\MyProt\Southbound\IInboundTransport.hpp">
       <Filter>Header Files\include_MyProt_Southbound</Filter>
     </ClInclude>
@@ -41,6 +44,9 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\HttpPuller.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
     <ClCompile Include="src\MqttSubscriber.cpp">
       <Filter>Source Files\src</Filter>
     </ClCompile>

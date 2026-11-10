@@ -67,6 +67,10 @@ public:
     Core::Expected<std::vector<std::string>> ListBackups(ConfigScope scope,
                                                          const std::string& name) const;
 
+    /// Read a backup's content without restoring it (UI previews a line diff before rollback).
+    Core::Expected<std::string> ReadBackup(ConfigScope scope, const std::string& name,
+                                           const std::string& backupTag) const;
+
     /// Roll back to a specified backup tag.
     Core::Expected<void> Rollback(ConfigScope scope, const std::string& name,
                                   const std::string& backupTag);

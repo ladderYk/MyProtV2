@@ -57,20 +57,22 @@ function acquireToken() {
 // 相同 GET 在途时复用 — App 启动探测与运行状态聚合会同时请求同一份配置
 const inflightGets = new Map()
 
-async function requestOnce(method, url, rawBody) {
+// timeoutMs 省略/非正数 → 用全局默认; 试拉取等长耗时接口可单独放宽
+async function requestOnce(method, url, rawBody, timeoutMs) {
   const headers = {}
   const token = getToken()
   if (token) headers['Authorization'] = 'Bearer ' + token
   if (rawBody !== undefined) headers['Content-Type'] = 'application/json'
 
+  const budget = timeoutMs > 0 ? timeoutMs : REQUEST_TIMEOUT_MS
   const ctl = new AbortController()
-  const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
+  const timer = setTimeout(() => ctl.abort(), budget)
   let res
   try {
     res = await fetch(url, { method, headers, body: rawBody, signal: ctl.signal })
   } catch (e) {
     if (e && e.name === 'AbortError') {
-      throw new ApiError(0, t('请求超时 ({s}s) — 服务无响应', { s: REQUEST_TIMEOUT_MS / 1000 }))
+      throw new ApiError(0, t('请求超时 ({s}s) — 服务无响应', { s: budget / 1000 }))
     }
     throw new ApiError(0, t('无法连接服务器'))
   } finally {
@@ -91,12 +93,12 @@ async function requestOnce(method, url, rawBody) {
   return text
 }
 
-async function request(method, url, rawBody) {
+async function request(method, url, rawBody, timeoutMs) {
   const send = async () => {
     for (let attempt = 0; ; attempt++) {
       await acquireToken()
       try {
-        return await requestOnce(method, url, rawBody)
+        return await requestOnce(method, url, rawBody, timeoutMs)
       } catch (e) {
         if (e.status !== 429 || attempt >= RETRY_429) throw e
         await sleep(400 * (attempt + 1))
@@ -163,6 +165,19 @@ export async function previewResponse(scope, name, body) {
   return JSON.parse(await request('POST', `/api/preview/response?${q}`, JSON.stringify(body || {})))
 }
 
+// ── 试拉取预览 (/api/preview/pull): 一次性真实 HTTP 请求 ──
+//   只读: 不落盘 / 不重载 / 不干扰正在运行的 pull 绑定 (后端另建连接)
+//   body: { url, method, headers, body, timeoutMs, tagField, valueField, tsField,
+//           arrayOfItems, declaredTags } — 未保存的候选值也可直接试
+//   返回 {ok, status, elapsedMs, bytes, error, bodyPreview,
+//         mapped:[{tag,value,ts}], unmapped[], extra[], mappingError}
+export async function previewPull(body) {
+  const b = body || {}
+  const pullMs = Math.max(1000, Number(b.timeoutMs) || 3000)
+  // 前端预算必须盖住后端多次超时预算 (建链 + 读写), 否则本地先 abort 会掩盖真实失败原因
+  return JSON.parse(await request('POST', '/api/preview/pull', JSON.stringify(b), pullMs + 5000))
+}
+
 export async function deleteConfig(scope, name) {
   return request('DELETE', `/api/config/${scope}/${encodeURIComponent(name)}`)
 }
@@ -170,6 +185,10 @@ export async function deleteConfig(scope, name) {
 // ── 备份 / 回滚 / 热重载 ──
 export async function listBackups(scope, name) {
   return JSON.parse(await request('GET', `/api/config/${scope}/${encodeURIComponent(name)}/backups`))
+}
+// 备份内容 (只读): 回滚前预览 diff, 不落盘
+export async function getBackupContent(scope, name, tag) {
+  return request('GET', `/api/config/${scope}/${encodeURIComponent(name)}/backups/${encodeURIComponent(tag)}`)
 }
 export async function restoreBackup(scope, name, tag) {
   return request('POST', `/api/config/${scope}/${encodeURIComponent(name)}/backups/${encodeURIComponent(tag)}/restore`)

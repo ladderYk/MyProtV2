@@ -1,0 +1,39 @@
+{
+  "simulation": {
+    "listenPort": 11520,
+    "registerCount": 1000,
+    "initialValues": {
+      "0": 0,
+      "1": 16844,
+      "2": 3333,
+      "3": 4444
+    },
+    "operations": {
+      "ReadHoldingRegisters": {
+        "kind": "read",
+        "addressVar": "StartAddress",
+        "countVar": "RegisterCount"
+      },
+      "ReadInputRegisters": {
+        "kind": "read",
+        "addressVar": "StartAddress",
+        "countVar": "RegisterCount"
+      },
+      "WriteSingleRegister": {
+        "kind": "write",
+        "addressVar": "StartAddress",
+        "dataOffset": 10
+      }
+    }
+  },
+  "mqtt": {
+    "enabled": false,
+    "broker": "mqtt://127.0.0.1:1883",
+    "clientId": "myprot-pull-demo",
+    "topicPrefix": "myprot",
+    "publishMode": "changed",
+    "publishIntervalMs": 1000,
+    "qos": 0
+  },
+  "schemaVersion": 2
+}

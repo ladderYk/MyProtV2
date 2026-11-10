@@ -770,12 +770,17 @@ Device-level variables may also be referenced from `handshake[].requestTemplate`
 
 ## 4. Device config (DeviceConfig)
 
+> The device-level southbound blocks `ingest` (§4.1) and `pull` (§4.2) may coexist, but each
+> tag still has exactly one source (`poll` / `push` / `pull`).
+
 | Field | Type | Req | Default | Description |
 |------|------|:--:|------|------|
 | `id` | string | ✓ | — | Globally unique |
 | `protocol` | string | ✓ | — | References a `protocolName` |
 | `enabled` | bool | ✗ | `true` | **Administrative enable switch** (KI-04). `false` = no polling / no connect / no `ingest`, lifecycle pinned to `Disabled`; a hot reload setting it back to `true` restores the device. Optional additive field, no `schemaVersion` bump |
 | `connection` | object | ✓ | — | See below; its `timeoutMs` is the **connection-establishment** timeout only |
+| `ingest` | object | ✗ | null | **Southbound push ingest** (the gateway receives device-initiated reports); null = no push. Fields in [§4.1](../Config_Schema.md#41-ingest-southbound-push-ingest-device-level) |
+| `pull` | object | ✗ | null | **Southbound pull** (the gateway polls as an HTTP client); null = no pull. Fields in §4.2 below. May coexist with `ingest`, but each tag has exactly one source |
 | `requestTimeoutMs` | int | ✗ | 3000 | **Single request-response** timeout (one send, one receive, one parse); shared by all of the device's operations, the sole configuration point (converged 2026-08-24, see [ADR-0004](../adr/0004-timeout-retry-budget.md) *zh* R1) |
 | `username` | string | ✗ | null | Protocol-level auth credential (e.g. the S7 CPU password) |
 | `password` | string | ✗ | null | Same as above; always masked as `***` in logs |
@@ -814,6 +819,175 @@ How credentials take effect: `username` / `password` are injected during the han
 }
 ```
 
+### 4.1 ingest (southbound push ingest, device level)
+
+> **Decision record**: [ADR-0019](../adr/0019-southbound-push-ingest.md) *zh*. Device-initiated
+> reporting is an **event stream**, whose semantics differ from the request/response
+> `Transport::IChannel`; it is therefore carried by a separate
+> `Southbound::IInboundTransport`. The data outlet stays unique - values reach
+> `LatestValueStore` through `TagValueSink`.
+
+`ingest` declares how the device actively pushes data (the gateway is the receiver):
+
+| `type` | Gateway role | Adapter |
+|--------|----------|--------|
+| `"mqtt"` | MQTT client (subscribes to a broker) | `Southbound::MqttSubscriber` |
+| `"tcp"` | TCP server (waits for the device to connect) | `Southbound::TcpIngestServer` |
+
+All `source=push` tags of the device are produced by this adapter; `source=poll` tags keep
+polling as usual. A tag has exactly one source; there is no polling/push arbitration (§5).
+
+**mqtt (`type="mqtt"`)**
+
+| Field | Type | Req | Default | Description |
+|------|------|:--:|------|------|
+| `host` | string | ✗ | — | Broker host; empty = fall back to `device.connection.host` |
+| `port` | uint16 | ✗ | `0` | Broker port; `0` = 1883 |
+| `clientId` | string | ✗ | — | Empty = `myprot-sub-<deviceId>`; must be unique on the same broker |
+| `username` / `password` | string | ✗ | `""` | Empty = anonymous; masked in logs |
+| `keepAliveSec` | int | ✗ | `60` | PINGREQ period (seconds); `0` = default 60 |
+| `cleanSession` | bool | ✗ | `true` | CONNECT cleanSession flag |
+| `qos` | int | ✗ | `0` | Subscription QoS: `0` / `1` (QoS2 not implemented) |
+| `reconnectMinMs` / `reconnectMaxMs` | int | ✗ | `1000` / `30000` | Disconnect exponential-backoff window; SUBSCRIBE is re-sent automatically after a reconnect |
+| `maxSilenceMs` | int | ✗ | `0` | Silence watchdog: when > 0 and no inbound frame arrives for that long, the device's push tags become `Uncertain` (once); `0` = off |
+| `topic` | string | ✓ | — | Subscription filter; supports `+` / `#` |
+| `tagFrom` | string | ✗ | `payload` | `payload` = the tag name comes from a payload field; `topic` = from a topic segment |
+| `tagTopicIndex` | int | ✗ | `0` | With `tagFrom=topic`, the 1-based index of the segment carrying the tag name; must be ≥ 1 |
+| `tagField` | string | ✗ | `tag` | Tag-name field when `tagFrom=payload` |
+| `valueField` | string | ✗ | `value` | Value field name |
+| `tsField` | string | ✗ | `ts` | Timestamp field (epoch ms; values below 1e11 are treated as seconds and multiplied by 1000); empty = local receive time |
+
+**tcp (`type="tcp"`)**
+
+| Field | Type | Req | Default | Description |
+|------|------|:--:|------|------|
+| `bindAddress` | string | ✗ | `0.0.0.0` | Listen address |
+| `port` | uint16 | ✓ | `0` | Listen port; must be > 0 |
+| `framing` | FramingConfig | ✓ | — | Inbound framing, same fields as §2.2; the runtime supports `LengthField` / `Fixed` only (`Silence` / `Message` are rejected at startup through `OnError`) |
+| `maxSilenceMs` | int | ✗ | `0` | Silence watchdog, same semantics as mqtt |
+| `tagField` | string | ✗ | `tag` | Tag-name field |
+| `valueField` | string | ✗ | `value` | Value field name |
+| `tsField` | string | ✗ | `ts` | Timestamp field name |
+
+**Payload mapping (v1: JSON only, 1 MB per frame)**
+
+| Payload shape | Parsing result |
+|----------|----------|
+| `{"tag":"P.Temp","value":21.5,"ts":1690000000000}` | Single entry; the tag name comes from `tagField`, falling back to the topic segment name (`tagFrom=topic`) |
+| `{"P.Temp":21.5,"P.Press":101.3}` | Batch mapping; keys are tag names (an object containing `valueField` switches to single-entry mode), and `tsField` is the whole-frame timestamp |
+| scalar / array | Single entry; the tag name can only come from the topic (`tagFrom=topic`), otherwise an error |
+
+- Every inbound value must match a declared `source=push` tag of that device; undeclared tag names are dropped with a rate-limited warning (one per 5 s)
+- `finalType="Auto"` infers the native JSON type (boolean -> Bool, unsigned -> UInt64, signed -> Int64, decimal -> Double, string -> String, array -> ByteArray); when declared explicitly it converts per §6, and a failure -> `Bad`
+- Values always go through `Southbound::TagValueSink` into `LatestValueStore`; quality semantics follow [ADR-0006](../adr/0006-quality-semantics.md) *zh*
+
+```jsonc
+// tags.json: device section - MQTT subscription, tag name taken from topic segment 4
+{
+  "id": "AGV-01",
+  "protocol": "modbus-tcp",
+  "connection": { "host": "192.168.1.20", "port": 502 },
+  "ingest": {
+    "type": "mqtt",
+    "mqtt": {
+      "host": "192.168.1.10", "port": 1883,
+      "topic": "plant/agv/+/state",
+      "tagFrom": "topic", "tagTopicIndex": 4,
+      "maxSilenceMs": 10000
+    }
+  }
+}
+// Matching tag (no operation / scanRateMs)
+{ "name": "AGV-01.Battery", "deviceId": "AGV-01", "source": "push", "finalType": "Double" }
+```
+
+```jsonc
+// tags.json: device section - TCP listener, fixed 256-byte JSON frames
+"ingest": {
+  "type": "tcp",
+  "tcp": {
+    "port": 19000,
+    "framing": { "type": "Fixed", "fixedLength": 256 },
+    "maxSilenceMs": 15000
+  }
+}
+```
+
+### 4.2 pull (southbound HTTP pull, device level)
+
+> **Decision record**: [ADR-0023](../adr/0023-southbound-http-pull.md) *zh*. The
+> gateway acts as an HTTP client and periodically GETs/POSTs a device REST API at
+> `intervalMs`; the response is tag-mapped and written through `TagValueSink` into
+> `LatestValueStore` - the same outlet as §4.1, never through the polling engine.
+
+| `type` | Gateway role | Adapter |
+|--------|----------|--------|
+| `"http"` | HTTP client (actively polls) | `Southbound::HttpPuller` |
+
+All `source=pull` tags of the device are produced by this adapter; `source=poll` /
+`source=push` tags are unaffected.
+
+**http (`type="http"`)**
+
+| Field | Type | Req | Default | Description |
+|------|------|:--:|------|------|
+| `url` | string | ✓ | — | Must start with `http://` (v1 has no https); embedded credentials (`user:pw@host`) are rejected; authenticate through `headers` |
+| `method` | string | ✗ | `GET` | `GET` / `POST` (case-insensitive, normalized to uppercase) |
+| `intervalMs` | int | ✗ | `1000` | Poll period, must be ≥ 100 |
+| `timeoutMs` | int | ✗ | `3000` | Total one-round-trip timeout (DNS + connect + request + response), must be ≥ 100; a warning when larger than `intervalMs` (one round may squeeze the next) |
+| `headers` | map&lt;string,string&gt; | ✗ | `{}` | Extra request headers; `Host` / `Connection` / `Content-Length` / `Transfer-Encoding` / `Accept-Encoding` are client-owned and ignored; a CR/LF in a name or value is an error (header-injection guard) |
+| `body` | string | ✗ | `""` | Sent on `POST` only; a body on `GET` warns and is ignored |
+| `tagField` | string | ✗ | `tag` | Tag-name field |
+| `valueField` | string | ✗ | `value` | Value field name |
+| `tsField` | string | ✗ | `ts` | Timestamp field (epoch ms; values below 1e11 are treated as seconds and multiplied by 1000); empty = local receive time |
+| `arrayOfItems` | bool | ✗ | `true` | `true` = a top-level JSON array maps element by element; `false` = the whole array is one value |
+| `maxSilenceMs` | int | ✗ | `0` | Silence watchdog: when > 0 and no successful frame arrives for that long, all pull tags of the device become `Uncertain` (once); `0` = off |
+| `backoffBaseMs` | int | ✗ | `1000` | Exponential backoff base after consecutive failures (`base × 2^(n-1)`), must be ≥ 0; `0` = no backoff, retry at a fixed `intervalMs` |
+| `backoffMaxMs` | int | ✗ | `30000` | Backoff ceiling, must be ≥ `backoffBaseMs`; the actual wait is never shorter than `intervalMs`. During failures the device stays `Bad`; the worst recovery-probe delay is this value |
+| `keepAlive` | bool | ✗ | `true` | Reuse the TCP connection across rounds; reconnect automatically on `Connection: close`, HTTP/1.0 without keep-alive, or neither `Content-Length` nor chunked; a stale connection is retried once |
+
+**Response contract (v1)**
+
+| Payload shape | Mapping result |
+|----------|----------|
+| `[{"tag":"P.Temp","value":21.5}]` | One item per element; the tag name comes from `tagField`, falling back to the device's single pull tag (multi-tag devices must be explicit) |
+| `{"P.Temp":21.5,"P.Press":101.3}` | Batch mapping; the key is the tag name (an object containing `valueField` switches to single-item mode) |
+| Scalar / array (`arrayOfItems=false`) | One item; the tag name comes from `tagField` or the device's single pull tag |
+
+- Every value must match a declared `source=pull` tag of that device; undeclared tag names are dropped with a rate-limited warning (one per 5 s).
+- **Quality semantics**: non-2xx / DNS failure / timeout / incomplete response head / chunk decode failure / JSON parse failure -> **all** pull tags of the device become `Bad` (the reason goes to the log; a non-2xx snippet keeps at most 256 bytes); within one fault segment `Bad` wins and `Uncertain` is **not stacked**. Only "HTTP succeeded but the response contains none of this device's tags" is silent enough to become `Uncertain` after `maxSilenceMs` (keeps the previous value, once per silent segment). Follows [ADR-0006](../adr/0006-quality-semantics.md) *zh*.
+- **Transport limits**: HTTP/1.1 with `Content-Length`, `Transfer-Encoding: chunked` (including chunk extensions and trailers) or read-to-EOF delimiting; a decoded response is capped at 1 MB; no gzip / redirect / TLS.
+- **Cadence**: the next round starts only after the current one finishes (success or failure); a successful round waits `intervalMs`, consecutive failures back off by `min(backoffMaxMs, backoffBaseMs × 2^(n-1))` (never below `intervalMs`), and one success resets it immediately.
+- **Observability and lifecycle**: `myprot_pull_rounds_total` / `_failures_total` / `_consecutive_failures` / `_backoff_ms` / `_last_success_timestamp_seconds` / `_connections_total` (all carry the `device` label); a pull-only device goes `Degraded` on failure and `Connected` on recovery (when the same device also has `source=poll` tags, the polling side owns the lifecycle). See [ADR-0023 §2.8](../adr/0023-southbound-http-pull.md) *zh*.
+
+```jsonc
+// tags.json: device section - periodically pull a device REST API
+{
+  "id": "METER-01",
+  "protocol": "modbus-tcp",
+  "connection": { "host": "192.168.1.30", "port": 502 },
+  "pull": {
+    "type": "http",
+    "http": {
+      "url": "http://192.168.1.30:8080/api/values",
+      "method": "GET",
+      "intervalMs": 1000,
+      "timeoutMs": 2000,
+      "headers": { "Authorization": "Bearer <token>" },
+      "maxSilenceMs": 10000,
+      "backoffBaseMs": 1000,
+      "backoffMaxMs": 30000,
+      "keepAlive": true
+    }
+  }
+}
+// Matching tag (no operation / scanRateMs)
+{ "name": "METER-01.Temp", "deviceId": "METER-01", "source": "pull", "finalType": "Double" }
+```
+
+> A runnable end-to-end example lives in [`configs_pull_demo/`](../../configs_pull_demo/); it passes
+> `MyProt.App.exe --validate configs_pull_demo` with 0 errors and 0 warnings.
+
 ---
 
 ## 5. Tag config (TagDefinition)
@@ -836,6 +1010,7 @@ How credentials take effect: `username` / `password` are injected during the han
 | `bitOffset` | int | ✗ | -1 | **Bit offset** (0–7, semantics = the bit offset within the byte pointed to by `StartByteAddress`); `-1` = undeclared; out of range = Error (rule 13). Used only when taking a bit for Bool: once declared, take the bit via `(raw[0] >> bitOffset) & 1`; when undeclared, use the whole byte `raw[0] != 0`. A protocol `outputs` bit-addressing `expr` references the same value via the runtime-injected `BitOffset` |
 | `coalesce` | bool | ✗ | `true` | Whether to participate in address-proximity coalescing; set `false` for single-address reads (e.g. S7 `ReadVar*`) |
 | `direction` | string | ✗ | `"read"` | `read` (participates in polling; write capability is declared by `writeOperation` / `writeBytesOperation`) / `write` (**write-only tag**, `operation` is the write operation, does not participate in polling, see below) |
+| `source` | string | ✗ | `"poll"` | **Value provenance (single source, no arbitration)**: `poll` = acquired by the polling engine; `push` = produced by the device `ingest` adapter (§4.1); `pull` = produced by the device `pull` HTTP adapter (§4.2). `push` / `pull` tags do not participate in polling and must not declare `operation`; `finalType` may be omitted (= `Auto`), see below |
 | `writeVariable` | string | ✗ | `"WriteValue"` | The template-variable name the write value is injected as; the template consumes it via `{writeVariable:X4}` (scalar) or `{writeVariable:raw}` (bytes/float) |
 | `readBackTag` | string | ✗ | `""` | Write tag: the **read-tag name** referenced for post-write read-back validation; when empty, falls back to re-reading via the write target's own read semantics (only a write tag may set it) |
 | `converters` | array | ✗ | `[]` | **Post-read conversion chain** (C1): acquired value → engineering value, applied in order. v1 supports only the `scale` item `{"kind":"scale","k":<num>,"b":<num>}` (`value' = value×k + b`, multiply then add); the converted value is uniformly Double. Only a **read tag** with a numeric `finalType` (integer/Float/Double) may set it; a write tag or a non-numeric type is a validation error (rule 13). Typical: 0.1°C/bit → `k=0.1,b=0`; 4-20mA calibration → `k=(rangeMax-rangeMin)/27648, b=rangeMin` |

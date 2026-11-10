@@ -319,6 +319,9 @@ void ConfigValidator::validateDevice(const Core::DeviceConfig& dev,
     if (dev.ingest.has_value()) {
         validateIngest(dev.ingest.value(), ctx, r);
     }
+    if (dev.pull.has_value()) {
+        validatePull(dev.pull.value(), ctx, r);
+    }
 }
 
 void ConfigValidator::validateIngest(const Core::IngestConfig& ing,
@@ -369,6 +372,77 @@ void ConfigValidator::validateIngest(const Core::IngestConfig& ing,
         return;
     }
     r.addError(p + ".type 取值非法: \"" + ing.type + "\" (仅 mqtt/tcp)");
+}
+
+// ── 南向拉取 (§2.x, device-level HTTP client; ADR-0023) ──
+
+void ConfigValidator::validatePull(const Core::PullConfig& pull,
+                                   const std::string& ctx,
+                                   ValidationResult& r) const {
+    const std::string p = "设备 " + ctx + " pull";
+    if (pull.type != "http") {
+        r.addError(p + ".type 取值非法: \"" + pull.type + "\" (仅 http)");
+        return;
+    }
+
+    const Core::HttpPullConfig& h = pull.http;
+    const std::string hp = p + ".http";
+    if (h.url.empty()) {
+        r.addError(hp + ".url 不能为空");
+    } else if (h.url.compare(0, 7, "http://") != 0) {
+        r.addError(hp + ".url 必须以 http:// 开头 (v1 不支持 https / 其他 scheme)");
+    } else {
+        const std::string rest = h.url.substr(7);
+        std::size_t hostEnd = rest.find_first_of("/?#");
+        const std::string authority = rest.substr(0, hostEnd);
+        if (authority.empty()) {
+            r.addError(hp + ".url 缺少 host");
+        } else if (authority.find(' ') != std::string::npos) {
+            r.addError(hp + ".url 的 host 含空白字符");
+        }
+    }
+
+    if (h.method != "GET" && h.method != "POST") {
+        r.addError(hp + ".method 取值非法: \"" + h.method + "\" (仅 GET/POST)");
+    } else if (h.method == "GET" && !h.body.empty()) {
+        r.addWarning(hp + ".body 在 GET 请求下不会被发送");
+    }
+
+    if (h.intervalMs < 100) {
+        r.addError(hp + ".intervalMs 必须 >= 100 (当前 "
+                   + std::to_string(h.intervalMs) + ")");
+    }
+    if (h.timeoutMs < 100) {
+        r.addError(hp + ".timeoutMs 必须 >= 100 (当前 "
+                   + std::to_string(h.timeoutMs) + ")");
+    } else if (h.intervalMs >= 100 && h.timeoutMs > h.intervalMs) {
+        r.addWarning(hp + ".timeoutMs 大于 intervalMs, 实际采集周期会被超时拖长");
+    }
+    if (h.maxSilenceMs < 0) {
+        r.addError(hp + ".maxSilenceMs 必须 >= 0 (0 = 关闭静默看门狗)");
+    }
+    if (h.backoffBaseMs < 0) {
+        r.addError(hp + ".backoffBaseMs 必须 >= 0 (0 = 不退避, 固定 intervalMs)");
+    }
+    if (h.backoffMaxMs < 0) {
+        r.addError(hp + ".backoffMaxMs 必须 >= 0");
+    } else if (h.backoffBaseMs > 0 && h.backoffMaxMs < h.backoffBaseMs) {
+        r.addError(hp + ".backoffMaxMs 必须 >= backoffBaseMs ("
+                   + std::to_string(h.backoffMaxMs) + " < "
+                   + std::to_string(h.backoffBaseMs) + ")");
+    }
+
+    // Header injection guard: CR/LF in a name or value would split the request.
+    for (std::map<std::string, std::string>::const_iterator it = h.headers.begin();
+            it != h.headers.end(); ++it) {
+        if (it->first.empty()) {
+            r.addError(hp + ".headers 存在空名称");
+        } else if (it->first.find_first_of("\r\n") != std::string::npos
+                   || it->second.find_first_of("\r\n") != std::string::npos) {
+            r.addError(hp + ".headers[\"" + it->first
+                       + "\"] 名称/值不得含 CR/LF");
+        }
+    }
 }
 // ── 韧性策略 (§11) ──
 

@@ -30,13 +30,18 @@ public:
     /// - object with valueField: one item; tag name from tagField (or defaultTag)
     /// - other object: batch map { "TagA": 1.5, "TagB": 2 } (defaultTag ignored)
     /// - scalar / array: one item named defaultTag (empty defaultTag = error)
+    /// - arrayAsItems=true and an array: one item per element, e.g.
+    ///   [{ "tag": "Temp", "value": 23.5, "ts": 1730611200 }] (ADR-0023).
+    ///   Each element must be an object carrying valueField; the tag name comes from
+    ///   tagField or defaultTag.
     static bool MapJson(const std::string& payload,
                         const std::string& tagField,
                         const std::string& valueField,
                         const std::string& tsField,
                         const std::string& defaultTag,
                         std::vector<MappingItem>& out,
-                        std::string& err);
+                        std::string& err,
+                        bool arrayAsItems = false);
 
     /// Convert a JSON scalar to the tag's finalType ("Auto" = infer from JSON).
     static bool ToTypedValue(const nlohmann::json& value,

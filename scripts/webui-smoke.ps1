@@ -1,4 +1,4 @@
-# scripts/webui-smoke.ps1 -- headless WebUI regression via Edge DevTools Protocol.
+﻿# scripts/webui-smoke.ps1 -- headless WebUI regression via Edge DevTools Protocol.
 #
 # Why: ci.ps1 covers the C++ side (unit + E2E) but nothing guards the Vue UI.
 #      This script rebuilds dist/, boots MyProt.App on a free loopback port,
@@ -20,7 +20,8 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1 -SkipUiBuild
 #   powershell -ExecutionPolicy Bypass -File scripts\webui-smoke.ps1 -KeepAlive
 #
-# NOTE: file is intentionally ASCII-only (same reason as ci.ps1).
+# NOTE: keep this file UTF-8 *with BOM*: PowerShell 5.1 reads BOM-less UTF-8 as ANSI,
+#       which mangles non-ASCII comments and can swallow line breaks (parse errors).
 
 param(
     [string]$AppExe = "",
@@ -107,6 +108,17 @@ function Check-Wait {
     param([string]$Name, [string]$Expr, [int]$TimeoutSec = 12)
     $ok = Wait-Js $Expr $TimeoutSec
     Check $Name $ok ("timeout after " + $TimeoutSec + "s: " + $Expr)
+}
+
+# 弹窗在关闭动画/列表重渲染期间点开会被吞: 点一次 + 轮询, 未开就再点
+function Open-Dialog {
+    param([string]$ClickExpr, [string]$VisibleExpr, [int]$Attempts = 8)
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        try { Invoke-Js $ClickExpr | Out-Null } catch { }
+        if (Wait-Js $VisibleExpr 1) { return $true }
+        Start-Sleep -Milliseconds 400
+    }
+    return $false
 }
 
 # ---------------------------------------------------------------- CDP client
@@ -471,8 +483,9 @@ window.__smoke = {
   },
   count: function (s) { return document.querySelectorAll(s).length; },
   visible: function (s) {
-    var e = document.querySelector(s); if (!e) return false;
-    var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0;
+    return Array.prototype.some.call(document.querySelectorAll(s), function (e) {
+      var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0;
+    });
   },
   rect: function (s) {
     var e = document.querySelector(s); if (!e) return null;
@@ -530,6 +543,17 @@ true
     Check-Js "health status is inline" 'document.querySelectorAll(".health-inline").length >= 1'
     Check-Wait "device overview table has rows" 'document.querySelectorAll(".dev-table tbody tr").length >= 1' 15
     $overviewDevices = Invoke-Js 'document.querySelectorAll(".dev-table tbody tr").length'
+
+    # 全局体检: 协议 + 标签逐个校验 (串行 + 间隔, 避开后端 5 rps 限流)
+    Check-Js "global checkup is available" 'document.querySelectorAll(".checkup .block-head .btn").length === 1'
+    Invoke-Js 'document.querySelector(".checkup .block-head .btn").click(); true' | Out-Null
+    Check-Wait "checkup lists config items" 'document.querySelectorAll(".checkup-item").length >= 2' 40
+    Check-Wait "checkup finishes" '!document.querySelector(".checkup .block-head .btn").disabled' 90
+    Check-Js "checkup shows a verdict" '/\u901a\u8fc7|\u9519\u8bef|\u8b66\u544a|\u65e0\u6cd5\u6821\u9a8c/.test(document.querySelector(".checkup").innerText)'
+
+    # 配置包: 导出走下载、导入走文件选择, 此处只验入口与隐藏 input
+    Check-Js "bundle has export and import entries" 'document.querySelectorAll(".bundle-actions button").length === 2'
+    Check-Js "bundle file input stays hidden" '(function () { var i = document.querySelector(".bundle-file"); return !!i && getComputedStyle(i).display === "none"; })()'
 
     # =======================================================================
     Write-Head "HELP DRAWER"
@@ -596,12 +620,62 @@ true
     Check-Js "operation can select a profile" '!!document.querySelector(".profile-select")'
     Check-Js "inherited outputs are displayed" '!!document.querySelector(".inherited-out") && document.querySelectorAll(".inherited-row").length >= 1'
 
-    # 输出双模页签: out- 前缀; 三组 tabs 不得再生成重复 DOM id
+    # 操作清单: 卡片式扫读 + 摘要口径需含协议级 inputs (曾出现全部 0 入 0 出)
+    Check-Js "operations render as a checklist" 'document.querySelectorAll(".op-list .op-item").length >= 8'
+    Check-Js "operation summary counts inherited inputs" 'window.__smoke.qa(".op-list .op-item-meta").some(function (e) { var m = (e.innerText || "").match(/(\d+)\s*\u5165/); return m && +m[1] > 0; })'
+
+    # 操作过滤: 大协议操作多, 按名称搜 + 读/写筛选
+    Invoke-Js 'window.__opVisibleBefore = document.querySelectorAll(".op-list .op-item:not(.op-add)").length; true' | Out-Null
+    Invoke-Js '(function () { var i = document.querySelector(".op-filter-kw input"); if (!i) return false; i.value = "ReadHolding"; i.dispatchEvent(new Event("input", { bubbles: true })); return true; })()' | Out-Null
+    Check-Wait "operation search narrows the list" 'document.querySelectorAll(".op-list .op-item:not(.op-add)").length < window.__opVisibleBefore' 8
+    Check-Js "operation search keeps matching rows" 'document.querySelectorAll(".op-list .op-item:not(.op-add)").length >= 1'
+    Invoke-Js '(function () { var i = document.querySelector(".op-filter-kw input"); if (!i) return false; i.value = ""; i.dispatchEvent(new Event("input", { bubbles: true })); return true; })()' | Out-Null
+    Check-Wait "clearing operation search restores the list" 'document.querySelectorAll(".op-list .op-item:not(.op-add)").length === window.__opVisibleBefore' 8
+    Invoke-Js 'window.__smoke.clickText(".op-filter-kind .el-radio-button", "\u5199")' | Out-Null
+    Check-Wait "write filter keeps only write operations" 'document.querySelectorAll(".op-list .op-item:not(.op-add)").length > 0 && document.querySelectorAll(".op-list .op-item:not(.op-add) .op-kind.w").length === document.querySelectorAll(".op-list .op-item:not(.op-add)").length' 8
+    Invoke-Js 'window.__smoke.clickText(".op-filter-kind .el-radio-button", "\u5168\u90e8")' | Out-Null
+    Check-Wait "clearing the kind filter restores all operations" 'document.querySelectorAll(".op-list .op-item:not(.op-add)").length === window.__opVisibleBefore' 8
+
+    # 新建向导: 命名/类型/起点/原型一次选清, 取消后不得创建
+    # 关闭的 dialog 会留在 DOM 里 (display:none), querySelector 常拿到隐藏的那个 — 只认可见的
+    # 计数只活在页面里: 跨 CDP 传值偶发拿到 null, 直接用 window 变量比较更稳
+    Invoke-Js 'window.__opCountBefore = document.querySelectorAll(".op-list .op-item:not(.op-add)").length; true' | Out-Null
+    $wizOpen = Open-Dialog '(function () { var b = document.querySelector(".op-add"); if (b) b.click(); return true; })()' 'window.__smoke.visible(".new-op-dialog")'
+    Check "new operation wizard opens" $wizOpen
+    Check-Js "wizard offers kind and source" 'document.querySelectorAll(".new-op-dialog .el-radio-button").length === 2 && document.querySelectorAll(".new-op-dialog .el-select").length === 2'
+    Invoke-Js 'window.__smoke.clickText(".new-op-dialog .el-dialog__footer button", "\u53d6\u6d88")' | Out-Null
+    Check-Wait "wizard closes without creating" '!window.__smoke.visible(".new-op-dialog")' 6
+    Check-Js "cancelling the wizard keeps the operation count" 'document.querySelectorAll(".op-list .op-item:not(.op-add)").length === window.__opCountBefore'
+
+    # 删除前引用检查: 被标签引用的操作必须把设备/标签列出来 (取消, 不落盘)
+    Invoke-Js 'window.__smoke.clickText(".op-list .op-item", "ReadHoldingRegisters")' | Out-Null
+    Start-Sleep -Milliseconds 400
+    $delOpen = Open-Dialog 'window.__smoke.clickText(".card-head .el-button", "\u5220\u9664")' 'window.__smoke.visible(".del-op-dialog")'
+    Check "delete confirmation dialog opens" $delOpen
+    Check-Wait "delete dialog lists tag references" 'document.querySelectorAll(".del-op-dialog .del-op-refs li").length >= 1' 10
+    Invoke-Js 'window.__smoke.clickText(".del-op-dialog .el-dialog__footer button", "\u53d6\u6d88")' | Out-Null
+    Check-Wait "delete dialog cancels" '!window.__smoke.visible(".del-op-dialog")' 6
+    Check-Js "cancelling deletion keeps the operation" 'document.querySelectorAll(".op-list .op-item:not(.op-add)").length === window.__opCountBefore'
+
+    # 诊断: 新建空白操作必然缺请求模板 → 诊断条出现且可点击定位
+    Check "wizard reopens for a blank operation" (Open-Dialog '(function () { var b = document.querySelector(".op-add"); if (b) b.click(); return true; })()' 'window.__smoke.visible(".new-op-dialog")')
+    Invoke-Js 'window.__smoke.clickText(".new-op-dialog .el-dialog__footer button", "\u521b\u5efa")' | Out-Null
+    Check-Wait "blank operation can be created" 'document.querySelectorAll(".op-list .op-item:not(.op-add)").length === window.__opCountBefore + 1' 8
+    Check-Wait "issue strip appears for the blank operation" '!!document.querySelector("#op-diag") && document.querySelector("#op-diag").innerText.indexOf("\u8bf7\u6c42\u6a21\u677f\u4e3a\u7a7a") >= 0' 8
+    Invoke-Js '(function () { var e = document.querySelector(".op-diag-item"); if (e) e.click(); return true; })()' | Out-Null
+    Check-Wait "issue item jumps to the request template" 'document.querySelector("#op-tpl") && document.querySelector("#op-tpl").classList.contains("mp-issue-flash")' 8
+
+    # 删除刚建的空操作: 无引用提示 + 确认后计数复原
+    Check "delete dialog reopens for the new operation" (Open-Dialog 'window.__smoke.clickText(".card-head .el-button", "\u5220\u9664")' 'window.__smoke.visible(".del-op-dialog")')
+    Check-Wait "unreferenced operation is reported" 'document.querySelector(".del-op-dialog").innerText.indexOf("\u672a\u88ab\u4efb\u4f55\u6807\u7b7e\u5f15\u7528") >= 0' 10
+    Invoke-Js 'window.__smoke.clickText(".del-op-dialog .el-dialog__footer button", "\u5220\u9664")' | Out-Null
+    Check-Wait "operation is removed" 'document.querySelectorAll(".op-list .op-item:not(.op-add)").length === window.__opCountBefore' 8
     Invoke-Js 'document.querySelector("#tab-out-form").click(); true' | Out-Null
     Check-Wait "output form tab opens" 'document.querySelector("#tab-out-form").getAttribute("aria-selected") === "true" && getComputedStyle(document.querySelector("#pane-out-form")).display !== "none"' 8
     Invoke-Js 'document.querySelector("#tab-out-visual").click(); true' | Out-Null
     Check-Wait "output expression tab returns" 'document.querySelector("#tab-out-visual").getAttribute("aria-selected") === "true"' 8
     Check-Js "tab pane ids are unique" '["pane-visual","pane-raw","pane-hs-visual","pane-hs-raw","pane-out-visual","pane-out-form","tab-visual"].every(function (id) { return document.querySelectorAll("[id=\"" + id + "\"]").length === 1; })'
+
     # Backups are user-generated and not tracked in git: assert either branch.
     $backupResp = Invoke-RestMethod -Uri ($baseUrl + "/api/config/protocols/modbus-tcp/backups") -TimeoutSec 5
     $backupCount = 0
@@ -609,7 +683,13 @@ true
     if ($backupCount -gt 0) {
         Invoke-Js 'window.__smoke.clickText(".toolbar .btn", "\u66f4\u591a")' | Out-Null
         Check-Wait "backup entries are in the More menu" 'window.__smoke.qa(".el-dropdown-menu__item").some(function (b) { return b.innerText.indexOf("\u56de\u6eda\u5230") >= 0; })' 10
-        Invoke-Js 'document.body.click(); true' | Out-Null
+        # A3: 回滚前先看行级 diff (只预览, 不落盘)
+        Invoke-Js 'window.__smoke.clickText(".el-dropdown-menu__item", "\u56de\u6eda\u5230 bak.1")' | Out-Null
+        Check-Wait "restore diff dialog opens" 'window.__smoke.visible(".restore-diff-dialog")' 12
+        Check-Wait "restore diff renders rows" 'document.querySelectorAll(".restore-diff-dialog .diff-row").length >= 1' 12
+        Check-Js "restore diff shows change counters" '!!document.querySelector(".restore-diff-dialog .restore-diff-stat")'
+        Invoke-Js 'window.__smoke.clickText(".restore-diff-dialog .el-dialog__footer button", "\u53d6\u6d88")' | Out-Null
+        Check-Wait "restore diff cancels without writing" '!window.__smoke.visible(".restore-diff-dialog")' 8
         Start-Sleep -Milliseconds 300
     } else {
         Invoke-Js 'window.__smoke.clickText(".toolbar .btn", "\u66f4\u591a")' | Out-Null
@@ -636,6 +716,25 @@ true
     Invoke-Js 'window.__smoke.nav(0); true' | Out-Null
     Check-Wait "guard lets you leave when confirmed" '!!document.querySelector(".overview")' 12
 
+    # 简单视图的帧参数分级 — 放在高级视图断言之后, 不再依赖 JSON 入口
+    # 顶栏按钮切换在 el-tabs 重建期间偶发被吞, 直接落盘 + 重载结果确定
+    Invoke-Js 'try { localStorage.setItem("mp.ui.advanced", "0"); } catch (e) {}; true' | Out-Null
+    Invoke-Js 'location.reload(); true' | Out-Null
+    Start-Sleep -Milliseconds 1200
+    Check-Wait "page reloads" '!!document.querySelector(".topbar")' 25
+    Invoke-Js $helper | Out-Null
+    Start-Sleep -Milliseconds 300
+    Check-Js "reload restores simple mode" '!!document.querySelector(".tb-actions .tb-btn.adv:not(.on)")'
+    Invoke-Js 'window.__smoke.nav(4); true' | Out-Null
+    Check-Wait "config page reopens in simple mode" 'document.querySelectorAll(".cfg-items li").length >= 5' 25
+    Invoke-Js 'window.__smoke.clickText(".cfg-items li", "modbus-tcp")' | Out-Null
+    Check-Wait "modbus-tcp reselected" 'window.__smoke.txt(".file-name").indexOf("modbus-tcp") === 0' 20
+    Invoke-Js 'document.querySelector("#tab-basic").click(); true' | Out-Null
+    Check-Wait "section tab switches back" '!!document.querySelector(".more-frame-toggle")' 12
+    Check-Js "simple view folds frame details" '!window.__smoke.qa(".form-grid .el-form-item__label").some(function (e) { return (e.innerText || "").indexOf("\u957f\u5ea6\u57df\u504f\u79fb") >= 0 })'
+    Invoke-Js 'window.__smoke.clickText(".more-frame-toggle button", "\u66f4\u591a\u5e27\u53c2\u6570")' | Out-Null
+    Check-Wait "frame details expand" 'window.__smoke.qa(".form-grid .el-form-item__label").some(function (e) { return (e.innerText || "").indexOf("\u957f\u5ea6\u57df\u504f\u79fb") >= 0 })' 8
+
     # =======================================================================
     Write-Head "TAGS"
     Invoke-Js 'window.__smoke.nav(4); true' | Out-Null
@@ -648,7 +747,23 @@ true
     Invoke-Js 'document.querySelector(".dt-dev-head").click(); true' | Out-Null
     Start-Sleep -Milliseconds 300
     Check-Js "selecting a device shows its context" '!!document.querySelector(".ctx-bar .ctx-cur")'
-    Check-Js "device view shows info and connection together" '!!document.querySelector(".dev-pane") && document.querySelectorAll(".dev-pane .blk").length === 2'
+    Check-Js "device view shows info / connection / southbound together" '!!document.querySelector(".dev-pane") && document.querySelectorAll(".dev-pane .blk").length === 3'
+    Check-Js "device view has the southbound ingest/pull card" 'window.__smoke.qa(".dev-pane .blk-title").some(function (e) { return (e.innerText || "").indexOf("\u5357\u5411\u63a5\u5165") >= 0; })'
+
+    # 试拉取交互: 打开 pull → 填地址 → 发一次请求。后端链路已由 E2E Test 13f 覆盖,
+    # 这里只打桩 fetch, 锁住“按钮 → 请求体 → 结果面板”这条前端通路。
+    Invoke-Js '(function () { var s = window.__smoke.qa(".sb-section").filter(function (x) { return (x.innerText || "").indexOf("HTTP \u62c9\u53d6") >= 0; })[0]; if (!s) return false; s.querySelector(".el-switch").click(); return true; })()' | Out-Null
+    Check-Wait "pull section opens" '!!document.querySelector(".sb-section input[placeholder^=\"http://\"]")' 8
+    Invoke-Js 'window.__smoke.setInput(".sb-section input[placeholder^=\"http://\"]", "http://127.0.0.1:9/tags")' | Out-Null
+    Invoke-Js '(function () { window.__pullReq = null; window.__pullOrigFetch = window.fetch; window.fetch = function (input, init) { var u = typeof input === "string" ? input : ((input && input.url) || ""); if (u.indexOf("/api/preview/pull") >= 0 && init && init.body) { try { window.__pullReq = JSON.parse(init.body); } catch (e) {} var r = { ok: true, status: 200, elapsedMs: 7, bytes: 96, error: "", bodyPreview: "TAG-A 21.5", mapped: [{ tag: "TAG-A", value: 21.5 }], unmapped: ["TAG-MISS"], extra: ["TAG-EXTRA"], mappingError: "" }; return Promise.resolve(new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } })); } return window.__pullOrigFetch.apply(window, arguments); }; return true; })()' | Out-Null
+    Check-Js "trial pull button is available" 'window.__smoke.qa(".sb-section button").some(function (b) { return (b.innerText || "").indexOf("\u53d1\u4e00\u6b21\u8bf7\u6c42") >= 0; })'
+    Invoke-Js 'window.__smoke.clickText(".sb-section button", "\u53d1\u4e00\u6b21\u8bf7\u6c42")' | Out-Null
+    Check-Wait "trial pull renders a result" '!!document.querySelector(".sb-trial")' 10
+    Check-Js "trial pull sends the configured url / method" '!!window.__pullReq && window.__pullReq.url === "http://127.0.0.1:9/tags" && window.__pullReq.method === "GET" && Array.isArray(window.__pullReq.declaredTags)'
+    Check-Js "trial pull result shows success + status + elapsed" '(function () { var p = document.querySelector(".sb-trial"); if (!p) return false; var s = p.innerText || ""; return s.indexOf("\u6210\u529f") >= 0 && s.indexOf("200") >= 0 && s.indexOf("7 ms") >= 0; })()'
+    Check-Js "trial pull lists mapped / unmapped / extra tags" '(function () { var p = document.querySelector(".sb-trial"); if (!p) return false; var rows = p.querySelectorAll(".sb-table tbody tr"); var chips = Array.prototype.map.call(p.querySelectorAll(".sb-chips .el-tag"), function (e) { return (e.innerText || "").trim(); }).join(" "); return rows.length === 1 && (rows[0].innerText || "").indexOf("TAG-A") >= 0 && chips.indexOf("TAG-MISS") >= 0 && chips.indexOf("TAG-EXTRA") >= 0; })()'
+    Invoke-Js 'if (window.__pullOrigFetch) { window.fetch = window.__pullOrigFetch; delete window.__pullOrigFetch; } true' | Out-Null
+
     Check-Js "device view has no tabs" '!document.querySelector(".dev-pane .el-tabs")'
     Check-Js "device connection fields visible" 'document.querySelectorAll(".dev-pane .el-form-item").length >= 6'
     Check-Js "copy-device action is available" 'window.__smoke.qa(".ctx-bar button").some(function (b) { return (b.innerText || "").indexOf("\u590d\u5236\u8bbe\u5907") >= 0; })'

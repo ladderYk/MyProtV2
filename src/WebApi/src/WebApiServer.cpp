@@ -580,6 +580,18 @@ void WebApiServer::RegisterRoutes() {
         return Response(200, "application/json", JsonArray(res.value()));
     });
 
+    // ── /api/config/{scope}/{name}/backups/{tag} (GET=备份内容, 供回滚前 diff) ──
+    _routes.Add("GET", "/api/config/:scope/:name/backups/:tag",
+                [this](const RouteRequest& req) -> Response {
+        ConfigScope scope;
+        if (!ScopeFromString(req.Param("scope"), &scope)) {
+            return Response(404, "application/json", "{\"error\":\"unknown scope\"}");
+        }
+        auto res = _store.ReadBackup(scope, req.Param("name"), req.Param("tag"));
+        if (!res.has_value()) return ErrorResponse(res.error());
+        return Response(200, "application/json", res.value());
+    });
+
     // ── /api/config/{scope}/{name}/backups/{tag}/restore (POST=回滚) ──
     _routes.Add("POST", "/api/config/:scope/:name/backups/:tag/restore",
                 [this](const RouteRequest& req) -> Response {

@@ -29,10 +29,14 @@
 #include "RuntimeGlue.hpp"
 #include "MyProt/Service/TrialPreview.hpp"
 #include "MyProt/Service/ResponsePreview.hpp"
+#include "MyProt/Southbound/HttpPuller.hpp"
+#include "MyProt/Southbound/PayloadMapper.hpp"
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdlib>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -385,6 +389,161 @@ std::pair<int, std::string> HandleResponsePreviewApi(const Service::ConfigStore&
     rp.protocolJson = protocolJson;
 
     return std::make_pair(200, ResponsePreviewJson(Service::PreviewProtocolResponse(rp)));
+}
+
+// ── POST /api/preview/pull — 试拉取 (ADR-0023) ──
+// Body = one `pull.http` block plus an optional declared-tag list:
+//   { "url": "http://...", "method": "GET", "headers": {...}, "body": "...",
+//     "timeoutMs": 3000, "tagField": "tag", "valueField": "value", "tsField": "ts",
+//     "arrayOfItems": true, "declaredTags": ["METER-01.Temp"] }
+// Performs exactly one request through the same client + request builder as the pull
+// loop, then maps the payload with PayloadMapper. Read-only: no disk write, no reload,
+// no effect on the running binding. HTTP 200 means the preview was handled; `ok` is
+// the pull result (see also /api/preview semantics).
+std::pair<int, std::string> HandlePullPreviewApi(const Service::ConfigStore& store,
+                                                 const HttpRequest& req) {
+    (void)store;
+    if (req.method != "POST") return ErrorResponse(405, "method not allowed");
+    if (req.body.empty()) return ErrorResponse(400, "请求体为空");
+
+    nlohmann::json body;
+    try {
+        body = nlohmann::json::parse(req.body);
+    } catch (const std::exception& e) {
+        return ErrorResponse(400, std::string("请求体不是合法 JSON: ") + e.what());
+    }
+    if (!body.is_object()) return ErrorResponse(400, "请求体须为 JSON 对象");
+
+    Core::HttpPullConfig cfg;
+    if (!body.count("url") || !body.at("url").is_string()) {
+        return ErrorResponse(400, "url 须为字符串");
+    }
+    cfg.url = body.at("url").get<std::string>();
+    if (cfg.url.empty()) return ErrorResponse(400, "url 不能为空");
+
+    if (body.count("method")) {
+        if (!body.at("method").is_string()) return ErrorResponse(400, "method 须为字符串");
+        std::string method = body.at("method").get<std::string>();
+        for (std::size_t i = 0; i < method.size(); ++i) {
+            if (method[i] >= 'a' && method[i] <= 'z') {
+                method[i] = static_cast<char>(method[i] - 'a' + 'A');
+            }
+        }
+        if (method != "GET" && method != "POST") {
+            return ErrorResponse(400, "method 仅支持 GET / POST");
+        }
+        cfg.method = method;
+    }
+    if (body.count("body")) {
+        if (!body.at("body").is_string()) return ErrorResponse(400, "body 须为字符串");
+        cfg.body = body.at("body").get<std::string>();
+    }
+    if (body.count("timeoutMs")) {
+        unsigned int n = 0;
+        if (!ReadUInt32(body.at("timeoutMs"), &n) || n < 100 || n > 60000) {
+            return ErrorResponse(400, "timeoutMs 须为 100..60000 的整数");
+        }
+        cfg.timeoutMs = static_cast<int>(n);
+    }
+    if (body.count("headers")) {
+        if (!body.at("headers").is_object()) return ErrorResponse(400, "headers 须为对象");
+        const nlohmann::json& headers = body.at("headers");
+        for (nlohmann::json::const_iterator it = headers.begin(); it != headers.end(); ++it) {
+            if (!it.value().is_string()) {
+                return ErrorResponse(400, "headers." + it.key() + " 须为字符串");
+            }
+            const std::string value = it.value().get<std::string>();
+            const bool injection = it.key().find('\r') != std::string::npos
+                || it.key().find('\n') != std::string::npos
+                || value.find('\r') != std::string::npos
+                || value.find('\n') != std::string::npos;
+            if (injection) return ErrorResponse(400, "headers." + it.key() + " 含 CR/LF");
+            cfg.headers[it.key()] = value;
+        }
+    }
+    if (body.count("tagField")) {
+        if (!body.at("tagField").is_string()) return ErrorResponse(400, "tagField 须为字符串");
+        cfg.tagField = body.at("tagField").get<std::string>();
+    }
+    if (body.count("valueField")) {
+        if (!body.at("valueField").is_string()) return ErrorResponse(400, "valueField 须为字符串");
+        cfg.valueField = body.at("valueField").get<std::string>();
+    }
+    if (body.count("tsField")) {
+        if (!body.at("tsField").is_string()) return ErrorResponse(400, "tsField 须为字符串");
+        cfg.tsField = body.at("tsField").get<std::string>();
+    }
+    if (body.count("arrayOfItems")) {
+        if (!body.at("arrayOfItems").is_boolean()) {
+            return ErrorResponse(400, "arrayOfItems 须为布尔值");
+        }
+        cfg.arrayOfItems = body.at("arrayOfItems").get<bool>();
+    }
+
+    std::vector<std::string> declaredTags;
+    if (body.count("declaredTags")) {
+        if (!body.at("declaredTags").is_array()) {
+            return ErrorResponse(400, "declaredTags 须为字符串数组");
+        }
+        const nlohmann::json& tags = body.at("declaredTags");
+        for (std::size_t i = 0; i < tags.size(); ++i) {
+            if (!tags.at(i).is_string()) {
+                return ErrorResponse(400, "declaredTags 须为字符串数组");
+            }
+            declaredTags.push_back(tags.at(i).get<std::string>());
+        }
+    }
+
+    const Southbound::HttpPuller::ProbeResult probe = Southbound::HttpPuller::Probe(cfg);
+
+    nlohmann::json j;
+    j["ok"] = probe.ok;
+    j["status"] = probe.status;
+    j["elapsedMs"] = probe.elapsedMs;
+    j["bytes"] = static_cast<unsigned long long>(probe.body.size());
+    j["error"] = probe.error;
+    j["bodyPreview"] = probe.body.substr(0, 4096);
+
+    nlohmann::json mapped = nlohmann::json::array();
+    nlohmann::json unmapped = nlohmann::json::array();
+    nlohmann::json extra = nlohmann::json::array();
+    j["mappingError"] = "";
+
+    if (probe.ok) {
+        std::vector<Southbound::MappingItem> items;
+        std::string mapErr;
+        if (!Southbound::PayloadMapper::MapJson(probe.body, cfg.tagField, cfg.valueField,
+                                                cfg.tsField, std::string(), items, mapErr,
+                                                cfg.arrayOfItems)) {
+            j["mappingError"] = mapErr;
+        } else {
+            std::set<std::string> mappedTags;
+            for (std::size_t i = 0; i < items.size(); ++i) {
+                nlohmann::json item;
+                item["tag"] = items[i].tagName;
+                item["value"] = items[i].value;
+                if (items[i].timestampMs != 0) item["ts"] = items[i].timestampMs;
+                mapped.push_back(item);
+                mappedTags.insert(items[i].tagName);
+            }
+            for (std::size_t i = 0; i < declaredTags.size(); ++i) {
+                if (mappedTags.find(declaredTags[i]) == mappedTags.end()) {
+                    unmapped.push_back(declaredTags[i]);
+                }
+            }
+            for (std::set<std::string>::const_iterator it = mappedTags.begin();
+                    it != mappedTags.end(); ++it) {
+                if (std::find(declaredTags.begin(), declaredTags.end(), *it)
+                        == declaredTags.end()) {
+                    extra.push_back(*it);
+                }
+            }
+        }
+    }
+    j["mapped"] = mapped;
+    j["unmapped"] = unmapped;
+    j["extra"] = extra;
+    return std::make_pair(200, j.dump());
 }
 
 }} // namespace MyProt::App

@@ -543,6 +543,60 @@ bool ParseIngestDoc(const json& j, Core::IngestConfig& ing, std::string& err) {
     return false;
 }
 
+/// 南向拉取接入块 (ADR-0023, device-level): pull.type selects the adapter branch.
+bool ParsePullDoc(const json& j, Core::PullConfig& pull, std::string& err) {
+    if (!j.is_object()) { err = "pull 须为对象"; return false; }
+    if (!j.contains("type") || !j.at("type").is_string()) {
+        err = "pull.type 须为字符串 (http)";
+        return false;
+    }
+    pull.type = j.at("type").get<std::string>();
+    if (pull.type != "http") {
+        err = "pull.type 取值非法: \"" + pull.type + "\" (仅 http)";
+        return false;
+    }
+    if (!j.contains("http") || !j.at("http").is_object()) {
+        err = "pull.type=http 须含 http 对象";
+        return false;
+    }
+
+    const json& h = j.at("http");
+    Core::HttpPullConfig& c = pull.http;
+    if (!OptStr(h, "url", c.url, err)
+            || !OptStr(h, "method", c.method, err)
+            || !OptInt(h, "intervalMs", c.intervalMs, err)
+            || !OptInt(h, "timeoutMs", c.timeoutMs, err)
+            || !OptStr(h, "body", c.body, err)
+            || !OptStr(h, "tagField", c.tagField, err)
+            || !OptStr(h, "valueField", c.valueField, err)
+            || !OptStr(h, "tsField", c.tsField, err)
+            || !OptBool(h, "arrayOfItems", c.arrayOfItems, err)
+            || !OptInt(h, "maxSilenceMs", c.maxSilenceMs, err)
+            || !OptInt(h, "backoffBaseMs", c.backoffBaseMs, err)
+            || !OptInt(h, "backoffMaxMs", c.backoffMaxMs, err)
+            || !OptBool(h, "keepAlive", c.keepAlive, err)) {
+        return false;
+    }
+    // HTTP method is case-insensitive; normalise so validation and runtime agree.
+    for (std::size_t i = 0; i < c.method.size(); ++i) {
+        if (c.method[i] >= 'a' && c.method[i] <= 'z') {
+            c.method[i] = static_cast<char>(c.method[i] - 'a' + 'A');
+        }
+    }
+    if (h.contains("headers")) {
+        const json& hs = h.at("headers");
+        if (!hs.is_object()) { err = "pull.http.headers 须为对象"; return false; }
+        for (json::const_iterator it = hs.begin(); it != hs.end(); ++it) {
+            if (!it.value().is_string()) {
+                err = "pull.http.headers." + it.key() + " 须为字符串";
+                return false;
+            }
+            c.headers[it.key()] = it.value().get<std::string>();
+        }
+    }
+    return true;
+}
+
 bool ParseTemplateArray(const json& j, std::vector<std::string>& out, std::string& err) {
     if (!j.is_array()) { err = "requestTemplate 须为字符串数组"; return false; }
     out.reserve(j.size());
@@ -1559,6 +1613,14 @@ bool ParseRootDocImpl(const json& doc, int defaultVer,
                     return false;
                 }
                 dev.ingest = ing;
+            }
+            if (dj.contains("pull")) {
+                Core::PullConfig pull;
+                if (!ParsePullDoc(dj.at("pull"), pull, err)) {
+                    err = "设备 " + dev.id + " " + err;
+                    return false;
+                }
+                dev.pull = pull;
             }
             // 设备级模板变量缺省 (§4): 可选 map<string,uint32>
             if (dj.contains("variables")) {

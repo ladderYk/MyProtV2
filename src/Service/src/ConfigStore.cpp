@@ -278,6 +278,36 @@ Core::Expected<std::vector<std::string>> ConfigStore::ListBackups(
     return Core::Expected<std::vector<std::string>>(tags);
 }
 
+namespace {
+// 备份标签严格限定 "bak.<正整数>" — backupTag 未经 IsValidName 过滤, 否则
+// "bak.1\\..\\..\\win.ini" 可借 Windows 路径词法归一化穿越读取任意文件。
+bool IsValidBackupTag(const std::string& tag) {
+    if (tag.size() <= 4 || tag.compare(0, 4, "bak.") != 0) return false;
+    for (std::size_t i = 4; i < tag.size(); ++i) {
+        if (tag[i] < '0' || tag[i] > '9') return false;
+    }
+    return true;
+}
+}  // namespace
+
+// ── ReadBackup: 只读备份内容 (供回滚前预览 diff, 不落盘) ──
+Core::Expected<std::string> ConfigStore::ReadBackup(ConfigScope scope, const std::string& name,
+                                                    const std::string& backupTag) const {
+    Core::Error err;
+    std::string path = ResolvePath(scope, name, &err);
+    if (path.empty()) return Core::UnexpectedType{err};
+    if (!IsValidBackupTag(backupTag)) {
+        return Core::Unexpected(Core::Error::Code::ConfigError, "非法备份标签", "tag=" + backupTag);
+    }
+    std::string bak = path + "." + backupTag;
+    auto content = ReadFile(bak);
+    if (!content.has_value()) {
+        return Core::Unexpected(Core::Error::Code::ConfigError,
+                                "备份不存在", "path=" + bak);
+    }
+    return content;
+}
+
 // ── Rollback: 从备份恢复到主文件 (加锁外壳) ──
 Core::Expected<void> ConfigStore::Rollback(ConfigScope scope, const std::string& name,
                                            const std::string& backupTag) {
@@ -292,16 +322,8 @@ Core::Expected<void> ConfigStore::RollbackUnlocked(ConfigScope scope,
     Core::Error err;
     std::string path = ResolvePath(scope, name, &err);
     if (path.empty()) return Core::UnexpectedType{err};
-    // 备份标签严格限定 "bak.<正整数>" — backupTag 未经 IsValidName 过滤, 否则
-    // "bak.1\\..\\..\\win.ini" 可借 Windows 路径词法归一化穿越读取任意文件。
-    if (backupTag.size() <= 4 || backupTag.compare(0, 4, "bak.") != 0) {
+    if (!IsValidBackupTag(backupTag)) {
         return Core::Unexpected(Core::Error::Code::ConfigError, "非法备份标签", "tag=" + backupTag);
-    }
-    for (std::size_t i = 4; i < backupTag.size(); ++i) {
-        if (backupTag[i] < '0' || backupTag[i] > '9') {
-            return Core::Unexpected(Core::Error::Code::ConfigError,
-                                    "非法备份标签 (仅 bak.<数字>)", "tag=" + backupTag);
-        }
     }
 
     std::string bak = path + "." + backupTag;

@@ -216,12 +216,54 @@ bool PayloadMapper::MapJson(const std::string& payload,
                             const std::string& tsField,
                             const std::string& defaultTag,
                             std::vector<MappingItem>& out,
-                            std::string& err) {
+                            std::string& err,
+                            bool arrayAsItems) {
     out.clear();
     err.clear();
 
     nlohmann::json doc;
     if (!ParseDocument(payload, doc, err)) return false;
+
+    // Array-of-items contract (ADR-0023): [{ "tag": ..., "value": ..., "ts": ... }].
+    // Must stay ahead of the legacy "array = one value" branch.
+    if (arrayAsItems && doc.is_array()) {
+        const std::string tf = tagField.empty() ? std::string("tag") : tagField;
+        const std::string vf = valueField.empty() ? std::string("value") : valueField;
+        if (doc.empty()) {
+            err = "payload 数组为空";
+            return false;
+        }
+        for (std::size_t i = 0; i < doc.size(); ++i) {
+            const nlohmann::json& el = doc[i];
+            if (!el.is_object()) {
+                err = "payload 数组元素 [" + std::to_string(i) + "] 不是对象";
+                return false;
+            }
+            MappingItem item;
+            if (el.contains(tf) && el[tf].is_string()) {
+                item.tagName = el[tf].get<std::string>();
+            } else {
+                item.tagName = defaultTag;
+            }
+            if (item.tagName.empty()) {
+                err = "payload 数组元素 [" + std::to_string(i)
+                    + "] 缺少标签名 (tagField=" + tf + ")";
+                return false;
+            }
+            if (!el.contains(vf)) {
+                err = "payload 数组元素 [" + std::to_string(i)
+                    + "] 缺少值字段 " + vf;
+                return false;
+            }
+            item.value = el[vf];
+            if (!tsField.empty() && el.contains(tsField) && el[tsField].is_number()) {
+                const int64_t ts = el[tsField].get<int64_t>();
+                item.timestampMs = (ts > 0 && ts < 100000000000LL) ? ts * 1000 : ts;
+            }
+            out.push_back(item);
+        }
+        return true;
+    }
 
     if (doc.is_object()) {
         const std::string vf = valueField.empty() ? std::string("value") : valueField;

@@ -695,7 +695,53 @@ export const EN = {
   '已删除 {name}': 'Deleted {name}',
   '名称仅允许字母、数字、下划线和中划线': 'Names may contain only letters, digits, underscores and hyphens',
   '已创建 {name}.json': 'Created {name}.json',
-  '确定回滚「{name}」到 {tag}？当前未保存的修改将丢失。': 'Roll back "{name}" to {tag}? Unsaved changes will be lost.',
+  // ── 回滚前 diff 预览 ──
+  '回滚前确认': 'Confirm rollback',
+  '读取备份内容…': 'Loading backup content…',
+  '读取备份内容失败: {msg}': 'Failed to read backup: {msg}',
+  '+ 为备份新增的行，- 为将被删除的行。':
+    'Lines marked + come back with the backup; lines marked - will be removed.',
+  '… {n} 行未改动 …': '… {n} unchanged lines …',
+  '确定回滚': 'Roll back',
+
+  // ── 操作清单搜索与筛选 ──
+  '搜索操作名/说明': 'Search operation name / summary',
+  '全部': 'All',
+  '{n} / {total} 条': '{n} / {total}',
+  '没有匹配的操作，请调整搜索条件': 'No matching operations; adjust the filter',
+
+  // ── 总览页全局体检 ──
+  '全局配置体检': 'Global config checkup',
+  '开始体检': 'Run checkup',
+  '重新体检': 'Re-run checkup',
+  '体检中…': 'Checking…',
+  '逐个校验全部协议与标签配置，找出会阻断热重载的问题。':
+    'Validate every protocol and the tag config to find problems that block hot reload.',
+  '全部通过': 'All passed',
+  '共 {n} 项配置': '{n} config items',
+  '通过': 'Passed',
+  '无法校验': 'Cannot validate',
+  '查看问题 →': 'View issues →',
+
+  // ── 配置包导出/导入 ──
+  '配置包': 'Config bundle',
+  '导出全部协议与标签；导入前先逐项校验':
+    'Export all protocols and tags; every item is validated before import',
+  '导出配置包': 'Export bundle',
+  '导入配置包': 'Import bundle',
+  '已导出 {n} 个协议与标签配置': 'Exported {n} protocols plus the tag config',
+  '导出失败: {msg}': 'Export failed: {msg}',
+  '配置包格式不对：协议项缺少合法的 name/content':
+    'Invalid bundle: a protocol item lacks a valid name/content',
+  '配置包格式不对：标签配置名非法': 'Invalid bundle: illegal tag config name',
+  '配置包里没有任何配置项': 'The bundle contains no config items',
+  '导入已取消：{n} 项未通过校验（{names}）':
+    'Import cancelled: {n} items failed validation ({names})',
+  '将覆盖 {n} 项现有配置（{names}），确定导入？':
+    'This overwrites {n} existing config items ({names}). Continue?',
+  '正在导入 {done}/{total}…': 'Importing {done}/{total}…',
+  '已导入 {n} 项配置': 'Imported {n} config items',
+  '导入失败: {msg}': 'Import failed: {msg}',
   '已回滚到 {tag}': 'Rolled back to {tag}',
   '已定位到设备「{name}」': 'Jumped to device "{name}"',
   '共 {n} 个协议': '{n} protocols',
@@ -1084,6 +1130,28 @@ export const EN = {
   '本操作未覆盖任何自动计算字段, 直接使用上方继承项':
     'This operation overrides no computed field; the inherited items above are used as-is',
   '暂无自动计算字段, 可在下方表单添加': 'No computed fields yet — add one in the form below',
+  '{segs} 段 · {ins} 入 · {outs} 出': '{segs} seg · {ins} in · {outs} out',
+  '请求模板为空': 'Request template is empty',
+  '无输出字段': 'No output fields',
+  '{n} 项待补': '{n} to fix',
+  '完整': 'Complete',
+  '覆盖 {src}': 'Overrides {src}',
+  '还原': 'Revert',
+  '更多帧参数 (7)': 'More frame parameters (7)',
+  '收起帧参数': 'Hide frame parameters',
+  '偏移/宽度/修正量等属帧结构细节, 不确定时保持默认':
+    'Offset, width and adjustment are frame-structure details — keep the defaults when unsure',
+  '新建操作': 'New operation',
+  '请输入操作名': 'Enter an operation name',
+  '创建': 'Create',
+  '起点': 'Starting point',
+  '克隆 {name}': 'Clone {name}',
+  '克隆会复制请求模板、变量与输出, 适合在同协议内扩展':
+    'Cloning copies the request template, variables and outputs — handy when extending the same protocol',
+  '原型提供默认输出/应答字段, 可在创建后覆盖':
+    'The profile supplies default outputs/response fields; override them after creation',
+  '读 = 供只读标签引用; 写 = 可作写请求模板':
+    'read = referenced by read-only tags; write = usable as a write request template',
   '自动计算字段 (outputs · 本操作)': 'Computed fields (outputs · this operation)',
   '自动计算字段 (outputs · 全局)': 'Computed fields (outputs · protocol-wide)',
   '自动计算字段 (derivedLength)': 'Computed fields (derivedLength)',
@@ -1115,4 +1183,110 @@ export const EN = {
     'Configured but no good values — check device connectivity or start simulation',
   '{n} 个异常或无值': '{n} bad or missing',
   '至少一个点位正常视为在线': 'Online when at least one point reports a good value',
+
+  // ── 操作清单: 诊断定位 + 删除引用检查 ──
+  '点击条目定位到需要补充的字段': 'Click an item to jump to the field that needs work',
+  '去处理 →': 'Fix it →',
+  '删除操作': 'Delete operation',
+  '检查引用中…': 'Checking references…',
+  '未能读取设备与标签配置，无法确认引用':
+    'Could not read the device/tag config; references were not checked',
+  '被 {n} 个标签引用，删除后这些标签将失效':
+    '{n} tags reference this operation; they will break after deletion',
+  '此操作未被任何标签引用。': 'No tag references this operation.',
+  '仍然删除': 'Delete anyway',
+  '已删除操作 {name}': 'Deleted operation {name}',
+
+  // ── 重命名操作: 标签引用提醒 ──
+  '重命名操作': 'Rename operation',
+  '被 {n} 个标签引用，改名后需同步修改':
+    '{n} tags reference this operation; update them after renaming',
+  '仍然改名': 'Rename anyway',
+  '已改名，请同步修改 {n} 个标签的引用':
+    'Renamed. Update the operation name in {n} tags.',
+
+  // ── 删除协议: 设备引用提醒 ──
+  '删除协议配置': 'Delete protocol config',
+  '其历史备份将一并删除。': 'Its backup history will be deleted as well.',
+  '{n} 台设备正在使用该协议，删除后它们将无法连接':
+    '{n} devices use this protocol; they will lose connectivity after deletion',
+  '当前没有设备使用该协议。': 'No device uses this protocol.',
+
+  // ── 南向接入 (SouthboundEditor): ingest / pull ──
+  '南向接入': 'Southbound ingestion',
+  '南向推送 (ingest)': 'Southbound push (ingest)',
+  '设备主动上报：网关作为 MQTT 订阅者或 TCP 服务端':
+    'Device-initiated: the gateway acts as an MQTT subscriber or a TCP server',
+  '接入方式': 'Ingest mode',
+  'MQTT 订阅': 'MQTT subscribe',
+  'TCP 监听': 'TCP listen',
+  'Broker 主机 (空 = 使用设备主机)': 'Broker host (empty = device host)',
+  '主题 (支持 + / #)': 'Topic (+ / # wildcards)',
+  '客户端 ID (空 = myprot-sub-<设备>)': 'Client ID (empty = myprot-sub-<device>)',
+  'QoS (0/1；v1 不支持 2)': 'QoS (0/1; v1 does not support 2)',
+  '标签来源': 'Tag name source',
+  '载荷字段 (payload)': 'Payload field (payload)',
+  '主题段 (topic)': 'Topic segment (topic)',
+  '主题段序号 (1 起)': 'Topic segment index (1-based)',
+  '标签字段': 'Tag field',
+  '值字段': 'Value field',
+  '时间戳字段 (空 = 接收时间)': 'Timestamp field (empty = receive time)',
+  '静默看门狗 (0 = 关闭)': 'Silence watchdog (0 = off)',
+  '心跳 (秒)': 'Keep-alive (s)',
+  '清理会话': 'Clean session',
+  '重连最小间隔': 'Min reconnect interval',
+  '重连最大间隔': 'Max reconnect interval',
+  '用户名 (可选)': 'Username (optional)',
+  '密码 (可选)': 'Password (optional)',
+  '监听地址': 'Listen address',
+  '监听端口': 'Listen port',
+  '切帧方式': 'Framing',
+  '定长 (Fixed)': 'Fixed length (Fixed)',
+  '长度域 (LengthField)': 'Length field (LengthField)',
+  '定长字节数': 'Fixed frame bytes',
+  '长度域字节数': 'Length field bytes',
+  '长度修正': 'Length adjustment',
+  'HTTP 拉取 (pull)': 'HTTP pull',
+  '网关主动拉取设备 REST API，映射后写入实时快照':
+    'The gateway polls a device REST API and maps the payload into the live snapshot',
+  '请求地址': 'Request URL',
+  '请求方法': 'Method',
+  '轮询周期': 'Poll interval',
+  '超时': 'Timeout',
+  '复用连接': 'Keep-alive connection',
+  '数组逐元素映射': 'Map array items',
+  '请求体 (仅 POST)': 'Request body (POST only)',
+  '请求头': 'Headers',
+  '添加请求头': 'Add header',
+  '无自定义请求头': 'No custom headers',
+  '试拉取': 'Trial pull',
+  '正在请求…': 'Requesting…',
+  '发一次请求': 'Send one request',
+  '只读预览：复用拉取链路的客户端与映射器，不影响正在运行的绑定':
+    'Read-only preview: reuses the pull client and mapper; the running binding is not affected',
+  '该设备暂未声明 source=pull 标签': 'This device declares no source=pull tags yet',
+  '成功': 'Success',
+  '失败': 'Failed',
+  '状态码': 'Status code',
+  '耗时': 'Elapsed',
+  '响应大小': 'Response size',
+  '映射错误': 'Mapping error',
+  '映射结果': 'Mapped values',
+  '时间戳': 'Timestamp',
+  '未命中标签': 'Unmatched tags',
+  '响应中的额外标签': 'Extra tags in response',
+  '响应片段': 'Response preview',
+  '请先填写请求地址': 'Enter the request URL first',
+
+  // ── 标签数据来源 (poll / push / pull) ──
+  '数据来源': 'Data source',
+  '轮询 (poll)': 'Polling (poll)',
+  '设备推送 (push)': 'Device push (push)',
+  '网关拉取 (pull)': 'Gateway pull (pull)',
+  'push/pull 标签由南向适配器写入, 不经操作模板、不参与轮询':
+    'push/pull tags are written by southbound adapters: no operation template, no polling',
+  '该设备未配置 ingest, 保存会校验失败 (规则13)':
+    'This device has no ingest configured; saving will fail validation (rule 13)',
+  '该设备未配置 pull, 保存会校验失败 (规则13)':
+    'This device has no pull configured; saving will fail validation (rule 13)',
 }

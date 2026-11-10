@@ -696,7 +696,8 @@ configs/
 | `protocol` | string | ✓ | — | 引用 `protocolName` |
 | `enabled` | bool | ✗ | `true` | **设备启用开关**（KI-04）。`false` = 不轮询/不建连/不接收 `ingest`，生命周期直置 `Disabled`；热重载改回 `true` 即恢复。可选增量字段，不升 `schemaVersion` |
 | `connection` | object | ✓ | — | 见下；其中 `timeoutMs` 仅为**连接建立**超时 |
-| `ingest` | object | ✗ | null | **南向推送接入**（网关接收设备主动上报）；null = 仅轮询设备。字段见 §4.1 |
+| `ingest` | object | ✗ | null | **南向推送接入**（网关接收设备主动上报）；null = 不接收推送。字段见 §4.1 |
+| `pull` | object | ✗ | null | **南向拉取接入**（网关作为客户端定时取数）；null = 不拉取。字段见 §4.2。与 `ingest` 可共存，但同一标签只能属于一种来源 |
 | `requestTimeoutMs` | int | ✗ | 3000 | **单次请求-应答**超时（一发一收一解析）；该设备所有操作共用，为唯一配置点（2026-08-24 收敛，见 [ADR-0004](./adr/0004-timeout-retry-budget.md) R1） |
 | `username` | string | ✗ | null | 协议级认证凭据（如 S7 CPU 密码） |
 | `password` | string | ✗ | null | 同上；日志中一律脱敏为 `***` |
@@ -824,6 +825,77 @@ configs/
 }
 ```
 
+### 4.2 pull（南向 HTTP 拉取接入，设备级）
+
+> **裁决来源**: [ADR-0023](./adr/0023-southbound-http-pull.md)。网关作 HTTP 客户端按 `intervalMs` 定时 GET/POST 设备 REST API，响应按标签映射后经 `TagValueSink` 写入 `LatestValueStore`——与 §4.1 共用同一数据出口，不经过轮询引擎。
+
+| `type` | 网关角色 | 适配器 |
+|--------|----------|--------|
+| `"http"` | HTTP 客户端（主动轮询） | `Southbound::HttpPuller` |
+
+设备下所有 `source=pull` 的标签由本段适配器产出，`source=poll` / `source=push` 标签不受影响。
+
+**http（`type="http"`）**
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:--:|------|------|
+| `url` | string | ✓ | — | 必须以 `http://` 开头（v1 不支持 https）；不支持内嵌凭据（`user:pw@host`），鉴权走 `headers` |
+| `method` | string | ✗ | `GET` | `GET` / `POST`（大小写不敏感，归一化为大写） |
+| `intervalMs` | int | ✗ | `1000` | 轮询周期，须 ≥ 100 |
+| `timeoutMs` | int | ✗ | `3000` | 单次往返总超时（DNS + 连接 + 请求 + 响应），须 ≥ 100；大于 `intervalMs` 时告警（上一轮可能挤压下一轮） |
+| `headers` | map&lt;string,string&gt; | ✗ | `{}` | 附加请求头；`Host` / `Connection` / `Content-Length` / `Transfer-Encoding` / `Accept-Encoding` 由客户端托管，配置项被忽略；名称/值含 CR/LF 直接报错（防头注入） |
+| `body` | string | ✗ | `""` | 仅 `POST` 发送；`GET` 携带 body 告警并被忽略 |
+| `tagField` | string | ✗ | `tag` | 标签名字段 |
+| `valueField` | string | ✗ | `value` | 值字段名 |
+| `tsField` | string | ✗ | `ts` | 时间戳字段名（epoch ms；小于 1e11 视为秒并 ×1000）；空 = 用本地接收时间 |
+| `arrayOfItems` | bool | ✗ | `true` | `true` = 顶层 JSON 数组按元素逐条映射；`false` = 整个数组作为一个值 |
+| `maxSilenceMs` | int | ✗ | `0` | 静默看门狗：>0 时超过该时长无成功帧 → 该设备 pull 标签置 `Uncertain`（仅一次）；`0` = 关闭 |
+| `backoffBaseMs` | int | ✗ | `1000` | 连续失败时的指数退避基数（`base × 2^(n-1)`），须 ≥ 0；`0` = 不退避，固定按 `intervalMs` 重试 |
+| `backoffMaxMs` | int | ✗ | `30000` | 退避上限，须 ≥ `backoffBaseMs`；实际等待不短于 `intervalMs`。失败期间设备保持 `Bad`，最坏恢复探测延迟即本值 |
+| `keepAlive` | bool | ✗ | `true` | 跨轮复用 TCP 连接；服务端回 `Connection: close` / HTTP/1.0 未声明 keep-alive / 既无 `Content-Length` 也非 chunked 时自动重连；陈旧连接自动重试一次 |
+
+**响应契约（v1）**
+
+| 载荷形态 | 映射结果 |
+|----------|----------|
+| `[{"tag":"P.Temp","value":21.5}]` | 每元素一条；标签名取 `tagField`，缺省回退设备内唯一 pull 标签（多标签设备必须显式给出） |
+| `{"P.Temp":21.5,"P.Press":101.3}` | 批量映射；键即标签名（对象含 `valueField` 时改走单条模式） |
+| 标量 / 数组（`arrayOfItems=false`） | 单条；标签名取 `tagField` 或设备内唯一 pull 标签 |
+
+- 每条值必须命中该设备已声明的 `source=pull` 标签；未声明的标签名丢弃并限频告警（5s 一条）。
+- **质量语义**：非 2xx / DNS 失败 / 超时 / 响应头不完整 / chunk 解码失败 / JSON 解析失败 → 该设备**全部** pull 标签置 `Bad`（错误原因进日志，非 2xx 片段最多保留 256 字节）；同一段故障内 `Bad` 优先，**不再叠加** `Uncertain`。只有“HTTP 成功但响应里没有任何本设备标签”这种静默，才会在 `maxSilenceMs` 后置 `Uncertain`（保留上次值，每段静默一次）。遵循 [ADR-0006](./adr/0006-quality-semantics.md)。
+- **传输限制**：HTTP/1.1，`Content-Length`、`Transfer-Encoding: chunked`（含 chunk extension 与 trailer）或读到 EOF 定界；单响应解码后上限 1MB；不支持 gzip / 重定向 / TLS。
+- **节奏**：一轮结束（成功/失败）后才开始计时；成功轮等待 `intervalMs`，连续失败按 `min(backoffMaxMs, backoffBaseMs × 2^(n-1))`（不低于 `intervalMs`）退避，成功一轮立即复位。
+- **观测与生命周期**：`myprot_pull_rounds_total` / `_failures_total` / `_consecutive_failures` / `_backoff_ms` / `_last_success_timestamp_seconds` / `_connections_total`（均带 `device` 标签）；纯 pull 设备拉取失败 → 生命周期 `Degraded`，恢复 → `Connected`（同设备还有 `source=poll` 标签时生命周期归轮询侧）。见 [ADR-0023 §2.8](./adr/0023-southbound-http-pull.md)。
+
+```jsonc
+// tags.json: 设备段 —— 定时拉取设备 REST API
+{
+  "id": "METER-01",
+  "protocol": "modbus-tcp",
+  "connection": { "host": "192.168.1.30", "port": 502 },
+  "pull": {
+    "type": "http",
+    "http": {
+      "url": "http://192.168.1.30:8080/api/values",
+      "method": "GET",
+      "intervalMs": 1000,
+      "timeoutMs": 2000,
+      "headers": { "Authorization": "Bearer <token>" },
+      "maxSilenceMs": 10000,
+      "backoffBaseMs": 1000,
+      "backoffMaxMs": 30000,
+      "keepAlive": true
+    }
+  }
+}
+// 对应标签（不声明 operation / scanRateMs）
+{ "name": "METER-01.Temp", "deviceId": "METER-01", "source": "pull", "finalType": "Double" }
+```
+
+> 可直接运行的完整示例见 [`configs_pull_demo/`](../configs_pull_demo/)；已通过
+> `MyProt.App.exe --validate configs_pull_demo` 校验（0 error / 0 warning）。
+
 ---
 
 ## 5. 标签配置 (TagDefinition)
@@ -846,7 +918,7 @@ configs/
 | `bitOffset` | int | ✗ | -1 | **位偏移**（0–7，语义 = `StartByteAddress` 所指字节内的位偏移）；`-1` = 未声明，越界为 Error（规则13）。仅 Bool 取位使用：声明后按 `(raw[0] >> bitOffset) & 1` 取位；未声明按整字节 `raw[0] != 0`。协议 `outputs` 的位寻址 `expr` 通过运行时注入的 `BitOffset` 引用同一值 |
 | `coalesce` | bool | ✗ | `true` | 是否参与地址邻近合并；单地址读（如 S7 `ReadVar*`）设 `false` |
 | `direction` | string | ✗ | `"read"` | `read`（参与轮询，写能力由 `writeOperation` / `writeBytesOperation` 声明）/ `write`（**只写标签**，`operation` 即写操作，不参与轮询，见下） |
-| `source` | string | ✗ | `"poll"` | **值来源（单一来源，无仲裁）**：`poll` = 轮询引擎采集；`push` = 设备 `ingest`（§4.1）适配器产出。`push` 标签不参与轮询、不得声明 `operation`、`finalType` 可省略（= `Auto`），见下 |
+| `source` | string | ✗ | `"poll"` | **值来源（单一来源，无仲裁）**：`poll` = 轮询引擎采集；`push` = 设备 `ingest`（§4.1）适配器产出；`pull` = 设备 `pull`（§4.2）HTTP 拉取适配器产出。`push` / `pull` 标签不参与轮询、不得声明 `operation`、`finalType` 可省略（= `Auto`），见下 |
 | `writeVariable` | string | ✗ | `"WriteValue"` | 写值注入的模板变量名，模板以 `{writeVariable:X4}`（标量）或 `{writeVariable:raw}`（字节/浮点）消费 |
 | `readBackTag` | string | ✗ | `""` | 写标签：写后读回校验引用的**读标签名**；空时回退为按写目标自身读语义重读（仅写标签可配） |
 | `converters` | array | ✗ | `[]` | **读后换算链**（C1）：采集值→工程值，按序应用。v1 仅 `scale` 项 `{"kind":"scale","k":<num>,"b":<num>}`（`value' = value×k + b`，先乘后加），换算后值统一为 Double。仅数值型 `finalType`（整型/Float/Double）的**读标签**可配；写标签或非数值类型声明即校验错误（规则13）。典型：0.1°C/bit → `k=0.1,b=0`；4-20mA 标定 → `k=(量程上限-下限)/27648, b=下限` |
@@ -873,6 +945,11 @@ configs/
 - 必须引用一个**已声明 `ingest`** 的设备；同一设备可同时存在 poll 与 push 标签（设备既有 `connection` 又有 `ingest`），但同一标签只能属于一种来源。
 - 与 `direction=write` 互斥；写标签/轮询标签的能力（`writeOperation` / converters 等）对 push 标签语义不变，但 `converters` 仅在数值型结果（含 `Auto` 推断为数值）上生效。
 - 质量与静默：适配器解析失败 → `Bad`；设备 `maxSilenceMs > 0` 且超时无帧 → 该设备全部 push 标签置 `Uncertain`（每段静默只发一次，恢复收帧后自动复位）；语义遵循 [ADR-0006](./adr/0006-quality-semantics.md)。
+
+**拉取标签（source=pull）**：
+- 值由设备级 `pull`（§4.2）适配器定时拉取产出，**不参与轮询**，不声明 `operation`；`scanRateMs` 被忽略。
+- 必须引用一个**已声明 `pull`** 的设备；与 `direction=write` 互斥；`writeOperation` / converters 的适用规则与 push 标签一致。
+- 质量与静默：拉取失败（非 2xx / 超时 / 解析失败）→ 该设备全部 pull 标签置 `Bad`（同一故障段 `Bad` 优先，不叠加 `Uncertain`）；HTTP 成功但无命中标签持续超过 `maxSilenceMs` → `Uncertain`（保留上次值，每段静默只发一次）。
 
 **byteOrder 回退链**：`tag.byteOrder` → `protocol.dataByteOrder` → `BigEndian`（三者均缺省时）。
 

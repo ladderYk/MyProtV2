@@ -30,7 +30,7 @@ LOG_ERROR("[dev={}] 握手失败: {} (step={})", deviceId, err.message, stepName
 | `error` | 熔断器打开、配置校验失败、WebApi 400/500 |
 | `critical` | 不可恢复的内部错误 |
 
-### 10.2 Metrics（v1：内部 facade；HTTP 暴露为 v2）
+### 10.2 Metrics（v1：内部 facade + /metrics 暴露）
 
 ```
 # v1 实态: Core/Metrics.hpp 内部 facade (counter + gauge + Device label), 各模块写入点埋点:
@@ -39,12 +39,19 @@ LOG_ERROR("[dev={}] 握手失败: {} (step={})", deviceId, err.message, stepName
 #                      myprot_device_lifecycle_transitions_total counter,
 #                      myprot_circuit_state gauge, myprot_circuit_opens_total counter)
 #   - 写路径:           Gateway::WriteService (写路径计数)
-# GET /metrics 已实装 (Prometheus text v0.0.4, 免认证; 路由表统一注册)。目标指标形态:
+#   - 南向拉取:         HttpPuller (myprot_pull_rounds_total / myprot_pull_failures_total,
+#                      myprot_pull_consecutive_failures / myprot_pull_backoff_ms gauge,
+#                      myprot_pull_last_success_timestamp_seconds / myprot_pull_connections_total)
+GET /metrics 已实装 (Prometheus text v0.0.4, 免认证; 路由表统一注册)。目标指标形态:
 myprot_reads_total{device="PLC1",status="success"} 12345
 myprot_reads_total{device="PLC1",status="failed"} 3
 myprot_device_lifecycle_state{device="PLC1"} 2   # New/Connecting/Connected/Degraded/Disabled
 myprot_circuit_state{device="PLC1"} 0            # 0=closed, 1=open, 2=half_open
 myprot_write_queue_size{device="PLC1"} 2         # per-device 写互斥队列长度 (ADR-0011 P1 C)
+myprot_pull_rounds_total{device="METER-01"} 1440        # 南向 HTTP 拉取轮次
+myprot_pull_consecutive_failures{device="METER-01"} 0   # 连续失败数, 成功一轮归零
+myprot_pull_backoff_ms{device="METER-01"} 1000          # 本轮后的实际等待时长
+myprot_pull_connections_total{device="METER-01"} 1      # 稳态趋近 1: keep-alive 复用
 ```
 
 > 指标集中不含 `myprot_dispatch_queue_size`（无独立 DataDispatcher）与 `myprot_deadband_filtered_total`（死区过滤未启用）；`TagDefinition.deadband` / `reportMode` 字段保留但不参与计算。

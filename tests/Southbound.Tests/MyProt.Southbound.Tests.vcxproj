@@ -146,6 +146,7 @@
     <ClCompile Include="TagValueSinkTests.cpp" />
     <ClCompile Include="LatestValueStoreTests.cpp" />
     <ClCompile Include="IngestLoopbackTests.cpp" />
+    <ClCompile Include="HttpPullTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Core\MyProt.Core.vcxproj">

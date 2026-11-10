@@ -174,33 +174,42 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     //       readBackTag 仅写标签可配; writeVariable 不可为空.
     const bool isWriteTag = (tag.direction == "write");
     const bool isPushTag = (tag.source == "push");
+    const bool isPullTag = (tag.source == "pull");
+    const bool isExternalTag = isPushTag || isPullTag;
     if (tag.direction != "read" && !isWriteTag) {
         r.addError("标签 " + ctx + " direction 取值非法: \"" + tag.direction
                    + "\" (仅 read/write) (规则13)");
     }
-    if (tag.source != "poll" && !isPushTag) {
+    if (tag.source != "poll" && !isExternalTag) {
         r.addError("标签 " + ctx + " source 取值非法: \"" + tag.source
-                   + "\" (仅 poll/push) (规则13)");
+                   + "\" (仅 poll/push/pull) (规则13)");
     }
-    if (isPushTag && isWriteTag) {
-        r.addError("标签 " + ctx + " source=push 与 direction=write 互斥 (规则13)");
+    if (isExternalTag && isWriteTag) {
+        r.addError("标签 " + ctx + " source=" + tag.source
+                   + " 与 direction=write 互斥 (规则13)");
     }
-    if (isPushTag) {
-        // push 标签由 ingest 适配器产出: 不经操作模板、不参与轮询
+    if (isExternalTag) {
+        // push/pull 标签由南向适配器产出: 不经操作模板、不参与轮询
         if (!tag.operation.empty()) {
-            r.addError("标签 " + ctx + " source=push 不得声明 operation (不经模板解析) (规则13)");
+            r.addError("标签 " + ctx + " source=" + tag.source
+                       + " 不得声明 operation (不经模板解析) (规则13)");
         }
-        if (tag.scanRateMs != 0) {
-            r.addWarning("标签 " + ctx + " source=push 的 scanRateMs 将被忽略 (规则13)");
+        // scanRateMs 对 push/pull 无意义; 1000 是解析层默认值, 未声明时不提醒噪音
+        if (tag.scanRateMs != 0 && tag.scanRateMs != 1000) {
+            r.addWarning("标签 " + ctx + " source=" + tag.source
+                         + " 的 scanRateMs 将被忽略 (规则13)");
         }
         std::unordered_map<std::string, const Core::DeviceConfig*>::const_iterator pdev =
             deviceMap.find(tag.deviceId);
         if (pdev == deviceMap.end()) {
             r.addError("标签 " + ctx + " 引用不存在的设备: \"" + tag.deviceId
                        + "\" (规则12)");
-        } else if (!pdev->second->ingest.has_value()) {
+        } else if (isPushTag && !pdev->second->ingest.has_value()) {
             r.addError("标签 " + ctx + " source=push 但设备 \"" + tag.deviceId
                        + "\" 未配置 ingest (规则13)");
+        } else if (isPullTag && !pdev->second->pull.has_value()) {
+            r.addError("标签 " + ctx + " source=pull 但设备 \"" + tag.deviceId
+                       + "\" 未配置 pull (规则13)");
         }
     } else if (!isWriteTag && tag.scanRateMs <= 0) {
         r.addError("标签 " + ctx + " scanRateMs 必须 > 0 (规则13)");
@@ -280,8 +289,8 @@ void ConfigValidator::validateTag(const Core::TagDefinition& tag,
     //   与 tags.json 中读取标签声明的 {ByteCount:N} 与协议 JSON 协议族单位 {RegisterCount:M} (Modbus)
 //     一致性由协议 JSON derivedLength 自身保证, 此处不再做跨字段核对 (避免把协议族知识渗入校验).
     //   仍保留 {StartByteAddress} > 0 的合理性警告 (按字节地址线性推断).
-    if (isPushTag) {
-        // push 标签不经 operation/模板/占位符链路: 来源绑定与类型已在上面校验完毕
+    if (isExternalTag) {
+        // push/pull 标签不经 operation/模板/占位符链路: 来源绑定与类型已在上面校验完毕
         return;
     }
 

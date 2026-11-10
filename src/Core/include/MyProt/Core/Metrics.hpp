@@ -12,6 +12,12 @@
 //   gauge    myprot_circuit_state{device}           circuit-breaker state (0=Closed 1=HalfOpen 2=Open)
 //   gauge    myprot_device_lifecycle_state{device}  device lifecycle (0=New 1=Connecting 2=Connected 3=Degraded 4=Disabled)
 //   counter  myprot_device_lifecycle_transitions_total{device,from,to} lifecycle transitions
+//   counter  myprot_pull_rounds_total{device}       pull rounds attempted (success + failure)
+//   counter  myprot_pull_failures_total{device}     pull rounds that failed
+//   gauge    myprot_pull_consecutive_failures{device} consecutive failed rounds (reset on success)
+//   gauge    myprot_pull_backoff_ms{device}         wait applied before the next round
+//   gauge    myprot_pull_last_success_timestamp_seconds{device} unix time of the last successful round
+//   counter  myprot_pull_connections_total{device}  TCP connections established (keep-alive reuse lowers this)
 #pragma once
 #include <string>
 #include <vector>
@@ -36,6 +42,12 @@ const char* const kCircuitOpensTotal     = "myprot_circuit_opens_total";
 const char* const kCircuitState          = "myprot_circuit_state";
 const char* const kDeviceLifecycleState  = "myprot_device_lifecycle_state";
 const char* const kDeviceLifecycleTransitionsTotal = "myprot_device_lifecycle_transitions_total";
+const char* const kPullRoundsTotal        = "myprot_pull_rounds_total";
+const char* const kPullFailuresTotal      = "myprot_pull_failures_total";
+const char* const kPullConsecutiveFailures = "myprot_pull_consecutive_failures";
+const char* const kPullBackoffMs          = "myprot_pull_backoff_ms";
+const char* const kPullLastSuccessTimestamp = "myprot_pull_last_success_timestamp_seconds";
+const char* const kPullConnectionsTotal   = "myprot_pull_connections_total";
 
 } // namespace metrics
 
@@ -159,6 +171,18 @@ private:
                  "device lifecycle (0=New 1=Connecting 2=Connected 3=Degraded 4=Disabled) / 设备生命周期状态");
         Describe(kDeviceLifecycleTransitionsTotal, "counter",
                  "device lifecycle transitions / 设备生命周期状态迁移次数");
+        Describe(kPullRoundsTotal, "counter",
+                 "pull rounds attempted (success + failure) / 拉取轮次(成功+失败)");
+        Describe(kPullFailuresTotal, "counter",
+                 "pull rounds that failed / 拉取失败轮次");
+        Describe(kPullConsecutiveFailures, "gauge",
+                 "consecutive failed pull rounds / 连续拉取失败次数");
+        Describe(kPullBackoffMs, "gauge",
+                 "wait applied before the next pull round (ms) / 下一轮拉取等待时长(毫秒)");
+        Describe(kPullLastSuccessTimestamp, "gauge",
+                 "unix time of the last successful pull round (seconds) / 最近一次拉取成功的 Unix 时间(秒)");
+        Describe(kPullConnectionsTotal, "counter",
+                 "TCP connections established for pull / 拉取建立的 TCP 连接数");
     }
 
     static std::string MakeKey(const Labels& labels) {

@@ -202,6 +202,7 @@ Built-in management-plane routes are registered in a `RouteTable`
 | `POST /api/preview?scope=protocols&name=` | Trial-render the **candidate protocol in the body** (nothing written), returning request bytes and the length-slot check | Bearer + rate limit |
 | `GET /api/preview/response?scope=protocols&name=&operation=&hex=` | Parse the given response bytes with the **protocol currently on disk** (read-only) | Bearer + rate limit |
 | `POST /api/preview/response?scope=protocols&name=` | Parse response bytes with the **candidate protocol in the body** (nothing written) | Bearer + rate limit |
+| `POST /api/preview/pull` | Send one real HTTP request from a candidate pull config and map the payload (read-only, nothing written/reloaded) | Bearer + rate limit |
 | `POST /api/mqtt/probe` | Create an MQTT observation session (the gateway connects to the broker and subscribes); 200 `{"sid","stream"}` / 400 / 429 | Bearer + rate limit |
 | `GET /api/mqtt/probe/{sid}` | Query the session state JSON; unknown session `404` | Bearer + rate limit |
 | `DELETE /api/mqtt/probe/{sid}` | Stop and remove the session; unknown session `404` | Bearer + rate limit |
@@ -297,8 +298,8 @@ write, no backup, no reload, no device connection.
 - `scope` only supports `protocols` (anything else `400`); when `operation` does not exist the result is `ok:false` and `errors[0]` lists the available operations
 - `variables` must be integers in 0..4294967295, `raw` must be hex strings and `payloadBytes` must be 0..1024; illegal input -> `400`
 
-> Routes use prefix matching and **registration order is priority**: `/api/preview/response` must be
-> registered before `/api/preview`, otherwise the latter swallows it.
+> Routes use prefix matching and **registration order is priority**: both `/api/preview/response` and
+> `/api/preview/pull` must be registered before `/api/preview`, otherwise the latter swallows them.
 
 ### 7.3.3 Response parsing preview /api/preview/response
 
@@ -344,6 +345,42 @@ value and the chain actually applied.
 - `converters` items `{kind:"scale", k, b}` match tags.json: applied in order with a `Double` result; `kind` only supports `scale`, and `k=0` / non-finite values / a non-numeric `finalType` -> `ok:false` (rule 13 semantics are pulled forward into the preview); POST only
 - `value` is non-`null` only when type conversion succeeds; without `converters`, `valueBeforeConversion` is `null`; non-numeric types (`Bool` / `String` / `ByteArray`) have a `numeric` of `null`
 - Missing `hex` -> `400`; `bitOffset` outside `-1|0..7`, `byteCount` outside `0..4294967295`, or an illegal `protocol` type -> `400`; method other than GET/POST -> `405`; GET target config missing -> `404`
+
+### 7.3.4 Trial pull /api/preview/pull
+
+Purpose: the WebUI device card "trial pull" - send one real HTTP request with the **pull config currently
+in the editor** and feed the response to the gateway's **same** `PayloadMapper`, showing status code,
+elapsed time, mapped values and unmatched tags (§4.2 pull). **Read-only**: no disk write, no reload and no
+interference with a running pull binding; `HttpPuller::Probe` always opens a fresh connection with
+`Connection: close`, so it never reuses the pull worker's keep-alive connection.
+
+| Method | Semantics |
+|------|------|
+| `POST /api/preview/pull` (body below) | Send one GET/POST; request construction is shared with the scheduled loop via `BuildHttpRequest`, so the preview is exactly what the gateway would send |
+
+```jsonc
+// request body (field names match pull.http in tags.json)
+{
+  "url": "http://192.168.1.30:8080/api/values",
+  "method": "GET",                             // GET / POST, case-insensitive
+  "headers": { "Authorization": "Bearer t" },    // controlled headers ignored; CR/LF -> 400
+  "body": "",                                  // POST only
+  "timeoutMs": 3000,                           // 100..60000
+  "tagField": "tag", "valueField": "value", "tsField": "ts",
+  "arrayOfItems": true,
+  "declaredTags": ["METER-01.Temp"]            // the device's source=pull tags, used for unmapped detection
+}
+// response (200 means the request was handled; read ok for the verdict)
+{ "ok": true, "status": 200, "elapsedMs": 12, "bytes": 34, "error": "",
+  "bodyPreview": "[{\"tag\":\"METER-01.Temp\",\"value\":21.5}]",
+  "mapped": [{ "tag": "METER-01.Temp", "value": 21.5 }],
+  "unmapped": [], "extra": [], "mappingError": "" }
+```
+
+- `ok` = transport succeeded AND the status is 2xx; on non-2xx, `status` is still reported, `error` carries the status code plus up to 256 bytes of the response, and `body` stays empty
+- `mapped` / `unmapped` / `extra` are computed by `PayloadMapper::MapJson` against `declaredTags`; `bodyPreview` keeps at most the first 4096 bytes
+- `ok=true` with a non-empty `mappingError` = HTTP succeeded but the payload cannot be mapped by `tagField` / `valueField` (e.g. an array element missing `value`)
+- https is not supported (v1 has no TLS); a missing/illegal `url`, out-of-range `timeoutMs`, non-object `headers`, CR/LF in a header, or a non-string `declaredTags` array -> `400`; method other than POST -> `405`
 
 ## 7.4 Reload runtime coupling (simulators + live data)
 

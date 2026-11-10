@@ -4,10 +4,11 @@
 
 > **Translation status.** This `docs/en/` tree mirrors the authoritative Chinese
 > docs under [`docs/`](../README.md). All architecture chapters, all 12 module
-> deep-dives, the protocol tutorials and [Config_Schema.md](./Config_Schema.md) are
-> translated. The ADR set ([../adr/](../adr/)) and [ROADMAP.md](../ROADMAP.md) are
-> still Chinese-only and are marked *zh* where linked. The Chinese documents remain
-> the single source of truth; this mirror is kept in sync as translations land.
+> deep-dives (including the southbound **push ingest** and **HTTP pull** paths),
+> the protocol tutorials and [Config_Schema.md](./Config_Schema.md) are translated.
+> The ADR set ([../adr/](../adr/)) and [ROADMAP.md](../ROADMAP.md) are still
+> Chinese-only and are marked *zh* where linked. The Chinese documents remain the
+> single source of truth; this mirror is kept in sync as translations land.
 
 ## Documentation principles
 
@@ -70,14 +71,14 @@ Validate after editing: `MyProt.App.exe --validate configs` (same validators as 
 | 09 | [Initialization](./modules/09_Initialization.md) | Full startup sequence, transport init, one poll cycle |
 | 10 | [Simulation](./modules/10_Simulation.md) | Config-driven SimulationServer, TemplateMatcher, /api/sim/* control endpoints |
 | 11 | [Northbound](./modules/11_Northbound.md) | Northbound MQTT publication: MqttCodec (`IFrameCodec`) / MqttSession (state machine) / MqttClient (asio transport), snapshot publish with change filtering (ADR-0020) |
-| 12 | [Southbound](./modules/12_Southbound.md) | Southbound push ingest: IInboundTransport, MQTT subscribe / TCP listen adapters, payload mapping, TagValueSink single write path, silence watchdog |
+| 12 | [Southbound](./modules/12_Southbound.md) | Southbound ingest: IInboundTransport, MQTT subscribe / TCP listen / HTTP pull (`HttpPuller`) adapters, payload mapping, TagValueSink single write path, silence watchdog, pull metrics and lifecycle |
 
 ### Contract & architecture decisions
 
 | Doc | Contents |
 |------|------|
 | [Config Schema](./Config_Schema.md) | Single source of truth for the config contract: JSON↔POCO mapping, template grammar, validation checklist |
-| [ADR index](../adr/) *zh* | Architecture Decision Records ADR-0001 … ADR-0022 |
+| [ADR index](../adr/) *zh* | Architecture Decision Records ADR-0001 … ADR-0023 |
 
 > ⚠️ If POCOs/examples in `modules/` conflict with
 > [Config_Schema.md](./Config_Schema.md), the Schema document wins.

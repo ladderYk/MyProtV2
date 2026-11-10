@@ -5,6 +5,7 @@
 #include <chrono>
 
 #include "MyProt/Core/Log.hpp"
+#include "MyProt/Southbound/HttpPuller.hpp"
 #include "MyProt/Southbound/MqttSubscriber.hpp"
 #include "MyProt/Southbound/PayloadMapper.hpp"
 #include "MyProt/Southbound/TcpIngestServer.hpp"
@@ -40,14 +41,33 @@ void SouthboundManager::Apply(const std::vector<Core::DeviceConfig>& devices,
     Start(devices, tags);
 }
 
+void SouthboundManager::SetHealthHandler(HealthHandler handler) {
+    _onHealth = handler;
+    // 已启动的 pull 适配器同步继承 (未启动时由 StartBinding 注入)。
+    for (std::size_t i = 0; i < _bindings.size(); ++i) {
+        const DeviceBindingPtr& b = _bindings[i];
+        if (!b->isPull || !b->ownsLifecycle) continue;
+        std::shared_ptr<HttpPuller> puller =
+            std::dynamic_pointer_cast<HttpPuller>(b->transport);
+        if (puller) puller->SetHealthHandler(handler);
+    }
+}
+
 void SouthboundManager::Start(const std::vector<Core::DeviceConfig>& devices,
                               const std::vector<Core::TagDefinition>& tags) {
-    // Group push tags per device first: a device only gets an adapter when it
-    // actually owns source=push tags (otherwise the port/subscription is wasted).
+    // Group tags per device and per adapter branch first: an adapter is only created
+    // when the device actually owns tags of that source (otherwise it is wasted work).
     std::map<std::string, std::vector<const Core::TagDefinition*> > pushTags;
+    std::map<std::string, std::vector<const Core::TagDefinition*> > pullTags;
+    std::map<std::string, int> pollTagCount;   // 同一设备是否还有轮询标签
     for (std::size_t i = 0; i < tags.size(); ++i) {
-        if (tags[i].source != "push") continue;
-        pushTags[tags[i].deviceId].push_back(&tags[i]);
+        if (tags[i].source == "push") {
+            pushTags[tags[i].deviceId].push_back(&tags[i]);
+        } else if (tags[i].source == "pull") {
+            pullTags[tags[i].deviceId].push_back(&tags[i]);
+        } else {
+            ++pollTagCount[tags[i].deviceId];
+        }
     }
 
     _io.reset(new asio::io_context());
@@ -58,12 +78,47 @@ void SouthboundManager::Start(const std::vector<Core::DeviceConfig>& devices,
 
     for (std::size_t i = 0; i < devices.size(); ++i) {
         const Core::DeviceConfig& device = devices[i];
-        // KI-04: 停用设备不建订阅/不占端口（与轮询侧同一开关）。
+        // KI-04: 停用设备不建订阅/不占端口/不发请求（与轮询侧同一开关）。
         if (!device.enabled) {
             LOG_INFO("Southbound", "设备 %s 已停用 (enabled=false), 跳过入站绑定",
                      device.id.c_str());
             continue;
         }
+
+        // ── branch 1: HTTP pull (ADR-0023) ──
+        if (device.pull.has_value()) {
+            const Core::PullConfig& pull = device.pull.value();
+            if (pull.type != "http") {
+                LOG_WARN("Southbound", "设备 %s 的 pull.type=%s 非法, 跳过",
+                         device.id.c_str(), pull.type.c_str());
+            } else {
+                std::map<std::string, std::vector<const Core::TagDefinition*> >::const_iterator
+                    owned = pullTags.find(device.id);
+                if (owned == pullTags.end() || owned->second.empty()) {
+                    LOG_WARN("Southbound",
+                             "设备 %s 配置了 pull 但没有 source=pull 标签, 跳过",
+                             device.id.c_str());
+                } else {
+                    DeviceBindingPtr binding(new DeviceBinding());
+                    binding->deviceId = device.id;
+                    binding->isPull = true;
+                    binding->pull = pull.http;
+                    // 轮询与拉取并存的设备: 生命周期归轮询侧, 避免两路互相覆盖状态。
+                    binding->ownsLifecycle =
+                        (pollTagCount.find(device.id) == pollTagCount.end());
+                    for (std::size_t k = 0; k < owned->second.size(); ++k) {
+                        binding->tags[owned->second[k]->name] = *owned->second[k];
+                    }
+                    const int64_t now = TagValueSink::NowMs();
+                    binding->startedMs = now;
+                    binding->lastFrameMs = now;
+                    StartBinding(binding, device.connection.host);
+                    _bindings.push_back(binding);
+                }
+            }
+        }
+
+        // ── branch 2: device-initiated ingest (ADR-0019) ──
         if (!device.ingest.has_value()) continue;
         const Core::IngestConfig& ingest = device.ingest.value();
         if (ingest.type != "mqtt" && ingest.type != "tcp") {
@@ -121,7 +176,14 @@ void SouthboundManager::Start(const std::vector<Core::DeviceConfig>& devices,
 
 void SouthboundManager::StartBinding(const DeviceBindingPtr& binding,
                                      const std::string& mqttFallbackHost) {
-    if (binding->ingest.type == "mqtt") {
+    if (binding->isPull) {
+        std::shared_ptr<HttpPuller> puller = std::make_shared<HttpPuller>(
+            *_io, binding->deviceId, binding->pull);
+        if (_onHealth && binding->ownsLifecycle) {
+            puller->SetHealthHandler(_onHealth);
+        }
+        binding->transport = puller;
+    } else if (binding->ingest.type == "mqtt") {
         binding->transport = std::make_shared<MqttSubscriber>(
             *_io, binding->deviceId, binding->ingest.mqtt, mqttFallbackHost);
     } else {
@@ -161,15 +223,19 @@ void SouthboundManager::OnFrame(const DeviceBindingPtr& binding,
                                 const InboundFrame& frame) {
     const int64_t now = frame.timestampMs > 0 ? frame.timestampMs
                                               : TagValueSink::NowMs();
-    binding->lastFrameMs = now;
-    if (binding->silentEmitted) {
-        binding->silentEmitted = false;
-        LOG_INFO("Southbound", "入站恢复 device=%s", binding->deviceId.c_str());
-    }
+    // pull 的静默基线只在"确实命中本设备标签"时推进: HTTP 持续成功但响应里
+    // 没有目标标签, 仍应在 maxSilenceMs 后报 Uncertain (ADR-0023 §2.5).
+    if (!binding->isPull) MarkFrameAccepted(binding, now);
 
     std::string defaultTag;
     std::string tagField, valueField, tsField;
-    if (binding->ingest.type == "mqtt") {
+    bool arrayAsItems = false;
+    if (binding->isPull) {
+        tagField = binding->pull.tagField;
+        valueField = binding->pull.valueField;
+        tsField = binding->pull.tsField;
+        arrayAsItems = binding->pull.arrayOfItems;
+    } else if (binding->ingest.type == "mqtt") {
         tagField = binding->ingest.mqtt.tagField;
         valueField = binding->ingest.mqtt.valueField;
         tsField = binding->ingest.mqtt.tsField;
@@ -194,23 +260,27 @@ void SouthboundManager::OnFrame(const DeviceBindingPtr& binding,
         return;
     }
 
+    const std::vector<uint8_t> raw = ToBytes(frame.payload);
     std::vector<MappingItem> items;
     std::string err;
     if (!PayloadMapper::MapJson(frame.payload, tagField, valueField, tsField,
-                                defaultTag, items, err)) {
+                                defaultTag, items, err, arrayAsItems)) {
         WarnThrottled(binding, "payload",
                       "payload 解码失败 device=" + binding->deviceId + ": " + err);
-        if (!defaultTag.empty()) {
+        if (binding->isPull) {
+            // A failed HTTP round cannot be attributed to one tag: mark them all Bad.
+            binding->lastErrorMs = now;   // explicit failure: Bad wins over Uncertain
+            EmitBadAll(binding, err, now, raw);
+        } else if (!defaultTag.empty()) {
             std::map<std::string, Core::TagDefinition>::const_iterator tag =
                 binding->tags.find(defaultTag);
             if (tag != binding->tags.end()) {
-                _sink.EmitBad(tag->second, err, now, ToBytes(frame.payload));
+                _sink.EmitBad(tag->second, err, now, raw);
             }
         }
         return;
     }
-
-    const std::vector<uint8_t> raw = ToBytes(frame.payload);
+    bool matched = false;   // pull: 本次响应至少命中一个本设备标签
     for (std::size_t i = 0; i < items.size(); ++i) {
         const MappingItem& item = items[i];
         std::map<std::string, Core::TagDefinition>::const_iterator tag =
@@ -221,21 +291,48 @@ void SouthboundManager::OnFrame(const DeviceBindingPtr& binding,
                               + " tag=" + item.tagName);
             continue;
         }
+        matched = true;
         const int64_t ts = item.timestampMs > 0 ? item.timestampMs : now;
         Core::TypedValue value;
         if (!PayloadMapper::ToTypedValue(item.value, tag->second.finalType,
                                          value, err)) {
             _sink.EmitBad(tag->second, err, ts, raw);
-            continue;
+        } else {
+            _sink.Emit(tag->second, value, ts, raw);
         }
-        _sink.Emit(tag->second, value, ts, raw);
+    }
+    // 命中过本设备标签才算一次有效拉取(类型转换失败也算: Bad 已表达故障).
+    if (binding->isPull && matched) MarkFrameAccepted(binding, now);
+}
+
+void SouthboundManager::MarkFrameAccepted(const DeviceBindingPtr& binding,
+                                          int64_t timestampMs) {
+    binding->lastFrameMs = timestampMs;
+    if (binding->silentEmitted) {
+        binding->silentEmitted = false;
+        LOG_INFO("Southbound", "入站恢复 device=%s", binding->deviceId.c_str());
     }
 }
 
 void SouthboundManager::OnError(const DeviceBindingPtr& binding,
                                 const std::string& message) {
-    LOG_WARN("Southbound", "入站适配器错误 device=%s: %s",
-             binding->deviceId.c_str(), message.c_str());
+    WarnThrottled(binding, "adapter",
+                  "入站适配器错误 device=" + binding->deviceId + ": " + message);
+    if (binding->isPull) {
+        // Transport / status failures carry no per-tag attribution.
+        binding->lastErrorMs = TagValueSink::NowMs();
+        EmitBadAll(binding, message, binding->lastErrorMs, std::vector<uint8_t>());
+    }
+}
+
+void SouthboundManager::EmitBadAll(const DeviceBindingPtr& binding,
+                                   const std::string& reason,
+                                   int64_t timestampMs,
+                                   const std::vector<uint8_t>& raw) {
+    for (std::map<std::string, Core::TagDefinition>::const_iterator
+            it = binding->tags.begin(); it != binding->tags.end(); ++it) {
+        _sink.EmitBad(it->second, reason, timestampMs, raw);
+    }
 }
 
 void SouthboundManager::ScheduleWatchdog() {
@@ -252,8 +349,11 @@ void SouthboundManager::OnWatchdog() {
     const int64_t now = TagValueSink::NowMs();
     for (std::size_t i = 0; i < _bindings.size(); ++i) {
         DeviceBindingPtr& binding = _bindings[i];
-        const int maxSilence = MaxSilenceMs(binding->ingest);
+        const int maxSilence = MaxSilenceMs(*binding);
         if (maxSilence <= 0 || binding->silentEmitted) continue;
+        // pull: 最近一次交互是明确失败 → 质量已由 Bad 表达, 不再叠加 Uncertain
+        // (否则同一段故障会出现 Bad→Uncertain→Bad 的抖动).
+        if (binding->isPull && binding->lastErrorMs > binding->lastFrameMs) continue;
         if (now - binding->lastFrameMs < maxSilence) continue;
 
         for (std::map<std::string, Core::TagDefinition>::const_iterator
@@ -280,9 +380,10 @@ void SouthboundManager::WarnThrottled(const DeviceBindingPtr& binding,
     LOG_WARN("Southbound", "%s", message.c_str());
 }
 
-int SouthboundManager::MaxSilenceMs(const Core::IngestConfig& cfg) {
-    if (cfg.type == "mqtt") return cfg.mqtt.maxSilenceMs;
-    if (cfg.type == "tcp") return cfg.tcp.maxSilenceMs;
+int SouthboundManager::MaxSilenceMs(const DeviceBinding& binding) {
+    if (binding.isPull) return binding.pull.maxSilenceMs;
+    if (binding.ingest.type == "mqtt") return binding.ingest.mqtt.maxSilenceMs;
+    if (binding.ingest.type == "tcp") return binding.ingest.tcp.maxSilenceMs;
     return 0;
 }
 

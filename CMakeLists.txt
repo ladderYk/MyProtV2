@@ -142,6 +142,7 @@ target_link_libraries(myprot_northbound PUBLIC myprot_core myprot_polling)
 
 # 南向入站 — MQTT 订阅 / TCP 监听 (设备主动推送), 与轮询事务链路并列
 add_library(myprot_southbound STATIC
+    src/Southbound/src/HttpPuller.cpp
     src/Southbound/src/MqttSubscriber.cpp
     src/Southbound/src/PayloadMapper.cpp
     src/Southbound/src/SouthboundManager.cpp
@@ -200,6 +201,7 @@ if(MYPROT_BUILD_TESTS)
         tests/Service.Tests/SchemaDefaultsTests.cpp
         tests/Service.Tests/ValidationIssueTests.cpp
         tests/Service.Tests/FramingSpecTests.cpp
+        tests/Service.Tests/OperationProfileTests.cpp
         tests/Service.Tests/ProtoTemplateTests.cpp
         tests/Service.Tests/DerivedExprTests.cpp
         tests/Service.Tests/ConfigCommentTests.cpp
@@ -228,6 +230,7 @@ if(MYPROT_BUILD_TESTS)
         myprot_test_main myprot_northbound)
 
     add_executable(MyProt.Southbound.Tests
+        tests/Southbound.Tests/HttpPullTests.cpp
         tests/Southbound.Tests/IngestLoopbackTests.cpp
         tests/Southbound.Tests/PayloadMapperTests.cpp
         tests/Southbound.Tests/TagValueSinkTests.cpp

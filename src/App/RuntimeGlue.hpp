@@ -56,6 +56,13 @@ std::pair<int, std::string> HandlePreviewApi(const Service::ConfigStore& store,
 std::pair<int, std::string> HandleResponsePreviewApi(const Service::ConfigStore& store,
                                                      const HttpRequest& req);
 
+/// POST /api/preview/pull — one-shot trial pull (read-only, no reload).
+/// Uses the same HTTP client + request builder as the pull loop, then maps the JSON
+/// payload through PayloadMapper; never touches the running pull binding.
+/// Implementation see PreviewApi.cpp.
+std::pair<int, std::string> HandlePullPreviewApi(const Service::ConfigStore& store,
+                                                 const HttpRequest& req);
+
 // ── reload runtime linkage - the sole code path for first-time assembly and hot reload ──
 // Reload the config directory -> fully stop and rebuild simulators -> clear real-time snapshots -> post to the io thread
 // to re-assemble the engine. On the io thread the three steps below run serially: device-level diff of channels/sessions

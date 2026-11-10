@@ -159,6 +159,34 @@ Fields IngestTcpFields() {
     };
 }
 
+// ── 南向拉取接入块 (设备层, ADR-0023): pull.type 选择分支 ──
+Fields PullHttpFields() {
+    return Fields{
+        Plain("url", "string", true, "", "http://host[:port][/path]; v1 不支持 https"),
+        EnumF("method", false, "GET", "HTTP 方法", { "GET", "POST" }),
+        Plain("intervalMs", "int", false, "1000",
+              "两轮拉取之间的间隔(ms, >=100); 上一轮结束后才开始计时"),
+        Plain("timeoutMs", "int", false, "3000",
+              "单轮总超时(ms, >=100); 连接+请求+响应"),
+        Plain("headers", "map", false, "{}",
+              "静态请求头 { 名称: 值 }; 凭据不写日志"),
+        Plain("body", "string", false, "", "POST 请求体 (原样发送; 未声明 Content-Type 时补 application/json)"),
+        Plain("tagField", "string", false, "tag", "数组元素中标签名所在字段"),
+        Plain("valueField", "string", false, "value", "数组元素中值所在字段"),
+        Plain("tsField", "string", false, "ts", "数组元素中时间戳字段; 空 = 用本地接收时间"),
+        Plain("arrayOfItems", "bool", false, "true",
+              "true = 响应数组逐元素映射 [{tag,value,ts}]; false = 整个数组作为单值"),
+        Plain("maxSilenceMs", "int", false, "0",
+              "静默看门狗(ms); >0 时超过该时长未成功拉取, 相关标签置 Uncertain; 0 = 关闭"),
+        Plain("backoffBaseMs", "int", false, "1000",
+              "连续失败时的指数退避基数(ms); 0 = 不退避, 固定 intervalMs"),
+        Plain("backoffMaxMs", "int", false, "30000",
+              "退避上限(ms); 须 >= backoffBaseMs"),
+        Plain("keepAlive", "bool", false, "true",
+              "复用 TCP 连接 (HTTP/1.1 keep-alive); 服务端要求关闭时自动重连")
+    };
+}
+
 } // anonymous namespace
 
 // ────────── 根层字段 ──────────
@@ -360,11 +388,18 @@ const Fields& SchemaRegistry::DeviceFields() {
         ObjF("resilience", false,
              "逐设备韧性覆盖; 未设置 = 用全局 resilience", ResilienceFields()),
         ObjF("ingest", false,
-             "南向推送接入绑定; 未设置 = 仅轮询设备. type=mqtt 见 mqtt 子段, type=tcp 见 tcp 子段",
+             "南向推送接入绑定; 未设置 = 无推送适配器. type=mqtt 见 mqtt 子段, type=tcp 见 tcp 子段",
              Fields{
                  EnumF("type", true, "", "接入类型", { "mqtt", "tcp" }),
                  ObjF("mqtt", false, "MQTT 订阅参数 (type=mqtt)", IngestMqttFields()),
                  ObjF("tcp", false, "TCP 监听参数 (type=tcp)", IngestTcpFields())
+             }),
+        ObjF("pull", false,
+             "南向拉取接入绑定 (网关作 HTTP 客户端, ADR-0023); 未设置 = 不发起拉取. "
+             "可与 ingest 共存, 但同一标签的 source 只能选一个",
+             Fields{
+                 EnumF("type", true, "", "拉取类型", { "http" }),
+                 ObjF("http", false, "HTTP 拉取参数 (type=http)", PullHttpFields())
              }),
         Plain("variables", "map", false, "{}",
               "设备级模板变量缺省 (uint32); 标签 variables 未声明同名键时回退至此")
@@ -403,8 +438,9 @@ const Fields& SchemaRegistry::TagFields() {
               {"read", "write"}),
         EnumF("source", false, "poll",
               "值来源 (单一来源, 无仲裁): poll=轮询引擎采集; "
-              "push=由设备 ingest 适配器产出 (不参与轮询, 不声明 operation)",
-              {"poll", "push"}),
+              "push=由设备 ingest 适配器产出; pull=由设备 pull 适配器产出 "
+              "(后两者不参与轮询, 不声明 operation)",
+              {"poll", "push", "pull"}),
         Plain("writeVariable", "string", false, Core::kDefaultWriteValueVariable,
               "写值注入的模板变量名 (模板以 {Name:X?} 或 {Name:raw} 消费)"),
         Plain("readBackTag", "string", false, "",

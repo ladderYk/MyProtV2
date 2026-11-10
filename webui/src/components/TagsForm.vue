@@ -10,10 +10,12 @@ import {
 } from 'element-plus'
 import VarTracePanel from './VarTracePanel.vue'
 import FieldHelp from './FieldHelp.vue'
+import SouthboundEditor from './SouthboundEditor.vue'
 import { listConfigs, getConfig, getSchema } from '../api'
 import { t } from '../i18n'
 import { parseConfigJson } from '../jsonText'
 import { clone, hasOwn } from '../utils/object'
+import { applyTagSource, tagSourceGap } from '../utils/tagSource'
 import {
   typeSizeOf, typeAddrStep, uniqueNameAmong, expandNameTpl,
   nextAddrAfter, parsePasteRows
@@ -53,10 +55,28 @@ const devIdDraft = ref('')
 const tagNameDraft = ref('')
 watch(() => curDev.value && curDev.value.id, id => { devIdDraft.value = id || '' }, { immediate: true })
 watch(() => curTag.value && curTag.value.name, n => { tagNameDraft.value = n || '' }, { immediate: true })
+// push/pull 标签没有寄存器地址/模板变量; 「地址与变量」页签隐藏后回到定义页
+watch(() => curTag.value && curTag.value.source, s => {
+  if (s && s !== 'poll' && tagTab.value === 'vars') tagTab.value = 'def'
+})
 
 /// 某设备下的标签数 (树上角标)
 function tagCountOf(devId) {
   return (local.tags || []).filter(t => t.deviceId === devId).length
+}
+/// 某设备下 source=pull 的标签名 — 试拉取面板据此提示映射覆盖率
+function pullTagNamesOf(devId) {
+  return (local.tags || [])
+    .filter(t => t.deviceId === devId && t.source === 'pull')
+    .map(t => t.name)
+}
+/// source=push/pull 但设备未配 ingest/pull → 保存时规则13 会报错, 提前提示
+function sourceWarn(tag) {
+  const dev = (local.devices || []).find(d => d.id === tag.deviceId)
+  const gap = tagSourceGap(tag, dev)
+  if (gap === 'ingest') return t('该设备未配置 ingest, 保存会校验失败 (规则13)')
+  if (gap === 'pull') return t('该设备未配置 pull, 保存会校验失败 (规则13)')
+  return ''
 }
 /// 设备 ID → 下标 (标签视图里点上下文条返回设备用)
 function devIndexById(id) {
@@ -355,6 +375,14 @@ function setWriteOperation(tag, v) {
   } else {
     tag.writeOperation = v
   }
+  syncRows(tag)
+  emitDoc()
+}
+
+// v1.32 增: 标签数据来源 — poll(默认)/push/pull 三选一 (Config.hpp TagDefinition::source)
+//   push/pull 由南向适配器直接写快照: 不经操作模板、不参与轮询, 且不得是只写标签
+function setTagSource(tag, v) {
+  applyTagSource(tag, v, opCandidates(tag)[0] || '')
   syncRows(tag)
   emitDoc()
 }
@@ -1231,6 +1259,16 @@ function onEditSource({ varName, layerKey }) {
             </el-form-item>
           </el-form>
         </el-card>
+
+        <!-- v1.32: 南向接入 (ingest / pull) — 设备级配置, 对应 tags.json 的 device.ingest / device.pull -->
+        <el-card shadow="never" class="blk">
+          <div class="blk-title">{{ t('南向接入') }}</div>
+          <SouthboundEditor
+            :device="curDev"
+            :declared-tags="pullTagNamesOf(curDev.id)"
+            @change="emitDoc"
+          />
+        </el-card>
       </div>
 
       <!-- 标签视图 -->
@@ -1275,6 +1313,21 @@ function onEditSource({ varName, layerKey }) {
                 </el-select>
               </el-form-item>
               <el-form-item>
+                <template #label>{{ t('数据来源') }}</template>
+                <el-select
+                  :model-value="curTag.source || 'poll'" style="width: 200px"
+                  @change="v => setTagSource(curTag, v)"
+                >
+                  <el-option :label="t('轮询 (poll)')" value="poll" />
+                  <el-option :label="t('设备推送 (push)')" value="push" />
+                  <el-option :label="t('网关拉取 (pull)')" value="pull" />
+                </el-select>
+                <div class="field-hint">
+                  {{ t('push/pull 标签由南向适配器写入, 不经操作模板、不参与轮询') }}
+                </div>
+                <div v-if="sourceWarn(curTag)" class="field-hint warn">{{ sourceWarn(curTag) }}</div>
+              </el-form-item>
+              <el-form-item v-if="(curTag.source || 'poll') === 'poll'">
                 <template #label>{{ t('方向') }}<FieldHelp section="tag" field="direction" /></template>
                 <el-select
                   :model-value="curTag.direction || 'read'" style="width: 200px"
@@ -1287,7 +1340,7 @@ function onEditSource({ varName, layerKey }) {
                   {{ t('只写标签的「操作名」即写模板, 不参与轮询; 写链路是否等待应答由操作上的「应答模式」决定') }}
                 </div>
               </el-form-item>
-              <el-form-item>
+              <el-form-item v-if="(curTag.source || 'poll') === 'poll'">
                 <template #label>{{ t('操作名') }}<FieldHelp section="tag" field="operation" /></template>
                 <el-select
                   :model-value="curTag.operation" filterable allow-create default-first-option
@@ -1304,7 +1357,7 @@ function onEditSource({ varName, layerKey }) {
                 </div>
               </el-form-item>
               <!-- v1.7 增: 标签级写能力 — 写操作下拉 (空 = 只读) -->
-              <el-form-item v-if="curTag.direction !== 'write'">
+              <el-form-item v-if="(curTag.source || 'poll') === 'poll' && curTag.direction !== 'write'">
                 <template #label>{{ t('写操作') }}<FieldHelp section="tag" field="writeOperation" /></template>
                 <el-select
                   :model-value="curTag.writeOperation ?? ''"
@@ -1318,7 +1371,7 @@ function onEditSource({ varName, layerKey }) {
                   {{ t('非空 = 又读又写标签, 写请求用该操作模板, 写后按本标签读操作回校') }}
                 </div>
               </el-form-item>
-              <el-form-item v-if="curTag.direction !== 'write'">
+              <el-form-item v-if="(curTag.source || 'poll') === 'poll' && curTag.direction !== 'write'">
                 <template #label>{{ t('采集周期') }}<FieldHelp section="tag" field="scanRateMs" /></template>
                 <el-input-number
                   :model-value="curTag.scanRateMs" :min="100"
@@ -1326,7 +1379,7 @@ function onEditSource({ varName, layerKey }) {
                 />
                 <span class="unit">ms (≥100)</span>
               </el-form-item>
-              <el-form-item v-else>
+              <el-form-item v-else-if="(curTag.source || 'poll') === 'poll'">
                 <div class="field-hint">{{ t('只写标签不参与轮询, 无需采集周期') }}</div>
               </el-form-item>
               <el-form-item>
@@ -1356,7 +1409,7 @@ function onEditSource({ varName, layerKey }) {
           </el-card>
         </el-tab-pane>
 
-        <el-tab-pane :label="t('地址与变量')" name="vars">
+        <el-tab-pane v-if="(curTag.source || 'poll') === 'poll'" :label="t('地址与变量')" name="vars">
           <el-card shadow="never" class="blk">
             <el-form size="default" class="form-grid">
               <!-- v1.31: 简易地址映射 — 把引擎的字节契约换算成现场单位 -->

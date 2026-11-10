@@ -117,6 +117,7 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="include\MyProt\Southbound\HttpPuller.hpp" />
     <ClInclude Include="include\MyProt\Southbound\IInboundTransport.hpp" />
     <ClInclude Include="include\MyProt\Southbound\MqttSubscriber.hpp" />
     <ClInclude Include="include\MyProt\Southbound\PayloadMapper.hpp" />
@@ -125,6 +126,7 @@
     <ClInclude Include="include\MyProt\Southbound\TcpIngestServer.hpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\HttpPuller.cpp" />
     <ClCompile Include="src\MqttSubscriber.cpp" />
     <ClCompile Include="src\PayloadMapper.cpp" />
     <ClCompile Include="src\SouthboundManager.cpp" />

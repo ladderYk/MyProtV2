@@ -182,6 +182,7 @@ public:
 | `POST /api/preview?scope=protocols&name=` | 试渲染**请求体候选协议**（不落盘），返回请求字节与长度槽位核对 | Bearer + 限流 |
 | `GET /api/preview/response?scope=protocols&name=&operation=&hex=` | 用**磁盘现有协议**解析给定响应字节（只读） | Bearer + 限流 |
 | `POST /api/preview/response?scope=protocols&name=` | 用**请求体候选协议**解析响应字节（不落盘） | Bearer + 限流 |
+| `POST /api/preview/pull` | 用候选 pull 配置发一次真实 HTTP 请求并映射（只读，不落盘/不重载） | Bearer + 限流 |
 | `POST /api/mqtt/probe` | 建立 MQTT 观测会话（网关代连 broker 并订阅）；200 `{"sid","stream"}` / 400 / 429 | Bearer + 限流 |
 | `GET /api/mqtt/probe/{sid}` | 查询会话状态 JSON；无此会话 `404` | Bearer + 限流 |
 | `DELETE /api/mqtt/probe/{sid}` | 停止并删除会话；无此会话 `404` | Bearer + 限流 |
@@ -269,7 +270,7 @@ public:
 - `scope` 仅支持 `protocols`（其余 `400`）；`operation` 不存在时 `ok:false` 并在 `errors[0]` 列出可用操作
 - `variables` 须为 0..4294967295 的整数，`raw` 须为 hex 字符串，`payloadBytes` 0..1024；非法 → `400`
 
-> 路由为前缀匹配且**注册顺序即优先级**：`/api/preview/response` 必须先于 `/api/preview` 注册，否则会被后者吞掉。
+> 路由为前缀匹配且**注册顺序即优先级**：`/api/preview/response` 与 `/api/preview/pull` 都必须先于 `/api/preview` 注册，否则会被后者吞掉。
 
 ### 7.3.3 响应解析预览 /api/preview/response
 
@@ -310,6 +311,38 @@ public:
 - `converters` 项 `{kind:"scale", k, b}` 与 `tags.json` 同形：按序应用后结果统一为 `Double`；`kind` 仅支持 `scale`，`k=0` / 非有限数值 / 非数值型 `finalType` → `ok:false`（规则 13 语义提前到预览期）；仅 POST 支持
 - `value` 仅在类型转换成功时非 `null`；未提供 `converters` 时 `valueBeforeConversion` 为 `null`；非数值类型（`Bool` / `String` / `ByteArray`）的 `numeric` 为 `null`
 - 缺 `hex` → `400`；`bitOffset` 非 `-1|0..7`、`byteCount` 超 `0..4294967295`、`protocol` 类型非法 → `400`；方法非 GET/POST → `405`；GET 目标配置不存在 → `404`
+
+### 7.3.4 试拉取 /api/preview/pull
+
+用途：WebUI 设备卡片「试拉取」——用**当前编辑器里的 pull 配置**发一次真实 HTTP 请求，把响应交给网关**同一个** `PayloadMapper`，展示状态码/耗时/映射命中/未命中标签（§4.2 pull）。**只读**：不写盘、不重载、不干扰正在运行的 pull 绑定；`HttpPuller::Probe` 每次新建连接且固定 `Connection: close`，不复用拉取线程的 keep-alive。
+
+| 方法 | 语义 |
+|------|------|
+| `POST /api/preview/pull`（body 见下） | 发一次 GET/POST；请求构造与调度循环共用 `BuildHttpRequest`，预览即真实发送 |
+
+```jsonc
+// 请求体（字段名与 tags.json 的 pull.http 一致）
+{
+  "url": "http://192.168.1.30:8080/api/values",
+  "method": "GET",                             // GET / POST，大小写不敏感
+  "headers": { "Authorization": "Bearer t" },    // 受控头被忽略；含 CR/LF → 400
+  "body": "",                                  // 仅 POST
+  "timeoutMs": 3000,                           // 100..60000
+  "tagField": "tag", "valueField": "value", "tsField": "ts",
+  "arrayOfItems": true,
+  "declaredTags": ["METER-01.Temp"]            // 设备下 source=pull 标签，用于算未命中
+}
+// 响应（请求被处理即 200，业务结果看 ok）
+{ "ok": true, "status": 200, "elapsedMs": 12, "bytes": 34, "error": "",
+  "bodyPreview": "[{\"tag\":\"METER-01.Temp\",\"value\":21.5}]",
+  "mapped": [{ "tag": "METER-01.Temp", "value": 21.5 }],
+  "unmapped": [], "extra": [], "mappingError": "" }
+```
+
+- `ok` = 传输成功且状态码 2xx；非 2xx 时 `status` 仍回填，`error` 带状态码与最多 256 字节响应片段，`body` 为空
+- `mapped` / `unmapped` / `extra` 由 `PayloadMapper::MapJson` + `declaredTags` 计算；`bodyPreview` 最多保留前 4096 字节
+- `ok=true` 但 `mappingError` 非空 = HTTP 成功而载荷无法按 `tagField` / `valueField` 映射（如数组元素缺 value）
+- 不支持 https（v1 无 TLS）；`url` 缺失或非法、`timeoutMs` 越界、`headers` 非对象或含 CR/LF、`declaredTags` 非字符串数组 → `400`；方法非 POST → `405`
 
 ## 7.4 reload 运行时联动（仿真器 + 实时数据）
 

@@ -250,6 +250,18 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
     // 南向入站 (MQTT 订阅 / TCP 监听) — 独占线程, 由 ApplyRuntimeSync 按 device.ingest 启停
     MyProt::Southbound::SouthboundManager southbound(latest);
 
+    // 拉取可达性 → 设备生命周期 (KI-04): 失败 Degraded, 恢复 Connected。
+    // 仅纯 pull 设备生效 (同设备若还有轮询标签, 生命周期归轮询侧)。
+    southbound.SetHealthHandler(
+        [&gateway](const std::string& deviceId, bool healthy) {
+            std::shared_ptr<MyProt::Service::SessionContext> session =
+                gateway.GetChannelManager().GetSession(deviceId);
+            if (!session) return;
+            session->SetLifecycle(
+                healthy ? MyProt::Service::DeviceLifecycleState::Connected
+                        : MyProt::Service::DeviceLifecycleState::Degraded);
+        });
+
     // 管理面 MQTT 观测会话 — 浏览器无法直连 1883, 由后端代连 broker 并回推 (独占 io 线程)
     MyProt::Northbound::MqttProbeHub mqttProbe;
 
@@ -391,6 +403,12 @@ int RunProduction(const std::string& configDir, uint16_t apiPort,
     extRoutes.Add("/api/preview/response",
         [](const AppContext& c, const HttpRequest& r) {
             return HandleResponsePreviewApi(*c.store, r);
+        });
+    // 试拉取: 复用 pull 链路的 HTTP 客户端与映射器, 发一次真实请求 (不落盘/不重载)
+    //   同样须在 "/api/preview" 之前注册
+    extRoutes.Add("/api/preview/pull",
+        [](const AppContext& c, const HttpRequest& r) {
+            return HandlePullPreviewApi(*c.store, r);
         });
     // 试渲染预览: 协议 JSON + 操作 + 变量 → 请求字节 (不落盘/不重载, 与网关同一渲染管线)
     extRoutes.Add("/api/preview",

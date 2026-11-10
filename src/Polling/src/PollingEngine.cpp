@@ -85,13 +85,13 @@ void PollingEngine::ApplySnapshot(
     }
 
     // 2. 按设备聚合参与轮询的标签
-        // 写标签 (direction=write) 与推送标签 (source=push) 不参与轮询 —
-    //   前者只作为 /api/data/write 的定向目标, 后者由南向 ingest 适配器产出;
+        // 写标签 (direction=write) 与外部来源标签 (source=push/pull) 不参与轮询 —
+    //   前者只作为 /api/data/write 的定向目标, 后者分别由南向 ingest / pull 适配器产出;
     //   在引擎入口过滤, TagGrouper 无需感知.
     std::vector<std::string> deviceOrder;
     std::map<std::string, std::vector<Core::TagDefinition>> perDeviceTags;
     for (const auto& tag : tags) {
-        if (tag.direction == "write" || tag.source == "push") continue;
+        if (tag.direction == "write" || tag.source != "poll") continue;
         std::map<std::string, bool>::const_iterator en =
             deviceEnabled.find(tag.deviceId);
         if (en != deviceEnabled.end() && !en->second) continue;  // KI-04: 停用设备
